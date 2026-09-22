@@ -1,0 +1,52 @@
+version: 2
+
+models:
+  - name: dm_produtos
+    description: "Dimensão de combustíveis monitorados."
+    columns:
+      - name: id_produto_sk
+        tests:
+          - unique
+          - not_null
+
+  - name: dm_postos
+    description: "Dimensão de postos de revenda deduplicada."
+    columns:
+      - name: id_posto_sk
+        tests:
+          - unique
+          - not_null
+      - name: cnpj
+        tests:
+          - unique
+          - not_null
+
+  - name: ft_anp_combustiveis
+    description: "Fato de coleta de preços da ANP."
+    columns:
+      - name: id_fato
+        description: "Chave primária originada na Silver"
+        tests:
+          - unique
+          - not_null
+      - name: id_posto_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dm_postos')
+                field: id_posto_sk
+      - name: id_produto_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dm_produtos')
+                field: id_produto_sk
+      - name: valor_venda
+        description: "Valor de venda na bomba."
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0" 

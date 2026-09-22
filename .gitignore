@@ -1,0 +1,30 @@
+datalake/
+
+# Airflow Logs
+airflow/logs/*
+!airflow/logs/.gitkeep
+
+# Airflow Audit Logs
+airflow/audit_logs/*
+!airflow/audit_logs/.gitkeep
+
+datasource/
+__pycache__/
+*.pyc
+.env
+.venv/
+.vscode/
+
+# dbt artifacts and configs
+pipelines/dbt_projects/dbt_packages/
+pipelines/dbt_projects/target/
+
+# Logs do dbt e Elementary (Mantém as pastas, ignora o conteúdo)
+pipelines/dbt_projects/logs/*
+!pipelines/dbt_projects/logs/.gitkeep
+!pipelines/dbt_projects/logs/elementary_logs/
+pipelines/dbt_projects/logs/elementary_logs/*
+!pipelines/dbt_projects/logs/elementary_logs/.gitkeep
+
+pipelines/dbt_projects/profiles.yml
+pipelines/dbt_projects/.user.yml

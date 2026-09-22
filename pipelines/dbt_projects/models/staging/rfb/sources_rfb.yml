@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: rfb
+    schema: landing_rfb
+    tables:
+      - name: empresas
+        columns:
+          - name: cnpj_basico
+            tests:
+              - not_null
+              - unique
+      - name: estabelecimentos
+      - name: socios
+      - name: simples
+      - name: dominio_cnae
+      - name: dominio_motivo_situacao_cadastral
+      - name: dominio_municipio
+      - name: dominio_natureza_juridica
+      - name: dominio_pais
+      - name: dominio_qualificacao_socio

@@ -1,0 +1,57 @@
+# dbt_project.yml
+name: "dbt_project"
+version: "1.0.0"
+config-version: 2
+
+profile: "datalab"
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Configuração de Materialização e Schemas por Pasta
+models:
+  dbt_project:
+    bronze:
+      +materialized: view
+      +schema: bronze
+      anp:
+        +tags: ["anp"]
+      rfb:
+        +tags: ["rfb"]  
+    silver:
+      +materialized: table
+      +schema: silver
+      anp:
+        +tags: ["anp"]
+      rfb:
+        +tags: ["rfb"] 
+    gold:
+      +materialized: table
+      +schema: gold
+      anp:
+        +tags: ["anp"]
+      rfb:
+        +tags: ["rfb"]
+    staging:
+      +materialized: view
+      +schema: stg
+      anp:
+        +tags: ["anp"]
+      rfb:
+        +tags: ["rfb"]
+    marts:
+      +materialized: table 
+      +schema: marts
+      anp:
+        +tags: ["anp"]
+      rfb:
+        +tags: ["rfb"]

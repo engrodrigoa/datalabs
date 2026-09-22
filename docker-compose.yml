@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DB}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - ./datalake/postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  # init do airflow
+  airflow-init:
+    build: .
+    container_name: airflow_init
+    depends_on:
+      postgres:
+        condition: service_started
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}
+      "
+
+  # Apache Airflow (Webserver)
+  airflow-webserver:
+    build: . 
+    container_name: airflow_webserver
+    restart: always
+    user: "1000:0"
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: 'America/Sao_Paulo'
+      AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+      AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: '1'
+      OPENLINEAGE_DISABLED: 'true'
+      DBT_PG_HOST: postgres
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_AUDIT_BUCKET: ${MINIO_AUDIT_BUCKET}
+      PYTHONPATH: "/opt/airflow"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/audit_logs:/opt/airflow/audit_logs
+      - ./datasource:/mnt/datasource
+      - ./pipelines:/opt/airflow/pipelines
+      - ./.env:/opt/airflow/.env:ro
+    env_file:
+      - .env
+    command: webserver
+
+  # Apache Airflow (Scheduler)
+  airflow-scheduler:
+    build: .
+    container_name: airflow_scheduler
+    restart: always
+    user: "1000:0"
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: 'America/Sao_Paulo'
+      AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+      AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: '1'
+      OPENLINEAGE_DISABLED: 'true'
+      DBT_PG_HOST: postgres
+      MINIO_ENDPOINT: "http://minio:9000"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_AUDIT_BUCKET: ${MINIO_AUDIT_BUCKET}
+      PYTHONPATH: "/opt/airflow"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/audit_logs:/opt/airflow/audit_logs
+      - ./datasource:/mnt/datasource
+      - ./pipelines:/opt/airflow/pipelines
+      - ./.env:/opt/airflow/.env:ro
+    env_file:
+      - .env
+    command: scheduler
+
+  # DATA LAKE STORAGE: MINIO (S3 COMPATIBLE)
+  minio:
+    image: minio/minio:latest
+    container_name: minio_datalake
+    ports:
+      - "9005:9000"
+      - "9091:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./datalake/minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    ports:
+      - "8081:8080"
+    restart: always
+
+  # STACK OBSERVABILITY
+  # LOG AGGREGATION: LOKI
+  loki:
+    image: grafana/loki:2.9.2
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  # LOG SHIPPER: PROMTAIL
+  promtail:
+    image: grafana/promtail:2.9.2
+    container_name: promtail
+    volumes:
+      - ./airflow/logs:/opt/airflow/logs:ro
+      - ./promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # OBSERVABILITY UI: GRAFANA
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./datalake/grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - loki
+      - postgres
+    restart: unless-stopped

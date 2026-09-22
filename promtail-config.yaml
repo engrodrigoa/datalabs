@@ -1,0 +1,23 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: airflow_tasks
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: airflow
+          __path__: /opt/airflow/logs/dag_id=*/*/*/*.log
+    pipeline_stages:
+      - regex:
+          expression: ".*/dag_id=(?P<dag_id>[^/]+)/.*"
+      - labels:
+          dag_id:

@@ -1,0 +1,23 @@
+version: 2
+
+models:
+  - name: anp_combustivel
+    description: "Tabela consolidada, tipada e deduplicada de preços de combustíveis da ANP (Mensal + Semanal)."
+    columns:
+      - name: chave
+        description: "Chave sintética única composta por data_coleta + id_produto + cnpj."
+        tests:
+          - unique
+          - not_null
+      - name: data_coleta
+        description: "Data em que o preço foi coletado."
+        tests:
+          - not_null
+      - name: cnpj
+        description: "CNPJ da revenda de combustíveis."
+        tests:
+          - not_null
+      - name: valor_venda
+        description: "Preço de venda praticado pelo posto."
+        tests:
+          - not_null

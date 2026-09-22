@@ -1,0 +1,10 @@
+
+version: 2
+
+sources:
+  - name: bronze
+    database: datalab  
+    schema: bronze
+    tables:
+      - name: anp_landing_semanal
+      - name: anp_landing_mensal
