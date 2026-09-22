@@ -256,8 +256,8 @@ The project is continuously evolving. Current development focuses on:
 
 Data / BI professional transitioning toward Data Engineering, with a focus on data pipelines, orchestration, distributed processing, and data platform engineering.
 
-* GitHub: https://github.com/engrodrigoa
-* LinkedIn: [LinkedIn profile]
+* GitHub: [https://github.com/engrodrigoa]
+* LinkedIn: [https://www.linkedin.com/in/rodrigoarruda89]
 
 ---
 
