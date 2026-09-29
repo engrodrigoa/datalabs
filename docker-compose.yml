@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: postgres
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -160,3 +160,14 @@ services:
       - loki
       - postgres
     restart: unless-stopped
+
+      # LLM LOCAL: OLLAMA
+  ollama:
+    image: ollama/ollama:latest
+    container_name: datalabs_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./datalake/ollama_data:/root/.ollama
+    restart: unless-stopped
+    gpus: all
