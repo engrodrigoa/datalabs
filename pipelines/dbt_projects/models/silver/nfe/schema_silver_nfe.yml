@@ -1,0 +1,354 @@
+version: 2
+
+models:
+  - name: nfe_nota
+    description: "Silver — cabeçalho da NF-e (ide, emit, dest, totais, protocolo). 1 linha por chave de acesso; reenvios resolvidos (vale o arquivo mais recente). Incremental (merge) por lote."
+    config:
+      contract:
+        enforced: true
+    data_tests:
+      - elementary.volume_anomalies:
+          arguments:
+            timestamp_column: carregado_em
+            time_bucket: {period: day, count: 1}
+          config:
+            severity: warn
+            tags: ["elementary"]
+    columns:
+      - name: chave_acesso
+        data_type: text
+        description: "Chave de acesso (44 posições). cUF+AAMM+CNPJ(alfanumérico possível)+mod+série+nNF+tpEmis+cNF+DV."
+        data_tests:
+          - unique
+          - not_null
+          - nfe_chave_valida:
+              config:
+                severity: warn
+                where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"   # escopo incremental
+      - name: lote_id
+        data_type: bigint
+        description: "Lote de chegada (ctrl.nfe_lote) do arquivo vigente desta nota."
+      - name: arquivo
+        data_type: text
+      - name: hash_conteudo
+        data_type: text
+        description: "md5 do XML: distingue reenvio idêntico de reenvio alterado."
+      - name: versao_layout
+        data_type: text
+      - name: cod_uf
+        data_type: text
+      - name: modelo
+        data_type: text
+      - name: serie
+        data_type: int
+      - name: nnf
+        data_type: bigint
+      - name: dh_emissao
+        data_type: timestamptz
+        description: "ide/dhEmi (com fuso)."
+        data_tests:
+          - not_null
+      - name: dt_emissao
+        data_type: date
+        description: "Data de emissão no fuso de Brasília (chave de tempo)."
+      - name: nat_op
+        data_type: text
+      - name: tp_nf
+        data_type: text
+        description: "0 = entrada, 1 = saída."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['0', '1']
+      - name: fin_nfe
+        data_type: text
+        description: "1 normal, 2 complementar, 3 ajuste, 4 devolução, 5 crédito, 6 débito."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['1', '2', '3', '4', '5', '6']
+      - name: id_dest
+        data_type: text
+      - name: ind_final
+        data_type: text
+      - name: ind_pres
+        data_type: text
+      - name: tp_amb
+        data_type: text
+      - name: chave_referenciada
+        data_type: text
+        description: "NFref/refNFe (ex.: nota original de uma devolução)."
+      - name: emit_cnpj
+        data_type: text
+        description: "CNPJ do emitente — numérico ou alfanumérico."
+        data_tests:
+          - not_null
+          - nfe_cnpj_valido:
+              config:
+                severity: warn
+                where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"   # escopo incremental
+      - name: emit_nome
+        data_type: text
+      - name: emit_ie
+        data_type: text
+      - name: emit_crt
+        data_type: text
+      - name: emit_uf
+        data_type: text
+      - name: emit_cod_municipio
+        data_type: text
+      - name: emit_municipio
+        data_type: text
+      - name: emit_logradouro
+        data_type: text
+      - name: emit_bairro
+        data_type: text
+      - name: emit_cep
+        data_type: text
+      - name: dest_tipo_doc
+        data_type: text
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['CNPJ', 'CPF']
+      - name: dest_doc
+        data_type: text
+        description: "CNPJ ou CPF do destinatário."
+      - name: dest_nome
+        data_type: text
+      - name: dest_ie
+        data_type: text
+      - name: dest_ind_ie
+        data_type: text
+      - name: dest_uf
+        data_type: text
+      - name: dest_cod_municipio
+        data_type: text
+      - name: dest_municipio
+        data_type: text
+      - name: dest_logradouro
+        data_type: text
+      - name: dest_bairro
+        data_type: text
+      - name: dest_cep
+        data_type: text
+      - name: v_prod
+        data_type: numeric(15,2)
+      - name: v_bc_icms
+        data_type: numeric(15,2)
+      - name: v_icms
+        data_type: numeric(15,2)
+      - name: v_icms_deson
+        data_type: numeric(15,2)
+      - name: v_ipi
+        data_type: numeric(15,2)
+      - name: v_pis
+        data_type: numeric(15,2)
+      - name: v_cofins
+        data_type: numeric(15,2)
+      - name: v_nf
+        data_type: numeric(15,2)
+      - name: v_bc_ibscbs
+        data_type: numeric(15,2)
+        description: "IBSCBSTot/vBCIBSCBS."
+      - name: v_ibs_uf
+        data_type: numeric(15,2)
+      - name: v_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_ibs
+        data_type: numeric(15,2)
+        description: "Total IBS (UF + Município)."
+      - name: v_cbs
+        data_type: numeric(15,2)
+        description: "Total CBS."
+      - name: v_dif_ibs_uf
+        data_type: numeric(15,2)
+      - name: v_dif_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_dif_cbs
+        data_type: numeric(15,2)
+        description: "CBS diferida (gDif)."
+      - name: v_devtrib_ibs_uf
+        data_type: numeric(15,2)
+      - name: v_devtrib_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_devtrib_cbs
+        data_type: numeric(15,2)
+        description: "CBS de devolução de tributo (gDevTrib)."
+      - name: v_credpres_ibs
+        data_type: numeric(15,2)
+      - name: v_credpres_cbs
+        data_type: numeric(15,2)
+      - name: v_is
+        data_type: numeric(15,2)
+        description: "Imposto Seletivo (ISTot) — nulo quando a nota não tem IS."
+      - name: v_nf_tot
+        data_type: numeric(15,2)
+        description: "vNFTot (opcional no layout)."
+      - name: qtd_itens
+        data_type: int
+        description: "Quantidade de det no XML."
+      - name: n_protocolo
+        data_type: text
+        description: "Protocolo de autorização (nulo se a raiz for NFe sem protocolo)."
+      - name: dh_autorizacao
+        data_type: timestamptz
+      - name: c_stat
+        data_type: text
+      - name: carregado_em
+        data_type: timestamptz
+        description: "Quando o arquivo entrou na bronze."
+      - name: dbt_processado_em
+        data_type: timestamptz
+        description: "Quando esta linha foi gravada pelo dbt."
+  - name: nfe_item
+    description: "Silver — itens da NF-e com ICMS, IPI, PIS, COFINS, IBS, CBS e IS. 1 linha por chave + nItem. Incremental (merge) por lote."
+    config:
+      contract:
+        enforced: true
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [chave_acesso, n_item]
+    columns:
+      - name: chave_acesso
+        data_type: text
+        description: "Chave de acesso (44 posições). cUF+AAMM+CNPJ(alfanumérico possível)+mod+série+nNF+tpEmis+cNF+DV."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('nfe_nota')
+                field: chave_acesso
+      - name: n_item
+        data_type: int
+        description: "det/@nItem."
+        data_tests:
+          - not_null
+      - name: lote_id
+        data_type: bigint
+        description: "Lote de chegada (ctrl.nfe_lote) do arquivo vigente desta nota."
+      - name: cprod
+        data_type: text
+      - name: xprod
+        data_type: text
+      - name: ncm
+        data_type: text
+        description: "NCM do item."
+        data_tests:
+          - not_null
+      - name: cfop
+        data_type: text
+      - name: c_benef
+        data_type: text
+      - name: ucom
+        data_type: text
+      - name: qcom
+        data_type: numeric(15,4)
+      - name: vuncom
+        data_type: numeric(21,10)
+      - name: vprod
+        data_type: numeric(15,2)
+      - name: cst_icms
+        data_type: text
+      - name: p_red_bc_icms
+        data_type: numeric(7,4)
+      - name: vbc_icms
+        data_type: numeric(15,2)
+      - name: p_icms
+        data_type: numeric(7,4)
+      - name: v_icms
+        data_type: numeric(15,2)
+      - name: v_icms_deson
+        data_type: numeric(15,2)
+      - name: cst_ipi
+        data_type: text
+      - name: v_ipi
+        data_type: numeric(15,2)
+      - name: cst_pis
+        data_type: text
+      - name: v_pis
+        data_type: numeric(15,2)
+      - name: cst_cofins
+        data_type: text
+      - name: v_cofins
+        data_type: numeric(15,2)
+      - name: cst_ibscbs
+        data_type: text
+        description: "CST do IBS/CBS."
+        data_tests:
+          - not_null
+      - name: cclasstrib
+        data_type: text
+        description: "Classificação tributária do IBS/CBS."
+        data_tests:
+          - not_null
+          - nfe_cclasstrib_coerente:
+              arguments:
+                cst_column: cst_ibscbs
+              config:
+                severity: warn
+                where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"   # escopo incremental
+      - name: vbc_ibscbs
+        data_type: numeric(15,2)
+        description: "Base IBS/CBS do item (2026: vProd - ICMS - PIS - COFINS)."
+      - name: p_ibs_uf
+        data_type: numeric(7,4)
+      - name: p_red_aliq
+        data_type: numeric(7,4)
+      - name: p_aliqefet_ibs_uf
+        data_type: numeric(7,4)
+        description: "Alíquota efetiva do IBS UF após redução (nulo sem gRed)."
+      - name: p_dif
+        data_type: numeric(7,4)
+        description: "Percentual de diferimento (nulo sem gDif)."
+      - name: v_dif_ibs_uf
+        data_type: numeric(15,2)
+      - name: v_devtrib_ibs_uf
+        data_type: numeric(15,2)
+      - name: v_ibs_uf
+        data_type: numeric(15,2)
+      - name: p_ibs_mun
+        data_type: numeric(7,4)
+      - name: v_dif_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_devtrib_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_ibs_mun
+        data_type: numeric(15,2)
+      - name: v_ibs
+        data_type: numeric(15,2)
+        description: "Total IBS (UF + Município)."
+      - name: p_cbs
+        data_type: numeric(7,4)
+      - name: p_aliqefet_cbs
+        data_type: numeric(7,4)
+      - name: v_dif_cbs
+        data_type: numeric(15,2)
+        description: "CBS diferida (gDif)."
+      - name: v_devtrib_cbs
+        data_type: numeric(15,2)
+        description: "CBS de devolução de tributo (gDevTrib)."
+      - name: v_cbs
+        data_type: numeric(15,2)
+        description: "Total CBS."
+      - name: cst_is
+        data_type: text
+      - name: cclasstrib_is
+        data_type: text
+      - name: v_bc_is
+        data_type: numeric(15,2)
+      - name: p_is
+        data_type: numeric(7,4)
+      - name: v_is
+        data_type: numeric(15,2)
+        description: "Imposto Seletivo (ISTot) — nulo quando a nota não tem IS."
+      - name: v_item
+        data_type: numeric(15,2)
+        description: "vItem (opcional no layout)."
+      - name: carregado_em
+        data_type: timestamptz
+        description: "Quando o arquivo entrou na bronze."
+      - name: dbt_processado_em
+        data_type: timestamptz
+        description: "Quando esta linha foi gravada pelo dbt."

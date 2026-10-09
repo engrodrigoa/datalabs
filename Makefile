@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health db-bootstrap dashboards sample-data test lint urls
+.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health db-bootstrap dashboards sample-data test lint urls nfe-demo nfe-stream nfe-backfill
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -66,6 +66,18 @@ dashboards: ## regenerate Grafana dashboards from grafana/dashboards-src/build.p
 
 sample-data: ## offline synthetic ANP files (no internet needed)
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp
+
+nfe-demo: ## NF-e: simula a chegada de 500 notas na inbox (o dag_nfe processa em até 10 min)
+	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 500 \
+	  --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
+
+nfe-stream: ## NF-e: chegada contínua (12 lotes de 200 notas, um a cada 5 min)
+	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 200 \
+	  --lotes 12 --intervalo 300 --defect-rate 0.02 --dup-rate 0.01
+
+nfe-backfill: ## NF-e: histórico jan-set/2026 (5000 notas) para popular o DW
+	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 5000 \
+	  --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
 
 test: ## unit tests
 	pytest
