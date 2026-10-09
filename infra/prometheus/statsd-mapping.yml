@@ -1,0 +1,42 @@
+# Airflow StatsD -> Prometheus labels (instead of one metric name per DAG/task).
+# Unmatched metrics are still exported with dots replaced by underscores.
+defaults:
+  observer_type: histogram
+  histogram_options:
+    buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200]
+mappings:
+  # task duration (seconds) per dag/task  ->  airflow_task_duration_bucket{dag_id,task_id}
+  - match: '^airflow\.dag\.([^.]+)\.(.+)\.duration$'
+    match_type: regex
+    name: airflow_task_duration
+    labels: {dag_id: "$1", task_id: "$2"}
+  # dag run duration by outcome
+  - match: '^airflow\.dagrun\.duration\.(success|failed)\.(.+)$'
+    match_type: regex
+    name: airflow_dagrun_duration
+    labels: {state: "$1", dag_id: "$2"}
+  # schedule delay (time between expected and actual start)
+  - match: '^airflow\.dagrun\.schedule_delay\.(.+)$'
+    match_type: regex
+    name: airflow_dagrun_schedule_delay
+    labels: {dag_id: "$1"}
+  # task instance finished, per state
+  - match: '^airflow\.ti\.finish\.([^.]+)\.(.+)\.([a-z_]+)$'
+    match_type: regex
+    name: airflow_ti_finish
+    labels: {dag_id: "$1", task_id: "$2", state: "$3"}
+  # task instance started
+  - match: '^airflow\.ti\.start\.([^.]+)\.(.+)$'
+    match_type: regex
+    name: airflow_ti_start
+    labels: {dag_id: "$1", task_id: "$2"}
+  # DAG file parsing time
+  - match: '^airflow\.dag_processing\.last_duration\.(.+)$'
+    match_type: regex
+    name: airflow_dag_processing_last_duration
+    labels: {dag_file: "$1"}
+  # pools
+  - match: '^airflow\.pool\.(open_slots|queued_slots|running_slots|starving_tasks)\.(.+)$'
+    match_type: regex
+    name: airflow_pool_$1
+    labels: {pool: "$2"}

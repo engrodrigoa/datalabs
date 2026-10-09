@@ -1,0 +1,178 @@
+# Data health checks (run by dag_observability_health and at the end of each pipeline DAG).
+# Types: freshness | threshold | reconciliation  -- see pipelines/observability/checks.py
+# severity: error -> status "fail" (task goes red + alert) | warn -> status "warn" (alert only)
+# timeout_s: per-check statement_timeout (default OBS_CHECK_TIMEOUT_S=120); a timeout ends as status "error"
+# cost: heavy -> skipped by the periodic health DAG (--skip-heavy), runs only after its own pipeline
+
+defaults:
+  severity: error
+
+checks:
+  # ------------------------------------------------------------------ ANP (fuel prices)
+  - name: anp_ingestion_freshness
+    pipeline: anp
+    dataset: bronze.anp_landing_semanal
+    type: freshness
+    query: SELECT MAX(ingestion_timestamp) FROM bronze.anp_landing_semanal
+    warn_after_hours: 192     # weekly source: 8 days
+    error_after_hours: 360    # 15 days without a new weekly file
+
+  - name: anp_gold_data_freshness
+    pipeline: anp
+    dataset: gold.ft_anp_combustiveis
+    type: freshness
+    query: SELECT MAX(data_coleta) FROM gold.ft_anp_combustiveis
+    warn_after_hours: 240     # survey date lags publication by a few days
+    error_after_hours: 408
+
+  - name: anp_latest_load_volume
+    pipeline: anp
+    dataset: bronze.anp_landing_semanal
+    type: threshold
+    severity: warn
+    query: >
+      SELECT COUNT(*) FROM bronze.anp_landing_semanal
+      WHERE ingestion_timestamp = (SELECT MAX(ingestion_timestamp) FROM bronze.anp_landing_semanal)
+    min: 10000
+
+  - name: anp_uf_coverage_last_7d
+    pipeline: anp
+    dataset: silver.anp_combustivel
+    type: threshold
+    severity: warn
+    query: >
+      SELECT COUNT(DISTINCT estado_sigla) FROM silver.anp_combustivel
+      WHERE data_coleta >= (SELECT MAX(data_coleta) - 7 FROM silver.anp_combustivel)
+    min: 27                   # every UF + DF must appear in the latest week
+
+  - name: anp_invalid_prices
+    pipeline: anp
+    dataset: silver.anp_combustivel
+    type: threshold
+    query: >
+      SELECT COUNT(*) FROM silver.anp_combustivel
+      WHERE valor_venda IS NULL OR valor_venda <= 0 OR valor_venda > 200
+    max: 0
+
+  - name: anp_stg_to_silver_reconciliation
+    pipeline: anp
+    dataset: silver.anp_combustivel
+    type: reconciliation
+    left_label: stg_distinct_keys
+    query: >
+      SELECT COUNT(*) FROM (
+        SELECT chave FROM stg.stg_anp_mensal UNION SELECT chave FROM stg.stg_anp_semanal) k
+    right_label: silver_rows
+    compare_query: SELECT COUNT(*) FROM silver.anp_combustivel
+    tolerance_pct: 0
+
+  - name: anp_silver_to_gold_reconciliation
+    pipeline: anp
+    dataset: gold.ft_anp_combustiveis
+    type: reconciliation
+    left_label: silver_rows
+    query: SELECT COUNT(*) FROM silver.anp_combustivel
+    right_label: gold_fact_rows
+    compare_query: SELECT COUNT(*) FROM gold.ft_anp_combustiveis
+    tolerance_pct: 0
+
+  - name: anp_fact_orphan_postos
+    pipeline: anp
+    dataset: gold.ft_anp_combustiveis
+    type: threshold
+    query: >
+      SELECT COUNT(*) FROM gold.ft_anp_combustiveis f
+      LEFT JOIN gold.dm_postos p ON p.id_posto_sk = f.id_posto_sk
+      WHERE p.id_posto_sk IS NULL
+    max: 0
+
+  # ------------------------------------------------------------------ RFB (CNPJ open data)
+  - name: rfb_reference_freshness
+    pipeline: rfb
+    dataset: landing_rfb.estabelecimentos
+    type: freshness
+    severity: warn            # monthly + manual token: warn only
+    query: SELECT MAX(to_date(referencia_mes::text, 'YYYYMM')) FROM landing_rfb.estabelecimentos
+    warn_after_hours: 1488    # ~62 days
+    error_after_hours: 2232   # ~93 days
+
+  - name: rfb_suspicious_rows_pct
+    cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
+    timeout_s: 300
+    pipeline: rfb
+    dataset: landing_rfb.estabelecimentos
+    type: threshold
+    severity: warn
+    query: >
+      SELECT COALESCE(AVG(CASE WHEN _suspeita_deslocamento THEN 1.0 ELSE 0 END), 0) * 100
+      FROM landing_rfb.estabelecimentos
+      WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.estabelecimentos)
+    max: 0.1                  # % of rows with shifted columns
+
+  - name: rfb_empresas_duplicated_keys
+    cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
+    timeout_s: 300
+    pipeline: rfb
+    dataset: landing_rfb.empresas
+    type: threshold
+    query: >
+      SELECT COUNT(*) - COUNT(DISTINCT cnpj_basico) FROM landing_rfb.empresas
+      WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.empresas)
+    max: 0
+
+  - name: rfb_landing_to_gold_reconciliation
+    cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
+    timeout_s: 300
+    pipeline: rfb
+    dataset: gold.ft_receita_federal
+    type: reconciliation
+    severity: warn
+    left_label: landing_distinct_cnpj
+    query: >
+      SELECT COUNT(DISTINCT cnpj_completo) FROM landing_rfb.estabelecimentos
+      WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.estabelecimentos)
+    right_label: gold_rows
+    compare_query: SELECT COUNT(*) FROM gold.ft_receita_federal
+    tolerance_pct: 1
+
+  # ------------------------------------------------------------------ RAG (AI layer)
+  - name: rag_context_parity
+    pipeline: rag
+    dataset: ai.rag_context_anp
+    type: reconciliation
+    severity: warn
+    left_label: gold_rows_go
+    query: >
+      SELECT COUNT(*) FROM gold.ft_anp_combustiveis a
+      JOIN gold.dm_postos b ON b.id_posto_sk = a.id_posto_sk
+      WHERE b.estado_sigla = 'GO'
+    right_label: context_rows
+    compare_query: SELECT COUNT(*) FROM ai.rag_context_anp
+    tolerance_pct: 0
+
+  - name: rag_routing_accuracy_pct
+    pipeline: rag
+    dataset: ai.rag_eval_summary
+    type: threshold
+    severity: warn
+    query: SELECT acuracia_roteamento * 100 FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1
+    min: 90
+
+  - name: rag_value_accuracy_pct
+    pipeline: rag
+    dataset: ai.rag_eval_summary
+    type: threshold
+    severity: warn
+    query: SELECT acuracia_valor * 100 FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1
+    min: 90
+
+  # ------------------------------------------------------------------ the observability layer itself
+  - name: obs_stale_running_steps
+    pipeline: obs
+    dataset: audit.pipeline_step_runs
+    type: threshold
+    severity: warn
+    query: >
+      SELECT COUNT(*) FROM audit.pipeline_step_runs
+      WHERE status = 'running' AND started_at < now() - interval '6 hours'
+    max: 0                    # step killed without finishing (OOM, container restart)

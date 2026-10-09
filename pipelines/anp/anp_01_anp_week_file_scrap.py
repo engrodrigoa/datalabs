@@ -36,6 +36,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 from pipelines.commons.env_loader import  DIR_ANP_LANDING_WEEK
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
+from pipelines.observability import current_step
 
 # instaciar logger para o pipeline corrente
 logger = get_logger("anp_01_anp_week_file_scrap")
@@ -73,7 +74,9 @@ def obter_data_atualizacao_site(url, headers):
 def download_csv_local(links: dict, diretorio_destino: str):
     dest_path = Path(diretorio_destino)
     dest_path.mkdir(parents=True, exist_ok=True)
-    
+    step = current_step()
+    step.set(files_total=len(links))
+
     for nome_arquivo, link_url in links.items():
         caminho_arquivo = dest_path / nome_arquivo
         caminho_log = caminho_arquivo.as_posix()
@@ -86,6 +89,7 @@ def download_csv_local(links: dict, diretorio_destino: str):
         with open(caminho_arquivo, 'wb') as out_file:
             for chunk in res_file.iter_content(chunk_size=8192):
                 out_file.write(chunk)
+        step.add(files_ok=1, bytes_downloaded=caminho_arquivo.stat().st_size)
 
 def registrar_metadado_banco(data_site, status, schema, tabela): #, string_conexao):
     engine = get_sqla_engine()
@@ -110,22 +114,20 @@ def main():
     test_pg_connection()
     engine = get_sqla_engine()
     dir_input = Path(DIR_ANP_LANDING_WEEK)
-
-    logger.info("=" * 60)
     logger.info(f"web scrapping initiated on https://www.gov.br/anp/pt-br/centrais-de-conteudo/dados-abertos/serie-historica-de-precos-de-combustiveis : {datetime.now()}")
     logger.info(f"files landing dir  {dir_input.as_posix()} : {datetime.now()}")
-    logger.info("=" * 60)
-    
     try:
         data_site = obter_data_atualizacao_site(URL_ANP, HEADERS_WEB)
        
         logger.info(f"recovered date param from scrapping >> {data_site}")
+        current_step().set(source_reference=str(data_site))
     except Exception as e:
         logger.error(f"scrapping fail: {e}")
         sys.exit(1)
         
     ultima_data_banco = ler_ultima_data_banco(SCHEMA, TABELA)
     logger.info(f"last date on ctrl database >> {ultima_data_banco}")
+    current_step().set(last_loaded_reference=str(ultima_data_banco))
 
     # Condição de idempotência
     if ultima_data_banco is not None and data_site <= ultima_data_banco:

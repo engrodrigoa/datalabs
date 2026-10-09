@@ -17,6 +17,9 @@ os.environ["RAYON_NUM_THREADS"] = "2"
 #===================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from pipelines.commons.env_loader import rfb_reference
+from pipelines.observability import current_step
+
 from pipelines.commons.env_loader import (
     MINIO_ACCESS_KEY, MINIO_SECRET_KEY, validate_env,
 )
@@ -32,7 +35,7 @@ validate_env({
 })
 #=============================================================================================================
 
-REFERENCIA = "2026-08"
+REFERENCIA = rfb_reference()  # YYYY-MM from dag_rfb param (RFB_REF_MONTH)
 BUCKET_BRONZE = "bronze"
 BUCKET_SILVER = "silver"
 PASTA_TMP = "/mnt/datasource/tmp_silver"
@@ -218,7 +221,7 @@ def processar_estabelecimentos_seguro(s3_client):
 
     if not arquivos:
         logger.warning(f"no files found in s3://{BUCKET_BRONZE}/{prefixo_bronze}")
-        return 0
+        sys.exit(1)  # bronze must exist at this point: an empty prefix is a failure, not a success
 
     logger.info(f"found {len(arquivos)} s files to process.")
 
@@ -239,11 +242,9 @@ def processar_estabelecimentos_seguro(s3_client):
 
         total_arquivos_processados += 1
         total_linhas_processadas_geral += linhas_processadas
-
-    logger.info("==================================================================")
     logger.info(f"[!] task complete with {total_arquivos_processados} files processed, {skipped_count} skipped (already in silver bucket).")
-    logger.info("==================================================================")
-
+    current_step().add(files_total=len(arquivos), files_ok=total_arquivos_processados,
+                       rows_out=total_linhas_processadas_geral, files_skipped=skipped_count)
     return total_arquivos_processados
 
 def executar():

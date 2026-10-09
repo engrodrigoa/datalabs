@@ -18,9 +18,10 @@ filterwarnings("ignore")
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 # IMPORTANTE: Certifique-se de que DIR_ANP_LANDING_MONTH esteja mapeado no env_loader.py
-from pipelines.commons.env_loader import validate_env, DIR_ANP_LANDING_MONTH
+from pipelines.commons.env_loader import DIR_ANP_LANDING_MONTH
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
+from pipelines.observability import current_step
 
 logger = get_logger("anp_02_anp_month_file_scrap")
 
@@ -145,13 +146,11 @@ def main():
     engine = get_sqla_engine()
     dir_input = Path(DIR_ANP_LANDING_MONTH)
 
-    TEST_ONLY_2026 = True 
-
-    logger.info("=" * 60)
+    # Laptop-friendly default: only monthly files from ANP_MONTHLY_FROM_YEAR on (default: current year).
+    from_year = int(os.getenv("ANP_MONTHLY_FROM_YEAR", datetime.now().year))
+    step = current_step()
     logger.info(f"web scrapping initiated on https://www.gov.br/anp/pt-br/centrais-de-conteudo/dados-abertos/serie-historica-de-precos-de-combustiveis : {datetime.now()}")
     logger.info(f"files landing dir  {dir_input.as_posix()} : {datetime.now()}")
-    logger.info("=" * 60)
-    
     try:
         df_portal = parse_portal_items()
         if df_portal.is_empty():
@@ -172,11 +171,8 @@ def main():
 
     df_pending = df_portal.join(df_db, on=["cat", "ref"], how="anti")
 
-    #---------teste data
-    if TEST_ONLY_2026:
-        logger.info("test mode activated: filtering payload for 2026 files only")
-        df_pending = df_pending.filter(pl.col("year") == 2026)
-    #------------------------------------------------------
+    df_pending = df_pending.filter(pl.col("year") >= from_year)
+    logger.info(f"scope: monthly files from {from_year} on (ANP_MONTHLY_FROM_YEAR)")
 
     pending_count = df_pending.height
 
@@ -186,7 +182,9 @@ def main():
         sys.exit(99)
 
     logger.info(f"difference detected. found {pending_count} pending file(s)")
+    step.set(files_total=pending_count)
     downloaded_count = 0
+    failed_count = 0
     dest_root_path = Path(DIR_ANP_LANDING_MONTH)
 
     for row in df_pending.iter_rows(named=True):
@@ -226,18 +224,20 @@ def main():
             insert_monitoring_record(monitoring_record)
             logger.info(f"successfully landed at {destination_local_path.as_posix()} ")
             downloaded_count += 1
+            step.add(files_ok=1)
 
         except Exception as e:
+            failed_count += 1
+            step.add(files_failed=1)
             logger.error(f"DOWNLOAD FAILED FOR {row['url_source']}: {e}")
 
         time.sleep(2)
-
-    logger.info("=" * 60)
     logger.info("pipeline run complete")
     logger.info(f"total processed: {downloaded_count}/{pending_count}")
     logger.info(f"main destination: {dest_root_path.as_posix()}")
-    logger.info("=" * 60)
-    sys.exit(0)
+    # partial failures are retried next run (not written to the ctrl table) and alerted by the runner;
+    # a run where nothing could be downloaded fails the task.
+    sys.exit(1 if downloaded_count == 0 and failed_count > 0 else 0)
 
 if __name__ == "__main__":
     main()

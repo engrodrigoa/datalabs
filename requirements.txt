@@ -1,17 +1,11 @@
-dbt-core==1.11.15
-dbt-postgres==1.11.0
-
-polars>=1.0.0
+# Runtime dependencies of the Airflow image (resolved with Airflow constraints in the Dockerfile).
+# Packages already pinned by the Airflow constraints file (sqlalchemy, psycopg2, requests...) are
+# intentionally NOT listed here.
+astronomer-cosmos==1.15.1
+polars>=1.20,<2          # code targets the 1.x API
+pyarrow>=14
 connectorx>=0.3.2
-pyarrow>=14.0.0
-psycopg2-binary>=2.9.9
-sqlalchemy>=2.0.0
-
-sentence-transformers>=2.5.0
-langchain>=0.2.0
-langchain-postgres>=0.0.9
-langchain-huggingface>=0.1.0
-
-streamlit>=1.35.0
-
-python-dotenv>=1.0.0
+boto3
+python-dotenv
+beautifulsoup4
+pyyaml

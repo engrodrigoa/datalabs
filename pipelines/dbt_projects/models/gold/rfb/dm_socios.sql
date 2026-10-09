@@ -1,19 +1,19 @@
-{# 
-  Mapeamento de dependências explícitas para o dbt/Cosmos reconhecer no DAG:
-  {{ ref('stg_rfb_empresas') }}
-  {{ ref('stg_rfb_estabelecimentos') }}
-  {{ ref('stg_rfb_socios') }}
-  {{ ref('stg_rfb_simples') }}
-  {{ ref('stg_rfb_dim_cnae') }}
-  {{ ref('stg_rfb_dim_motivo_situacao_cadastral') }}
-  {{ ref('stg_rfb_dim_municipio') }}
-  {{ ref('stg_rfb_dim_natureza_juridica') }}
-  {{ ref('stg_rfb_dim_pais') }}
-  {{ ref('stg_rfb_dim_qualificacao_socio') }}
-#}
+-- Explicit dependencies so the whole staging layer is built first.
+-- (refs inside a Jinja comment block are NOT parsed by dbt; `-- depends_on:` is the supported way)
+-- depends_on: {{ ref('stg_rfb_empresas') }}
+-- depends_on: {{ ref('stg_rfb_estabelecimentos') }}
+-- depends_on: {{ ref('stg_rfb_socios') }}
+-- depends_on: {{ ref('stg_rfb_simples') }}
+-- depends_on: {{ ref('stg_rfb_dim_cnae') }}
+-- depends_on: {{ ref('stg_rfb_dim_motivo_situacao_cadastral') }}
+-- depends_on: {{ ref('stg_rfb_dim_municipio') }}
+-- depends_on: {{ ref('stg_rfb_dim_natureza_juridica') }}
+-- depends_on: {{ ref('stg_rfb_dim_pais') }}
+-- depends_on: {{ ref('stg_rfb_dim_qualificacao_socio') }}
 
 {{ config(
     materialized='incremental',
+    on_schema_change='append_new_columns',
     unique_key='sk_socio_empresa',
     schema='gold',
     tags=['rfb'],
@@ -27,7 +27,7 @@
 WITH stg_socios AS (
     SELECT * FROM {{ ref('stg_rfb_socios') }}
     {% if is_incremental() %}
-        WHERE data_carga >= (SELECT MAX(data_carga) FROM {{ this }})
+        WHERE data_carga > (SELECT COALESCE(MAX(data_carga), '1900-01-01'::timestamptz) FROM {{ this }})
     {% endif %}
 ),
 
@@ -47,7 +47,8 @@ socios_enriquecidos AS (
         q.desc_qualificacao,
         s.data_entrada_sociedade,
         s.codg_pais,
-        NOW() AS data_carga,
+        s.data_carga AS data_carga,
+        NOW() AS dbt_loaded_at,
         ROW_NUMBER() OVER (
             PARTITION BY s.sk_socio_empresa 
             ORDER BY s.data_entrada_sociedade DESC
@@ -70,6 +71,7 @@ SELECT
     desc_qualificacao,
     data_entrada_sociedade,
     codg_pais,
-    data_carga
+    data_carga,
+    dbt_loaded_at
 FROM socios_enriquecidos
 WHERE rn = 1

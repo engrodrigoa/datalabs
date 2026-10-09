@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest
+      - name: dashboards are generated from code (no drift)
+        run: |
+          python grafana/dashboards-src/build.py
+          git diff --exit-code grafana/dashboards
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env && docker compose config -q
+      - run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai config -q
+
+  # End-to-end data test: real Postgres + pgvector, sample ANP files, landing through the
+  # observability runner, dbt build with Elementary, data health checks, and every Grafana
+  # SQL query executed as the read-only role.
+  data-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env: {POSTGRES_USER: datalab, POSTGRES_PASSWORD: datalab, POSTGRES_DB: datalab}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U datalab" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: datalab
+      DB_PASSWORD: datalab
+      DB_DB: datalab
+      PGPASSWORD: datalab
+      LOG_FORMAT: text
+      DIR_ANP_LANDING_WEEK: ${{ github.workspace }}/datasource/anp/ult4
+      DIR_ANP_LANDING_MONTH: ${{ github.workspace }}/datasource/anp/arquivos_fechados
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt && python -m venv .dbt && .dbt/bin/pip install -r requirements-dbt.txt
+      - name: bootstrap database (same script as the container entrypoint)
+        run: |
+          sudo apt-get install -y -qq postgresql-client
+          PGHOST=localhost POSTGRES_USER=datalab POSTGRES_DB=datalab GRAFANA_DB_PASSWORD=ro \
+          INIT_SQL_DIR=infra/postgres/init/sql bash infra/postgres/init/00_bootstrap.sh
+      - name: land sample ANP files through the observability runner
+        run: |
+          python scripts/generate_sample_anp.py datasource/anp --drifted
+          psql -h localhost -U datalab -d datalab -c "INSERT INTO ctrl.anp_metadata_semanal VALUES (current_date, now(), 'SUCESSO')"
+          python -m pipelines.observability.run anp pipelines/anp/anp_03_anp_landing_semanal.py --step landing_semanal
+          python -m pipelines.observability.run anp pipelines/anp/anp_04_anp_landing_mensal.py --step landing_mensal
+      - name: dbt build (ANP) + Elementary
+        working-directory: pipelines/dbt_projects
+        run: |
+          ../../.dbt/bin/dbt deps --profiles-dir .
+          ../../.dbt/bin/dbt run --select elementary --profiles-dir .
+          ../../.dbt/bin/dbt build --select tag:anp --profiles-dir .
+      - name: data health checks
+        run: python -m pipelines.observability.run obs pipelines.observability.checks --module --step health_checks_anp -- --pipeline anp --fail-on error
+      - name: audit trail was written
+        run: |
+          psql -h localhost -U datalab -d datalab -c "SELECT pipeline, step, status, rows_out, files_failed FROM audit.pipeline_step_runs ORDER BY started_at"
+          test "$(psql -h localhost -U datalab -d datalab -tAc "SELECT count(*) FROM audit.pipeline_step_runs WHERE status='success'")" -ge 3
+      - name: every Grafana SQL query runs as grafana_ro
+        env:
+          DASHBOARD_SQL_DSN_DW: postgresql://grafana_ro:ro@localhost:5432/datalab
+        run: pytest tests/test_dashboards_sql.py

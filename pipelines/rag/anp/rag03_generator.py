@@ -12,7 +12,6 @@ filterwarnings("ignore")
 # ==========================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from pipelines.commons.env_loader import validate_env, CONSTRING
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
 

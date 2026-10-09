@@ -1,0 +1,2 @@
+# Installed only with INSTALL_AI=true (torch CPU wheel is installed first by the Dockerfile)
+sentence-transformers>=3.0,<5

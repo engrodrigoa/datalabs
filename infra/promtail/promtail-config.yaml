@@ -1,0 +1,73 @@
+# Ships Airflow task logs to Loki and turns our structured log lines into queryable fields.
+#
+# Airflow wraps every line a task prints:   [ts] {subprocess.py:93} INFO - <body>
+# <body> written by pipelines/commons/logger.py (LOG_FORMAT=line):
+#     WARNING anp_landing_semanal: x.csv rejected | {"event": "schema_drift", "file": "x.csv"}
+# 1) dag_id / run_id / task_id come from the log file PATH (no need to repeat them on every line)
+# 2) regex splits Airflow's prefix, then level / logger / msg / JSON tail from the body
+# 3) json parses the tail (event, pipeline, step); the older LOG_FORMAT=json lines are still parsed
+# 4) only LOW-cardinality fields become labels (run_id is NOT a label: unbounded cardinality)
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: airflow_tasks
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: airflow
+          source: task
+          __path__: /opt/airflow/logs/dag_id=*/run_id=*/task_id=*/*.log
+    pipeline_stages:
+      - regex:
+          source: filename
+          expression: '.*/dag_id=(?P<dag_id>[^/]+)/run_id=(?P<run_id>[^/]+)/task_id=(?P<task_id>[^/]+)/.*'
+      - regex:
+          expression: '^\[(?P<af_ts>[^\]]+)\] \{(?P<af_src>[^}]+)\} (?P<af_level>[A-Z]+) - (?P<body>.*)$'
+      # LOG_FORMAT=line (current):  LEVEL logger: message | {"event": ...}
+      - regex:
+          source: body
+          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \| (?P<payload>\{.*\}))?$'
+      - json:
+          source: payload
+          expressions:
+            event: event
+            pipeline: pipeline
+            step: step
+      # LOG_FORMAT=json (older lines): the whole body is the JSON object
+      - json:
+          source: body
+          expressions:
+            level: level
+            event: event
+            pipeline: pipeline
+            step: step
+      - template:
+          source: level
+          template: '{{ or .Value .af_level "INFO" }}'
+      - labels:
+          dag_id:
+          task_id:
+          level:
+          event:
+          pipeline:
+
+  - job_name: airflow_scheduler
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: airflow
+          source: scheduler
+          __path__: /opt/airflow/logs/scheduler/*/*.log
+    pipeline_stages:
+      - regex:
+          expression: '^\[(?P<af_ts>[^\]]+)\] \{(?P<af_src>[^}]+)\} (?P<level>[A-Z]+) - .*$'
+      - labels:
+          level:

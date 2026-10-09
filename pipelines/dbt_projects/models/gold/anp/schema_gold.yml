@@ -5,7 +5,7 @@ models:
     description: "Dimensão de combustíveis monitorados."
     columns:
       - name: id_produto_sk
-        tests:
+        data_tests:
           - unique
           - not_null
 
@@ -13,31 +13,39 @@ models:
     description: "Dimensão de postos de revenda deduplicada."
     columns:
       - name: id_posto_sk
-        tests:
+        data_tests:
           - unique
           - not_null
       - name: cnpj
-        tests:
+        data_tests:
           - unique
           - not_null
 
   - name: ft_anp_combustiveis
     description: "Fato de coleta de preços da ANP."
+    data_tests:
+      - elementary.volume_anomalies:
+          arguments:
+            timestamp_column: _source_loaded_at
+            time_bucket: {period: day, count: 1}
+          config:
+            severity: warn
+            tags: ["elementary"]
     columns:
       - name: id_fato
         description: "Chave primária originada na Silver"
-        tests:
+        data_tests:
           - unique
           - not_null
       - name: id_posto_sk
-        tests:
+        data_tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('dm_postos')
                 field: id_posto_sk
       - name: id_produto_sk
-        tests:
+        data_tests:
           - not_null
           - relationships:
               arguments:
@@ -45,7 +53,7 @@ models:
                 field: id_produto_sk
       - name: valor_venda
         description: "Valor de venda na bomba."
-        tests:
+        data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               arguments:

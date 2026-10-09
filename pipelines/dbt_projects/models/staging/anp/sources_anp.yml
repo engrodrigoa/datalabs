@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: bronze
+    description: "Raw ANP files loaded as text by pipelines/anp/anp_landing.py"
+    config:
+      loaded_at_field: ingestion_timestamp
+      freshness:
+        warn_after: {count: 8, period: day}
+        error_after: {count: 15, period: day}
+    tables:
+      - name: anp_landing_semanal
+        description: "Weekly survey (last 4 weeks file), one load per survey reference"
+      - name: anp_landing_mensal
+        description: "Monthly closed files"
+        config:
+          freshness:
+            warn_after: {count: 45, period: day}
+            error_after: {count: 75, period: day}

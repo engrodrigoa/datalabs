@@ -18,9 +18,10 @@ filterwarnings("ignore")
 # ==========================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from pipelines.commons.env_loader import validate_env, CONSTRING
+from pipelines.commons.env_loader import CONSTRING
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
-from pipelines.commons.logger import get_logger
+from pipelines.commons.logger import get_logger, log_event
+from pipelines.observability import current_step
 
 
 from pipelines.commons.ai.rag_query_router import carregar_dimensoes, recuperar_contexto
@@ -37,7 +38,11 @@ TABELA_RESUMO = "rag_eval_summary"
 MODELO_NOME = "intfloat/multilingual-e5-base"
 TOP_K = 5
 
-VERSAO_PIPELINE = "v2_router"
+VERSAO_PIPELINE = os.getenv("RAG_PIPELINE_VERSION", "v2_router")
+
+# Quality gate: the evaluation fails the task (and alerts) when the RAG regresses
+MIN_ROUTING_ACC = float(os.getenv("RAG_MIN_ROUTING_ACC", "0.9"))
+MIN_VALUE_ACC = float(os.getenv("RAG_MIN_VALUE_ACC", "0.9"))
 
 _JOIN = """FROM gold.ft_anp_combustiveis a
     JOIN gold.dm_postos b ON b.id_posto_sk = a.id_posto_sk
@@ -381,6 +386,21 @@ def main():
     logger.info(f"avaliacao concluida e gravada em {SCHEMA}.{TABELA_METRICAS} / {SCHEMA}.{TABELA_RESUMO}")
     logger.info(f"run_id={run_id}")
 
+    # ---------------------------------------------------------------- quality gate
+    acc_rot, acc_val = resumo["acuracia_roteamento"], resumo["acuracia_valor"]
+    current_step().set(eval_run_id=str(run_id), routing_accuracy=acc_rot, value_accuracy=acc_val,
+                       latency_ms=resumo["latencia_media_ms"], index_used=usa_indice,
+                       context_parity=resumo["paridade_contexto_gold"], rows_out=len(resultados))
+    falhas = []
+    if acc_rot is not None and acc_rot < MIN_ROUTING_ACC:
+        falhas.append(f"routing accuracy {acc_rot:.0%} < {MIN_ROUTING_ACC:.0%}")
+    if acc_val is not None and acc_val < MIN_VALUE_ACC:
+        falhas.append(f"value accuracy {acc_val:.0%} < {MIN_VALUE_ACC:.0%}")
+    log_event(logger, "rag_eval_gate", "FAILED: " + "; ".join(falhas) if falhas else "passed",
+              level=40 if falhas else 20, run_id_eval=str(run_id), routing_accuracy=acc_rot,
+              value_accuracy=acc_val, passed=not falhas)
+    return 1 if falhas else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

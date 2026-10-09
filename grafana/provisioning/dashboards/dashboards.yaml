@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: datalabs
+    folder: DataLabs
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true   # edit in the UI, then export to grafana/dashboards (or change build.py)
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
