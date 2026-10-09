@@ -16,6 +16,9 @@ os.environ["RAYON_NUM_THREADS"] = "1"
 #===================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from pipelines.commons.env_loader import rfb_reference
+from pipelines.observability import current_step
+
 from pipelines.commons.env_loader import (
     MINIO_ACCESS_KEY, MINIO_SECRET_KEY, validate_env,
 )
@@ -31,7 +34,7 @@ validate_env({
 })
 #=============================================================================================================
 
-REFERENCIA = "2026-08"
+REFERENCIA = rfb_reference()  # YYYY-MM from dag_rfb param (RFB_REF_MONTH)
 BUCKET_BRONZE = "bronze"
 BUCKET_SILVER = "silver"
 PASTA_TMP = "/mnt/datasource/tmp_silver_auxiliares"
@@ -242,10 +245,7 @@ def executar():
     processed, skipped = processar_simples(s3_client)
     total_processed += processed
     total_skipped += skipped
-
-    logger.info("==================================================================")
     logger.info(f"[!] task complete with  {total_processed} dimension tables processed, {total_skipped} skipped (already in silver bucket).")
-    logger.info("==================================================================")
-
+    current_step().set(files_ok=total_processed, files_skipped=total_skipped)
 if __name__ == "__main__": 
     executar()

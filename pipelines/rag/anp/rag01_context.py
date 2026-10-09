@@ -1,114 +1,74 @@
+"""
+Gold (ANP) -> semantic chunks -> embeddings (multilingual-e5-base) -> ai.rag_context_anp (pgvector).
+
+Full refresh by design (small, one UF), but every chunk keeps lineage to the gold fact
+(source_id = id_fato) and a deterministic chunk_id, so an incremental strategy can be
+added without changing the table. Volumes, model and timings are reported to the step run.
+"""
+import json
 import os
 import sys
-import gc
-import io
+import time
 from datetime import datetime
 from warnings import filterwarnings
 
 import polars as pl
 from sqlalchemy import text
-from pathlib import Path
-import json
-
-from sentence_transformers import SentenceTransformer
 
 filterwarnings("ignore")
 
-# ==========================================
-# COMMONS UTILS SETUP
-# ==========================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from pipelines.commons.env_loader import validate_env, CONSTRING
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
-from pipelines.commons.logger import get_logger
+from pipelines.commons.env_loader import CONSTRING
+from pipelines.commons.logger import get_logger, log_event
+from pipelines.commons.pg_copy import copy_dataframe
+from pipelines.observability import current_step
 
 logger = get_logger("rag01_context")
 
-# ==========================================
-# TARGETS & CONFIG
-# ==========================================
 SCHEMA = "ai"
 TABELA = "rag_context_anp"
-MODELO_NOME = "intfloat/multilingual-e5-base"
-LIMITE_EXTRACAO = 100  # Manter 100 para o MVP local
+INDEX_HNSW = "ix_rag_context_anp_hnsw"
+MODELO_NOME = os.getenv("RAG_EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+UF = os.getenv("RAG_UF", "GO").upper()
+LIMITE_EXTRACAO = int(os.getenv("RAG_MAX_ROWS", "0"))  # 0 = no limit
+BATCH_SIZE = int(os.getenv("RAG_EMBED_BATCH", "64"))
 
-# ==========================================
-# FUNCTIONS
-# ==========================================
-def copy_to_postgres(df: pl.DataFrame, engine_db, schema: str, tabela: str):
-    """Realiza o bulk insert utilizando o comando COPY do PostgreSQL."""
-    buffer = io.StringIO()
-    df.write_csv(buffer)
-    buffer.seek(0)
-    colunas = ", ".join(df.columns)
 
-    sql = f"""
-        COPY {schema}.{tabela}
-        ({colunas})
-        FROM STDIN
-        WITH (
-            FORMAT CSV,
-            HEADER TRUE
-        )
-    """
-    conn = engine_db.raw_connection()
-    try:
-        cur = conn.cursor()
-        cur.copy_expert(sql, buffer)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
-
-# ==========================================
-# PIPELINE
-# ==========================================
 def main():
+    from sentence_transformers import SentenceTransformer  # heavy import: only when the step runs
 
+    step = current_step()
     test_pg_connection()
     engine = get_sqla_engine()
 
-    logger.info("=" * 60)
-    logger.info(f"[!] starting vectorization pipeline. Target: {SCHEMA}.{TABELA} : {datetime.now()}")
-    logger.info("=" * 60)
+    log_event(logger, "rag_build_started", f"vectorization -> {SCHEMA}.{TABELA} (UF={UF}, model={MODELO_NOME})",
+              uf=UF, model=MODELO_NOME)
 
-    # 1. Carregamento do Modelo IA
-    logger.info(f"loading AI model: {MODELO_NOME}")
+    t0 = time.perf_counter()
     modelo_ia = SentenceTransformer(MODELO_NOME)
+    step.set(model=MODELO_NOME, model_load_s=round(time.perf_counter() - t0, 2), uf=UF)
 
-    # 2. Extração
-    logger.info(f"extracting data from gold layer (LIMIT {LIMITE_EXTRACAO})")
-    query_extracao = f"""
-        SELECT 
-            b.cnpj, b.revenda, b.bandeira, b.municipio, b.estado_sigla, b.bairro, b.cep, 
-            c.produto, a.valor_venda, a.data_coleta  
-        FROM gold.ft_anp_combustiveis a 
-        LEFT JOIN gold.dm_postos b ON b.id_posto_sk = a.id_posto_sk 
-        LEFT JOIN gold.dm_produtos c ON c.id_produto_sk = a.id_produto_sk 
-        WHERE 1=1
-        AND b.estado_sigla = 'GO' 
-        --LIMIT {LIMITE_EXTRACAO}
+    limit = f"LIMIT {LIMITE_EXTRACAO}" if LIMITE_EXTRACAO > 0 else ""
+    query = f"""
+        SELECT a.id_fato, b.cnpj, b.revenda, b.bandeira, b.municipio, b.estado_sigla, b.bairro, b.cep,
+               c.produto, a.valor_venda, a.data_coleta
+        FROM gold.ft_anp_combustiveis a
+        JOIN gold.dm_postos b   ON b.id_posto_sk = a.id_posto_sk
+        JOIN gold.dm_produtos c ON c.id_produto_sk = a.id_produto_sk
+        WHERE b.estado_sigla = '{UF}'
+        {limit}
     """
-    
-    try:
-        df = pl.read_database_uri(query_extracao, uri=CONSTRING)
-    except Exception as e:
-        logger.error(f"FAILED TO EXTRACT DATA: {e}")
-        sys.exit(1)
-
+    df = pl.read_database_uri(query, uri=CONSTRING)
+    step.add(rows_in=df.height)
     if df.height == 0:
-        logger.warning("no records found in gold layer to process.")
-        sys.exit(0)
+        log_event(logger, "no_new_data", f"no gold rows for UF={UF}", level=30)
+        return 99
 
-    # 3. Transformação
-    logger.info("creating semantic chunks and metadata JSON")
     df = df.with_columns(
         pl.concat_str([
-            pl.lit("O posto '"), pl.col("revenda"), 
+            pl.lit("O posto '"), pl.col("revenda"),
             pl.lit("' da bandeira "), pl.col("bandeira"),
             pl.lit(", localizado em "), pl.col("municipio"), pl.lit(" - "), pl.col("estado_sigla"),
             pl.lit(" (Bairro: "), pl.col("bairro"),
@@ -116,53 +76,56 @@ def main():
             pl.lit(", CNPJ: "), pl.col("cnpj"),
             pl.lit("), vendeu o produto "), pl.col("produto"),
             pl.lit(" pelo valor de R$ "), pl.col("valor_venda").cast(pl.Utf8),
-            pl.lit(" na data "), pl.col("data_coleta").cast(pl.Utf8), pl.lit(".")
-        ]).alias("chunk_text")
+            pl.lit(" na data "), pl.col("data_coleta").cast(pl.Utf8), pl.lit("."),
+        ], ignore_nulls=True).alias("chunk_text"),
+        pl.col("id_fato").cast(pl.Utf8).alias("source_id"),
     )
+    empty = df.filter(pl.col("chunk_text").is_null() | (pl.col("chunk_text") == "")).height
+    df = df.filter(pl.col("chunk_text").is_not_null() & (pl.col("chunk_text") != ""))
+    step.add(rows_rejected=empty)
 
     df = df.with_columns(
+        pl.col("chunk_text").hash(seed=42).cast(pl.Utf8).alias("_h"),
         pl.struct(["cnpj", "cep", "estado_sigla", "municipio"])
-        .map_elements(lambda x: json.dumps(x), return_dtype=pl.Utf8)
-        .alias("metadata")
+          .map_elements(lambda x: json.dumps(x, ensure_ascii=False), return_dtype=pl.Utf8).alias("metadata"),
+    ).with_columns(
+        (pl.col("source_id") + pl.lit(":") + pl.col("_h")).alias("chunk_id")
+    ).unique(subset=["chunk_id"])
+
+    t1 = time.perf_counter()
+    vectors = modelo_ia.encode(
+        [f"passage: {t}" for t in df["chunk_text"].to_list()],
+        normalize_embeddings=True, batch_size=BATCH_SIZE, show_progress_bar=False,
     )
+    embed_s = time.perf_counter() - t1
+    step.set(embedding_dim=int(vectors.shape[1]), embed_s=round(embed_s, 2),
+             embed_rows_per_s=round(df.height / embed_s, 1) if embed_s else None)
 
-    # vectorizing
+    df_load = df.with_columns(
+        pl.Series("embedding", [json.dumps(v) for v in vectors.tolist()], dtype=pl.Utf8),
+        pl.lit(MODELO_NOME).alias("embedding_model"),
+    ).select(["chunk_id", "source_id", "chunk_text", "metadata", "embedding", "embedding_model"])
 
-    logger.info(f">>> creating embeddings for {df.height} rows")
-    
-    textos_para_vetorizar = [f"passage: {t}" for t in df["chunk_text"].to_list()]
+    # Bulk-load pattern for pgvector: inserting into a live HNSW index is row-by-row and slow;
+    # dropping it, loading, and building it once afterwards is much faster.
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP INDEX IF EXISTS {SCHEMA}.{INDEX_HNSW}"))
+        conn.execute(text(f"TRUNCATE TABLE {SCHEMA}.{TABELA}"))
+    t2 = time.perf_counter()
+    written = copy_dataframe(df_load, engine, SCHEMA, TABELA)
+    load_s = time.perf_counter() - t2
 
-    embeddings_list = modelo_ia.encode(textos_para_vetorizar, normalize_embeddings=True).tolist()
+    t3 = time.perf_counter()
+    with engine.begin() as conn:
+        conn.execute(text("SET LOCAL maintenance_work_mem = '256MB'"))
+        conn.execute(text(f"CREATE INDEX {INDEX_HNSW} ON {SCHEMA}.{TABELA} USING hnsw (embedding vector_cosine_ops)"))
+    step.add(rows_out=written)
+    step.set(copy_s=round(load_s, 2), index_build_s=round(time.perf_counter() - t3, 2))
 
-    embeddings_str = [json.dumps(vetor) for vetor in embeddings_list]
-    
-    df = df.with_columns(
-        pl.Series(name="embedding", values=embeddings_str, dtype=pl.Utf8)
-    )
+    log_event(logger, "rag_build_finished", f"{written:,} vectors loaded in {embed_s:.1f}s of embedding",
+              vectors=written, embed_s=round(embed_s, 2), finished_at=datetime.now().isoformat())
+    return 0
 
-    # dw deploy
-    df_load = df.select(["chunk_text", "metadata", "embedding"])
-
-    logger.info(f">>> processing load into {SCHEMA}.{TABELA}")
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(f"TRUNCATE TABLE {SCHEMA}.{TABELA}"))
-            logger.info("table truncated for full refresh.")
-
-        copy_to_postgres(df_load, engine, SCHEMA, TABELA)
-        logger.info(f">>> successfully loaded vectors into {SCHEMA}.{TABELA}")
-        
-    except Exception as e:
-        logger.error(f"FAILED TO PROCESS LOAD: {e}")
-        sys.exit(1)
-    finally:
-        gc.collect()
-
-    logger.info("=" * 60)
-    logger.info("[!] task run complete")
-    logger.info(f"total vectors processed: {df.height}")
-    logger.info("=" * 60)
-    sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

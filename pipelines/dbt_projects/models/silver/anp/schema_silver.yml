@@ -2,22 +2,57 @@ version: 2
 
 models:
   - name: anp_combustivel
-    description: "Tabela consolidada, tipada e deduplicada de preços de combustíveis da ANP (Mensal + Semanal)."
+    description: "Consolidated, typed and deduplicated ANP fuel prices (monthly + weekly)."
+    data_tests:
+      # Elementary: learns the normal daily volume and alerts on drops/spikes (needs ~2 weeks of history)
+      - elementary.volume_anomalies:
+          arguments:
+            timestamp_column: data_coleta
+            time_bucket: {period: day, count: 1}
+            training_period: {period: day, count: 60}
+            detection_period: {period: day, count: 7}
+          config:
+            severity: warn
+            tags: ["elementary"]
+      - elementary.freshness_anomalies:
+          arguments:
+            timestamp_column: ingestion_timestamp
+          config:
+            severity: warn
+            tags: ["elementary"]
     columns:
       - name: chave
-        description: "Chave sintética única composta por data_coleta + id_produto + cnpj."
-        tests:
-          - unique
-          - not_null
+        description: "Natural key: data_coleta | produto | cnpj"
+        data_tests: [unique, not_null]
       - name: data_coleta
-        description: "Data em que o preço foi coletado."
-        tests:
-          - not_null
+        data_tests: [not_null]
       - name: cnpj
-        description: "CNPJ da revenda de combustíveis."
-        tests:
+        data_tests:
           - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "~ '^[0-9]{14}$'"
+      - name: estado_sigla
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO']
       - name: valor_venda
-        description: "Preço de venda praticado pelo posto."
-        tests:
+        description: "Pump price (GLP is per 13kg bottle, hence the wide upper bound)."
+        data_tests:
           - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 200
+                inclusive: false
+          - elementary.column_anomalies:
+              arguments:
+                column_anomalies: [average, null_count]
+                timestamp_column: data_coleta
+                time_bucket: {period: day, count: 1}
+                training_period: {period: day, count: 60}
+                detection_period: {period: day, count: 7}
+              config:
+                severity: warn
+                tags: ["elementary"]

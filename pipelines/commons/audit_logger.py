@@ -188,3 +188,22 @@ def consolidate_dag_audit_logs(context: dict = None, **kwargs):
             pass
     if LOG_FLUSH_DELAY_SECONDS > 0:
         time.sleep(LOG_FLUSH_DELAY_SECONDS)
+
+    # This task runs with trigger_rule=ALL_DONE and is the DAG's leaf: if it succeeded no matter
+    # what, a run with failed tasks would be marked SUCCESS (the leaf decides the run state).
+    # Fail it explicitly so the DAG run, the dashboards and the alerts tell the truth.
+    failed = _failed_tasks(context)
+    if failed:
+        from airflow.exceptions import AirflowFailException  # type: ignore
+
+        raise AirflowFailException(f"pipeline run finished with failed task(s): {', '.join(failed)}")
+
+
+def _failed_tasks(context) -> list:
+    dag_run = context.get("dag_run")
+    current = context["task"].task_id if context.get("task") else None
+    try:
+        tis = dag_run.get_task_instances() if dag_run else []
+    except Exception:
+        return []
+    return sorted(ti.task_id for ti in tis if ti.task_id != current and ti.state in ("failed", "upstream_failed"))

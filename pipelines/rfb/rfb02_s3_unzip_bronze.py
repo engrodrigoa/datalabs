@@ -3,7 +3,6 @@ import sys
 import zipfile
 import re
 import csv
-import pyarrow.csv as pv
 import pyarrow.parquet as pq
 import pyarrow as pa
 from warnings import filterwarnings
@@ -16,6 +15,9 @@ filterwarnings("ignore")
 # env loader - connection setup
 #===================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from pipelines.commons.env_loader import rfb_reference
+from pipelines.observability import current_step
 
 from pipelines.commons.env_loader import (
     MINIO_ACCESS_KEY, MINIO_SECRET_KEY, validate_env,
@@ -40,7 +42,7 @@ validate_env({
     "MINIO_SECRET_KEY": MINIO_SECRET_KEY,
 })
 
-REFERENCIA = "2026-08"
+REFERENCIA = rfb_reference()  # YYYY-MM from dag_rfb param (RFB_REF_MONTH)
 SOURCE_DIR = f"/mnt/datasource/rfb/ref{REFERENCIA.replace('-', '')}"
 BUCKET_BRONZE = "bronze"
 
@@ -57,14 +59,14 @@ def process_zips_to_parquet():
     
     if not os.path.exists(SOURCE_DIR):
         logger.error(f"source directory does not exist: {SOURCE_DIR}")
-        return
+        sys.exit(1)
 
     all_zip_files = sorted([f for f in os.listdir(SOURCE_DIR) if f.endswith('.zip')])
     total_files = len(all_zip_files)
     
     if not total_files:
-        logger.info(f"no .zip files found in {SOURCE_DIR} to process.")
-        return
+        logger.error(f"no .zip files found in {SOURCE_DIR} to process.")
+        sys.exit(1)
 
     pending_files = []
     skipped_count = 0
@@ -86,6 +88,7 @@ def process_zips_to_parquet():
 
     if not pending_files:
         logger.info(f"task run complete. total ZIPs: {total_files} | already in s3: {skipped_count} | processed this run: 0")
+        current_step().set(files_total=total_files, files_ok=total_files, files_skipped=skipped_count)
         return
 
     logger.info(f"found {len(pending_files)} pending ZIP files for bronze ingestion out of {total_files} total ({skipped_count} already present).")
@@ -95,6 +98,9 @@ def process_zips_to_parquet():
     base_schema = pa.schema([pa.field(col, pa.string()) for col in column_names] + [pa.field("referencia_mes", pa.string())])
 
     processed_count = 0
+    failed_files = []
+    step = current_step()
+    step.set(files_total=total_files, files_skipped=skipped_count)
 
     for zip_file in pending_files:
         zip_path = os.path.join(SOURCE_DIR, zip_file)
@@ -165,8 +171,11 @@ def process_zips_to_parquet():
             logger.info(f">>> >>> deployment complete for {base_name}")
             
             processed_count += 1
+            step.add(files_ok=1, rows_out=row_count)
 
         except Exception as e:
+            failed_files.append(zip_file)
+            step.add(files_failed=1)
             logger.error(f"unrecoverable error processing {zip_file}: {e}")
             
         finally:
@@ -175,11 +184,12 @@ def process_zips_to_parquet():
             if os.path.exists(local_parquet):
                 os.remove(local_parquet)
 
-        logger.info('=' * 120)
-        logger.info(f"task run complete. total zip files: {total_files} | already in s3: {skipped_count} | loaded on this run: {processed_count}")
-        logger.info('=' * 120)
-        logger.info('#' * 120)
-        logger.info('#' * 120)
+    logger.info('=' * 120)
+    logger.info(f"task run complete. total zip files: {total_files} | already in s3: {skipped_count} | loaded on this run: {processed_count} | failed: {len(failed_files)}")
+    logger.info('=' * 120)
+    if failed_files:
+        logger.error(f"failed ZIPs (bronze incomplete): {failed_files}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     process_zips_to_parquet()

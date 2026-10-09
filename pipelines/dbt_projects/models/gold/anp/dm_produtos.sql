@@ -1,23 +1,16 @@
-{{ 
+{{
     config(
         materialized='table',
         tags=['gold', 'dimensao']
-    ) 
+    )
 }}
 
-WITH base_silver AS (
-    SELECT DISTINCT
-        produto,
-        unidade_de_medida,
-        id_produto
-    FROM {{ ref('anp_combustivel') }}
-    WHERE produto IS NOT NULL
-)
-
+-- One row per product (the SK is the hash of the product name only)
 SELECT
-    -- Geração da Surrogate Key via Hash determinístico
-    MD5(CAST(produto AS VARCHAR)) AS id_produto_sk,
-    id_produto AS id_produto_origem,
+    MD5(CAST(produto AS VARCHAR))   AS id_produto_sk,
+    MAX(id_produto)                 AS id_produto_origem,
     produto,
-    unidade_de_medida
-FROM base_silver
+    MAX(unidade_de_medida)          AS unidade_de_medida
+FROM {{ ref('anp_combustivel') }}
+WHERE produto IS NOT NULL
+GROUP BY produto

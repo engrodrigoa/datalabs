@@ -4,7 +4,8 @@ import io
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-from sqlalchemy import text
+
+from pipelines.observability import current_step
 
 
 def batch_para_large_string(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -47,11 +48,20 @@ def preparar_schema_tabela(engine, schema, tabela, ddl, colunas_para_text, ref_m
             logger.info(f"  Creating schema/table via DDL...")
             cur.execute(ddl)
 
-            logger.info(f"  Widening text columns...")
-            for coluna in colunas_para_text:
-                cur.execute(
-                    f"ALTER TABLE {schema}.{tabela} ALTER COLUMN {coluna} TYPE TEXT"
-                )
+            # Only widen columns that are not TEXT yet. ALTER ... TYPE TEXT on a column that is
+            # already TEXT is NOT a no-op in Postgres: it still fails when a view depends on the
+            # column (the dbt staging views do, from the second load on).
+            cur.execute(
+                """SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = %s AND table_name = %s AND column_name = ANY(%s)
+                      AND data_type <> 'text'""",
+                (schema, tabela, list(colunas_para_text)),
+            )
+            a_alargar = [row[0] for row in cur.fetchall()]
+            if a_alargar:
+                logger.info(f"  Widening columns to TEXT: {a_alargar}")
+            for coluna in a_alargar:
+                cur.execute(f"ALTER TABLE {schema}.{tabela} ALTER COLUMN {coluna} TYPE TEXT")
             
             logger.info(f"  Ensuring flag column exists...")
             cur.execute(
@@ -141,8 +151,11 @@ def processar_arquivos_landing(
     ])
 
     if not arquivos_s3:
-        logger.warning(f"No files found at s3://{bucket_silver}/{prefixo_silver}")
-        return 0, 0
+        # silver must exist when landing runs: returning (0, 0) made the task green with no data
+        raise FileNotFoundError(f"No silver files found at s3://{bucket_silver}/{prefixo_silver}")
+
+    step = current_step()
+    step.set(files_total=len(arquivos_s3), entity=entidade, ref_month=ref_mes_int)
 
     preparar_schema_tabela(engine, schema, tabela, ddl, colunas_para_text, ref_mes_int, logger)
 
@@ -184,6 +197,7 @@ def processar_arquivos_landing(
             gc.collect()
 
         total_linhas_geral += linhas_processadas
+        step.add(files_ok=1, rows_in=total_linhas_arquivo, rows_out=linhas_processadas)
         os.remove(path_local)
         logger.info(f"[!] file {nome_arq} done")
 
@@ -193,4 +207,5 @@ def processar_arquivos_landing(
             f"(all inserted; filter with _suspeita_deslocamento = false downstream if needed)"
         )
 
+    step.set(suspicious_rows=total_suspeitas_geral)
     return total_linhas_geral, total_suspeitas_geral

@@ -1,6 +1,5 @@
-# dbt_project.yml
 name: "dbt_project"
-version: "1.0.0"
+version: "1.1.0"
 config-version: 2
 
 profile: "datalab"
@@ -17,30 +16,13 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
-# Configuração de Materialização e Schemas por Pasta
+flags:
+  # required by Elementary on dbt >= 1.8 (captures test results/samples)
+  require_explicit_package_overrides_for_builtin_materializations: false
+
+# Layering: staging (views) -> silver (conformed tables) -> gold (dimensional models)
 models:
   dbt_project:
-    bronze:
-      +materialized: view
-      +schema: bronze
-      anp:
-        +tags: ["anp"]
-      rfb:
-        +tags: ["rfb"]  
-    silver:
-      +materialized: table
-      +schema: silver
-      anp:
-        +tags: ["anp"]
-      rfb:
-        +tags: ["rfb"] 
-    gold:
-      +materialized: table
-      +schema: gold
-      anp:
-        +tags: ["anp"]
-      rfb:
-        +tags: ["rfb"]
     staging:
       +materialized: view
       +schema: stg
@@ -48,10 +30,23 @@ models:
         +tags: ["anp"]
       rfb:
         +tags: ["rfb"]
-    marts:
-      +materialized: table 
-      +schema: marts
+    silver:
+      +materialized: table
+      +schema: silver
+      anp:
+        +tags: ["anp"]
+    gold:
+      +materialized: table
+      +schema: gold
       anp:
         +tags: ["anp"]
       rfb:
         +tags: ["rfb"]
+
+  # Elementary writes run/test history here; Grafana reads it (schema elementary)
+  elementary:
+    +schema: "elementary"
+    +enabled: true
+
+data_tests:
+  +store_failures: false

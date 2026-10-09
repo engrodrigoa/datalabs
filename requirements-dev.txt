@@ -1,0 +1,9 @@
+# Local development / CI (no Airflow needed for unit tests)
+pytest>=8
+ruff>=0.6
+pyyaml
+polars>=1.20,<2
+psycopg2-binary
+sqlalchemy>=2
+python-dotenv
+requests

@@ -13,6 +13,8 @@ os.environ["RAYON_NUM_THREADS"] = "2"
 #===================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+from pipelines.commons.env_loader import rfb_reference
+
 from pipelines.commons.s3_client import get_s3_client, test_s3_connection
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
@@ -21,7 +23,7 @@ from pipelines.commons.dw_landing_rfb import processar_arquivos_landing
 logger = get_logger("rfb_landing_socios")
 #=============================================================================================================
 
-REFERENCIA = "2026-08"
+REFERENCIA = rfb_reference()  # YYYY-MM from dag_rfb param (RFB_REF_MONTH)
 REF_MES_INT = int(REFERENCIA.replace("-", ""))
 BUCKET_SILVER = "silver"
 SCHEMA_LANDING = "landing_rfb"
@@ -85,14 +87,9 @@ def processar_landing_socios():
         tamanho_lote=TAMANHO_LOTE,
         logger=logger,
     )
-
-    logger.info("==================================================================")
     logger.info(
         f"run complete: {total_linhas} total row(s) inserted into "
         f"{SCHEMA_LANDING}.{TABELA_LANDING} ({total_suspeitas} flagged as suspicious)."
     )
-    logger.info("==================================================================")
-
-
 if __name__ == "__main__":
     processar_landing_socios()

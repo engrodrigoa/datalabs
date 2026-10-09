@@ -1,30 +1,56 @@
-datalake/
-
-# Airflow Logs
-airflow/logs/*
-!airflow/logs/.gitkeep
-
-# Airflow Audit Logs
-airflow/audit_logs/*
-!airflow/audit_logs/.gitkeep
-
-datasource/
-__pycache__/
-*.pyc
+# secrets / local env
 .env
 .venv/
+.dbt/
 .vscode/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
 
-# dbt artifacts and configs
+# local data
+/datalake/
+/datasource/
+/logs/
+
+# Airflow runtime
+airflow/logs/*
+!airflow/logs/.gitkeep
+airflow/audit_logs/*
+!airflow/audit_logs/.gitkeep
+airflow/plugins/*
+!airflow/plugins/.gitkeep
+
+# dbt / Elementary artifacts (profiles.yml IS versioned: it only reads env vars)
 pipelines/dbt_projects/dbt_packages/
 pipelines/dbt_projects/target/
-
-# Logs do dbt e Elementary (Mantém as pastas, ignora o conteúdo)
 pipelines/dbt_projects/logs/*
 !pipelines/dbt_projects/logs/.gitkeep
 !pipelines/dbt_projects/logs/elementary_logs/
 pipelines/dbt_projects/logs/elementary_logs/*
 !pipelines/dbt_projects/logs/elementary_logs/.gitkeep
-
-pipelines/dbt_projects/profiles.yml
 pipelines/dbt_projects/.user.yml
+# secrets: any .env variant except the template
+.env.*
+!.env.example
+
+# patches / merge leftovers applied locally
+*.patch
+*.diff
+*.rej
+*.orig
+
+# local compose overrides (machine-specific: GPU, ports, mounts)
+docker-compose.override.yml
+
+# tooling caches
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+.idea/
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

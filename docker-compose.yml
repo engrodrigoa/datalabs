@@ -1,6 +1,64 @@
-version: '3.8'
+# DataLabs — data engineering + observability lab
+#
+#   docker compose up -d                       core + observability (default)
+#   docker compose --profile ai up -d          + Ollama (CPU) for the RAG generator
+#   docker compose --profile tools up -d       + Adminer
+#   GPU: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up -d
+#
+# Images are pinned on purpose: a portfolio must build the same way next year.
+
+name: datalabs
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    args:
+      INSTALL_AI: ${INSTALL_AI:-false}
+  image: datalabs/airflow:2.9.0-local
+  user: "${AIRFLOW_UID:-1000}:0"
+  env_file: .env
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: America/Sao_Paulo
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW__METRICS__STATSD_ON: "true"
+    AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+    AIRFLOW__METRICS__STATSD_PORT: "9125"
+    AIRFLOW__METRICS__STATSD_PREFIX: airflow
+    AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: "1"
+    AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+    OPENLINEAGE_DISABLED: "true"
+    PYTHONPATH: /opt/airflow
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    MINIO_ENDPOINT: http://minio:9000
+    OLLAMA_URL: http://ollama:11434/api/generate
+    LOG_FORMAT: line   
+    HF_HOME: /opt/airflow/hf_cache
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/audit_logs:/opt/airflow/audit_logs
+    - ./pipelines:/opt/airflow/pipelines
+    - ./infra:/opt/airflow/infra:ro
+    - ./scripts:/opt/airflow/scripts:ro
+    - ./datasource:/mnt/datasource
+    - ./.env:/opt/airflow/.env:ro
+    - ./datalake/hf_cache:/opt/airflow/hf_cache
+  depends_on: &airflow-depends
+    postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
 
 services:
+  # ------------------------------------------------------------------ storage
   postgres:
     image: pgvector/pgvector:pg15
     container_name: postgres
@@ -8,166 +66,211 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_DB}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
     ports:
-      - "${DB_PORT}:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - ./datalake/postgres_data:/var/lib/postgresql/data
-    restart: always
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
 
-  # init do airflow
-  airflow-init:
-    build: .
-    container_name: airflow_init
-    depends_on:
-      postgres:
-        condition: service_started
-    environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
-    command: >
-      bash -c "
-      airflow db migrate &&
-      airflow users create --username ${AIRFLOW_ADMIN_USER} --password ${AIRFLOW_ADMIN_PASSWORD} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_ADMIN_EMAIL}
-      "
-
-  # Apache Airflow (Webserver)
-  airflow-webserver:
-    build: . 
-    container_name: airflow_webserver
-    restart: always
-    user: "1000:0"
-    depends_on:
-      - postgres
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW__CORE__DEFAULT_TIMEZONE: 'America/Sao_Paulo'
-      AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
-      AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: '1'
-      OPENLINEAGE_DISABLED: 'true'
-      DBT_PG_HOST: postgres
-      MINIO_ENDPOINT: "http://minio:9000"
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_AUDIT_BUCKET: ${MINIO_AUDIT_BUCKET}
-      PYTHONPATH: "/opt/airflow"
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./airflow/audit_logs:/opt/airflow/audit_logs
-      - ./datasource:/mnt/datasource
-      - ./pipelines:/opt/airflow/pipelines
-      - ./.env:/opt/airflow/.env:ro
-    env_file:
-      - .env
-    command: webserver
-
-  # Apache Airflow (Scheduler)
-  airflow-scheduler:
-    build: .
-    container_name: airflow_scheduler
-    restart: always
-    user: "1000:0"
-    depends_on:
-      - airflow-webserver
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
-      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-      AIRFLOW__CORE__DEFAULT_TIMEZONE: 'America/Sao_Paulo'
-      AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
-      AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: '1'
-      OPENLINEAGE_DISABLED: 'true'
-      DBT_PG_HOST: postgres
-      MINIO_ENDPOINT: "http://minio:9000"
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_AUDIT_BUCKET: ${MINIO_AUDIT_BUCKET}
-      PYTHONPATH: "/opt/airflow"
-    volumes:
-      - ./airflow/dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
-      - ./airflow/audit_logs:/opt/airflow/audit_logs
-      - ./datasource:/mnt/datasource
-      - ./pipelines:/opt/airflow/pipelines
-      - ./.env:/opt/airflow/.env:ro
-    env_file:
-      - .env
-    command: scheduler
-
-  # DATA LAKE STORAGE: MINIO (S3 COMPATIBLE)
   minio:
+    # MinIO stopped publishing community images in Oct/2025: `latest` is effectively frozen.
+    # See docs/adr/0004 for the planned move to an actively maintained S3 implementation.
     image: minio/minio:latest
     container_name: minio_datalake
-    ports:
-      - "9005:9000"
-      - "9091:9001"
+    command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9005:9000"
+      - "9091:9001"
     volumes:
       - ./datalake/minio_data:/data
-    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
 
-  adminer:
-    image: adminer:latest
-    container_name: adminer
-    ports:
-      - "8081:8080"
-    restart: always
+  # ------------------------------------------------------------------ orchestration
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    entrypoint: /bin/bash
+    user: "0:0"
+    command:
+      - -c
+      - |
+        set -e
+        mkdir -p /opt/airflow/logs /opt/airflow/plugins /opt/airflow/audit_logs /mnt/datasource \
+                 /opt/airflow/pipelines/dbt_projects/logs/elementary_logs
+        chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/logs /opt/airflow/plugins /opt/airflow/audit_logs \
+                 /mnt/datasource /opt/airflow/pipelines/dbt_projects
+        # db migrate + admin user (official entrypoint behaviour)
+        /entrypoint airflow version
+        # dbt packages once, so Cosmos never runs `dbt deps` while parsing DAGs
+        /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
+          --profiles-dir /opt/airflow/pipelines/dbt_projects
+        chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      _AIRFLOW_WWW_USER_EMAIL: ${AIRFLOW_ADMIN_EMAIL:-admin@example.org}
+    restart: "no"
 
-  # STACK OBSERVABILITY
-  # LOG AGGREGATION: LOKI
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-depends
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ observability
   loki:
     image: grafana/loki:2.9.2
     container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
     ports:
       - "3100:3100"
-    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
     restart: unless-stopped
 
-  # LOG SHIPPER: PROMTAIL
   promtail:
+    # Promtail is in LTS/EOL: migration to Grafana Alloy is on the roadmap (docs/adr/0003).
     image: grafana/promtail:2.9.2
     container_name: promtail
+    command: -config.file=/etc/promtail/promtail-config.yaml
     volumes:
       - ./airflow/logs:/opt/airflow/logs:ro
-      - ./promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
-    command: -config.file=/etc/promtail/promtail-config.yaml
+      - ./infra/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
     depends_on:
       - loki
     restart: unless-stopped
 
-  # OBSERVABILITY UI: GRAFANA
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.26.1
+    container_name: statsd_exporter
+    command:
+      - --statsd.mapping-config=/etc/statsd/mapping.yml
+      - --statsd.listen-udp=:9125
+      - --web.listen-address=:9102
+    volumes:
+      - ./infra/prometheus/statsd-mapping.yml:/etc/statsd/mapping.yml:ro
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - statsd-exporter
+    restart: unless-stopped
+
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.0.0
     container_name: grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/datalabs-pipeline-health.json
+      GF_USERS_DEFAULT_THEME: dark
+      # read-only DB role created by infra/postgres/init/00_bootstrap.sh
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+      DB_DB: ${DB_DB}
     ports:
       - "3000:3000"
     volumes:
-      - ./datalake/grafana_data:/var/lib/grafana
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
-      - loki
-      - postgres
+      postgres:
+        condition: service_healthy
+      loki:
+        condition: service_started
+      prometheus:
+        condition: service_started
     restart: unless-stopped
 
-      # LLM LOCAL: OLLAMA
+  # ------------------------------------------------------------------ optional: AI (profile "ai")
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.6.5
     container_name: datalabs_ollama
+    profiles: ["ai"]
     ports:
       - "11434:11434"
     volumes:
       - ./datalake/ollama_data:/root/.ollama
     restart: unless-stopped
-    gpus: all
+
+  ollama-pull:
+    image: ollama/ollama:0.6.5
+    container_name: datalabs_ollama_pull
+    profiles: ["ai"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-llama3.2:1b}"]
+    depends_on:
+      - ollama
+    restart: "no"
+
+  # ------------------------------------------------------------------ optional: tools (profile "tools")
+  adminer:
+    image: adminer:4.8.1
+    container_name: adminer
+    profiles: ["tools"]
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+
+# named volumes: Docker handles ownership for images that do not run as root
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
