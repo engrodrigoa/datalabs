@@ -1,0 +1,14 @@
+version: 2
+
+exposures:
+  - name: painel_desempenho_fiscal_ibscbs
+    label: Desempenho fiscal IBS/CBS
+    type: dashboard
+    maturity: low
+    description: "Painel para analistas de desempenho fiscal: arrecadação, diferimento, devoluções e carga efetiva por mês/UF/município/cClassTrib."
+    depends_on:
+      - ref('ag_nfe_ibscbs_mensal')
+      - ref('ft_nfe_item')
+      - ref('dm_nfe_participante')
+    owner:
+      name: Rodrigo

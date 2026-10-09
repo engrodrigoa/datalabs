@@ -1,0 +1,38 @@
+version: 2
+
+# Códigos fiscais têm zero à esquerda (CST 000, NCM 07133399): sempre texto.
+seeds:
+  - name: nfe_ref_uf
+    description: "UFs (código IBGE de 2 dígitos)."
+    config:
+      column_types: {cod_uf: text, sigla_uf: text}
+    columns:
+      - name: sigla_uf
+        data_tests: [unique, not_null]
+  - name: nfe_ref_municipio
+    description: "Municípios usados pelo simulador (código IBGE de 7 dígitos). Subconjunto — em produção, tabela IBGE completa."
+    config:
+      column_types: {cod_municipio: text, sigla_uf: text}
+    columns:
+      - name: cod_municipio
+        data_tests: [unique, not_null]
+  - name: nfe_ref_cfop
+    config:
+      column_types: {cfop: text}
+    columns:
+      - name: cfop
+        data_tests: [unique, not_null]
+  - name: nfe_ref_ncm
+    config:
+      column_types: {ncm: text, capitulo: text}
+    columns:
+      - name: ncm
+        data_tests: [unique, not_null]
+  - name: nfe_ref_classtrib
+    description: "CST x cClassTrib do IBS/CBS (descrições simplificadas — conferir com a tabela oficial vigente)."
+    config:
+      column_types: {cst: text, cclasstrib: text, p_reducao_aliquota: numeric}
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cst, cclasstrib]

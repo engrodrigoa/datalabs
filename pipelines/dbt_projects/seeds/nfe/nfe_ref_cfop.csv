@@ -1,0 +1,9 @@
+cfop,descricao,sentido,abrangencia,grupo
+5101,Venda de producao do estabelecimento,saida,interna,venda
+5102,Venda de mercadoria adquirida ou recebida de terceiros,saida,interna,venda
+6101,Venda de producao do estabelecimento,saida,interestadual,venda
+6102,Venda de mercadoria adquirida ou recebida de terceiros,saida,interestadual,venda
+1202,Devolucao de venda de mercadoria adquirida ou recebida de terceiros,entrada,interna,devolucao
+2202,Devolucao de venda de mercadoria adquirida ou recebida de terceiros,entrada,interestadual,devolucao
+1201,Devolucao de venda de producao do estabelecimento,entrada,interna,devolucao
+2201,Devolucao de venda de producao do estabelecimento,entrada,interestadual,devolucao

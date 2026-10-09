@@ -34,7 +34,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
   DO \$\$
   DECLARE s text;
   BEGIN
-    FOREACH s IN ARRAY ARRAY['audit','obs','elementary','gold','silver','stg','bronze','landing_rfb','ai','ctrl'] LOOP
+    FOREACH s IN ARRAY ARRAY['audit','obs','elementary','gold','silver','stg','bronze','landing_rfb','landing_nfe','dq_nfe','ai','ctrl'] LOOP
       EXECUTE format('GRANT USAGE ON SCHEMA %I TO grafana_ro', s);
       EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO grafana_ro', s);
       EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO grafana_ro', current_user, s);

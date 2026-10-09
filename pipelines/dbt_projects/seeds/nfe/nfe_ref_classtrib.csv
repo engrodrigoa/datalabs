@@ -1,0 +1,4 @@
+cst,cclasstrib,descricao_cst,descricao_classtrib,tipo_tributacao,p_reducao_aliquota
+000,000001,Tributacao integral,Situacoes tributadas integralmente pelo IBS e CBS,integral,0
+200,200038,Aliquota reduzida,Insumos agropecuarios - reducao de 60% (simplificada),reducao,60
+515,515001,Diferimento com reducao de aliquota,Insumos agropecuarios - diferimento com reducao de 60% (simplificada),diferimento,60
