@@ -1,0 +1,12 @@
+snapshots:
+  - name: snap_nfe_ref_classtrib
+    description: >
+      Histórico da tabela CST x cClassTrib. A tabela oficial é revisada por nota técnica;
+      o snapshot registra quando cada descrição/percentual mudou (validade = momento do processamento).
+    relation: ref('nfe_ref_classtrib')
+    config:
+      schema: silver
+      unique_key: [cst, cclasstrib]
+      strategy: check
+      check_cols: [descricao_cst, descricao_classtrib, tipo_tributacao, p_reducao_aliquota]
+      hard_deletes: invalidate

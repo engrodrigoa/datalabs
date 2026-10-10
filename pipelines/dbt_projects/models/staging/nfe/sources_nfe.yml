@@ -1,0 +1,36 @@
+version: 2
+
+sources:
+  - name: landing_nfe
+    description: "Bronze da NF-e: XML bruto exatamente como chegou. Imutável (só INSERT), carregado por ctrl.fn_nfe_ingerir_lote()."
+    schema: landing_nfe
+    tables:
+      - name: nfe_xml
+        description: "Um registro por arquivo recebido. Reenvios da mesma chave ficam todos aqui; a silver escolhe a versão vigente."
+        loaded_at_field: carregado_em
+        freshness:
+          warn_after: {count: 24, period: hour}
+        columns:
+          - name: lote_id
+            data_tests: [not_null]
+          - name: arquivo
+            data_tests: [not_null]
+          - name: conteudo
+            description: "XML completo (tipo xml): raiz nfeProc (NF-e + protocolo) ou NFe."
+
+  - name: ctrl_nfe
+    description: "Controle de lotes (fila de processamento) e arquivos rejeitados na ingestão."
+    schema: ctrl
+    tables:
+      - name: nfe_lote
+        description: "Status RECEBIDO -> CARREGADO (pendente, o '1') -> PROCESSADO (o '2') | ERRO."
+        columns:
+          - name: lote_id
+            data_tests: [unique, not_null]
+          - name: status
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ['RECEBIDO', 'CARREGADO', 'PROCESSADO', 'ERRO']
+      - name: nfe_arquivo_rejeitado
+        description: "XML malformado/truncado: não entra na bronze, fica registrado para diagnóstico."

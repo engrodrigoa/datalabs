@@ -75,6 +75,24 @@ jobs:
           ../../.dbt/bin/dbt deps --profiles-dir .
           ../../.dbt/bin/dbt run --select elementary --profiles-dir .
           ../../.dbt/bin/dbt build --select tag:anp --profiles-dir .
+      # NF-e: simula a chegada de um lote, ingere 100% em SQL (pg_read_file dentro do container do
+      # Postgres) e roda silver/gold/testes. Anomalias injetadas devem virar WARN, nunca ERROR.
+      - name: NF-e — lote sintético -> bronze (SQL) -> dbt build (tag:nfe)
+        env:
+          PG_CID: ${{ job.services.postgres.id }}
+        run: |
+          python scripts/nfe/gen_nfe.py --inbox /tmp/nfe/ci-1 --n 300 --seed 1 \
+            --data-ini 2026-01-01 --data-fim 2026-06-30 --defect-rate 0.05 --dup-rate 0.02 --corrupt-rate 0.01
+          docker exec "$PG_CID" mkdir -p /tmp/nfe
+          docker cp /tmp/nfe/ci-1 "$PG_CID":/tmp/nfe/ci-1
+          docker exec "$PG_CID" chmod -R a+rX /tmp/nfe
+          LOTE=$(psql -h localhost -U datalab -d datalab -tAc "SELECT ctrl.fn_nfe_ingerir_lote('ci-1', '/tmp/nfe/ci-1')")
+          (cd pipelines/dbt_projects && ../../.dbt/bin/dbt build --select tag:nfe --exclude tag:elementary \
+             --vars "{nfe_lote_max: $LOTE}" --profiles-dir .)
+          psql -h localhost -U datalab -d datalab -c "SELECT ctrl.fn_nfe_finalizar_lotes($LOTE)"
+          psql -h localhost -U datalab -d datalab -c "SELECT lote_id, status, qtd_arquivos, qtd_carregados, qtd_rejeitados, qtd_reenvios FROM ctrl.nfe_lote"
+          test "$(psql -h localhost -U datalab -d datalab -tAc "SELECT count(*) FROM ctrl.nfe_lote WHERE status = 'PROCESSADO'")" -eq 1
+          test "$(psql -h localhost -U datalab -d datalab -tAc "SELECT count(*) FROM gold.ft_nfe_documento")" -gt 250
       - name: data health checks
         run: python -m pipelines.observability.run obs pipelines.observability.checks --module --step health_checks_anp -- --pipeline anp --fail-on error
       - name: audit trail was written

@@ -30,11 +30,15 @@ models:
         +tags: ["anp"]
       rfb:
         +tags: ["rfb"]
+      nfe:
+        +tags: ["nfe"]
     silver:
       +materialized: table
       +schema: silver
       anp:
         +tags: ["anp"]
+      nfe:
+        +tags: ["nfe", "silver"]
     gold:
       +materialized: table
       +schema: gold
@@ -42,11 +46,34 @@ models:
         +tags: ["anp"]
       rfb:
         +tags: ["rfb"]
+      nfe:
+        +tags: ["nfe", "gold"]
 
   # Elementary writes run/test history here; Grafana reads it (schema elementary)
   elementary:
     +schema: "elementary"
     +enabled: true
 
+# NF-e: tabelas de referência (códigos com zero à esquerda -> sempre texto)
+seeds:
+  dbt_project:
+    nfe:
+      +schema: silver
+      +tags: ["nfe"]
+
+snapshots:
+  dbt_project:
+    nfe:
+      +tags: ["nfe", "gold"]
+
 data_tests:
   +store_failures: false
+  # NF-e: falhas de qualidade viram tabelas consultáveis (quarentena) no schema dq_nfe
+  dbt_project:
+    silver:
+      nfe: {+store_failures: true, +schema: dq_nfe}
+    gold:
+      nfe: {+store_failures: true, +schema: dq_nfe}
+    staging:
+      nfe: {+store_failures: true, +schema: dq_nfe}
+    nfe: {+store_failures: true, +schema: dq_nfe}     # tests/nfe (singulares)

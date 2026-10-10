@@ -1,0 +1,124 @@
+version: 2
+
+models:
+  # ------------------------------------------------------------------ dimensões
+  - name: dm_nfe_tempo
+    description: "Calendário 2025-2027. sk_data = AAAAMMDD."
+    columns:
+      - name: sk_data
+        data_tests: [unique, not_null]
+
+  - name: dm_nfe_municipio
+    description: "Municípios por código IBGE, com UF e região."
+    columns:
+      - name: cod_municipio
+        data_tests: [unique, not_null]
+
+  - name: dm_nfe_cfop
+    columns:
+      - name: cfop
+        data_tests: [unique, not_null]
+
+  - name: dm_nfe_ncm
+    columns:
+      - name: ncm
+        data_tests: [unique, not_null]
+
+  - name: dm_nfe_tributacao
+    description: "CST x cClassTrib vigentes (histórico no snapshot snap_nfe_ref_classtrib)."
+    columns:
+      - name: sk_tributacao
+        data_tests: [unique, not_null]
+
+  - name: dm_nfe_operacao
+    description: "Dimensão junk dos indicadores do ide (tpNF, finNFe, idDest, indFinal, indPres)."
+    columns:
+      - name: sk_operacao
+        data_tests: [unique, not_null]
+      - name: sinal_arrecadacao
+        description: "-1 para devolução (reduz o débito), 1 nos demais casos."
+
+  - name: dm_nfe_participante
+    description: >
+      Contribuinte/participante (emitente ou destinatário), SCD tipo 2 por data de emissão.
+      Uma versão por conjunto de atributos cadastrais (nome, IE, endereço).
+    columns:
+      - name: sk_participante
+        description: "md5(doc | hash dos atributos): estável, não muda quando a vigência é recalculada."
+        data_tests: [unique, not_null]
+      - name: doc
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "dt_inicio_vigencia < dt_fim_vigencia"
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [doc, dt_inicio_vigencia]
+
+  # ------------------------------------------------------------------ fatos
+  - name: ft_nfe_item
+    description: "Fato no grão item da NF-e. Incremental (merge) pelos lotes pendentes."
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [chave_acesso, n_item]
+    columns:
+      - name: sk_data
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dm_nfe_tempo'), field: sk_data}
+      - name: sk_emitente
+        description: "Versão do emitente vigente na data de emissão."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dm_nfe_participante'), field: sk_participante}
+      - name: sk_destinatario
+        data_tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dm_nfe_participante'), field: sk_participante}
+      - name: sk_operacao
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dm_nfe_operacao'), field: sk_operacao}
+      - name: sk_tributacao
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dm_nfe_tributacao'), field: sk_tributacao}
+              config: {severity: warn, where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"}
+      - name: cfop
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dm_nfe_cfop'), field: cfop}
+              config: {severity: warn, where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"}
+      - name: ncm
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dm_nfe_ncm'), field: ncm}
+              config: {severity: warn, where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"}
+      - name: cod_mun_emitente
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dm_nfe_municipio'), field: cod_municipio}
+              config: {severity: warn, where: "lote_id in (select lote_id from ctrl.nfe_lote where status = 'CARREGADO')"}
+
+  - name: ft_nfe_documento
+    description: "Fato no grão documento (1 linha por NF-e)."
+    columns:
+      - name: chave_acesso
+        data_tests: [unique, not_null]
+      - name: sk_emitente
+        data_tests: [not_null]
+
+  # ------------------------------------------------------------------ agregado
+  - name: ag_nfe_ibscbs_mensal
+    description: >
+      Desempenho fiscal mensal por UF/município do emitente, CST/cClassTrib e natureza (venda/devolução).
+      pct_carga_efetiva é razão: não somar entre linhas (recalcule com Σ tributo / Σ base).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [ano_mes, uf_emitente, cod_mun_emitente, cst_ibscbs, cclasstrib, natureza]

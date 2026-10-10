@@ -32,6 +32,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__METRICS__STATSD_PREFIX: airflow
     AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: "1"
     AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+    # FileSensor (dag_nfe): `airflow db migrate` não cria as conexões padrão, então declaramos aqui
+    AIRFLOW_CONN_FS_DEFAULT: '{"conn_type": "fs", "extra": {"path": "/"}}'
     OPENLINEAGE_DISABLED: "true"
     PYTHONPATH: /opt/airflow
     DB_HOST: postgres
@@ -72,6 +74,8 @@ services:
     volumes:
       - ./datalake/postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      # NF-e: a ingestão é SQL (pg_read_file) -> o Postgres lê os lotes no MESMO caminho do Airflow
+      - ./datasource/nfe:/mnt/datasource/nfe:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -111,6 +115,7 @@ services:
       - |
         set -e
         mkdir -p /opt/airflow/logs /opt/airflow/plugins /opt/airflow/audit_logs /mnt/datasource \
+                 /mnt/datasource/nfe/inbox /mnt/datasource/nfe/processando /mnt/datasource/nfe/processados \
                  /opt/airflow/pipelines/dbt_projects/logs/elementary_logs
         chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/logs /opt/airflow/plugins /opt/airflow/audit_logs \
                  /mnt/datasource /opt/airflow/pipelines/dbt_projects

@@ -499,6 +499,135 @@ def logs_explorer() -> Board:
     return b
 
 
+# =====================================================================================================
+# 4) NF-e — operação dos lotes, qualidade e desempenho fiscal (IBS/CBS)
+# =====================================================================================================
+NFE_SAUDE = [{"type": "value", "options": {
+    "processado": {"text": "✔ processado", "color": GOOD, "index": 0},
+    "carregado": {"text": "▶ na fila", "color": "blue", "index": 1},
+    "recebido": {"text": "… recebido", "color": NEUTRAL, "index": 2},
+    "atrasado": {"text": "⏸ atrasado", "color": SERIOUS, "index": 3},
+    "erro": {"text": "✖ erro", "color": CRITICAL, "index": 4},
+}}]
+NFE_TESTS = "test_unique_id ILIKE '%nfe%'"
+
+
+def nfe_fiscal() -> Board:
+    b = Board("datalabs-nfe", "DataLabs · NF-e (IBS/CBS)",
+              "Pipeline de NF-e da reforma tributária: lotes (ctrl.nfe_lote), qualidade (dbt/Elementary, dq_nfe) "
+              "e desempenho fiscal da camada gold. Dados 100% sintéticos.",
+              ["datalabs", "nfe", "dbt", "fiscal"], refresh="1m", time_from="now-1y")
+    b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"}]
+
+    # ------------------------------------------------------------- operação
+    b.row("Operação — lotes (ctrl.nfe_lote · obs.v_nfe_lote)")
+    b.add(stat("Notas no DW", "SELECT COUNT(*) FROM silver.nfe_nota", unit="short", color_mode="none",
+               desc="Notas distintas na silver (reenvios resolvidos)."), 4, 4)
+    b.add(stat("Lotes processados", """
+        SELECT COUNT(*) FROM obs.v_nfe_lote WHERE status = 'PROCESSADO' AND $__timeFilter(recebido_em)""",
+               unit="short", color_mode="none"), 4, 4)
+    b.add(stat("Lotes em erro", "SELECT COUNT(*) FROM obs.v_nfe_lote WHERE status = 'ERRO'", thresholds=ZERO_GOOD,
+               desc="Saem da fila até correção: SELECT ctrl.fn_nfe_reprocessar_lote(id, 'motivo')."), 4, 4)
+    b.add(stat("Lotes atrasados", "SELECT COUNT(*) FROM obs.v_nfe_lote WHERE saude = 'atrasado'",
+               thresholds=ZERO_GOOD_WARN, desc="CARREGADO há mais de 1 h sem processamento."), 4, 4)
+    b.add(stat("Arquivos rejeitados", """
+        SELECT COALESCE(SUM(qtd_rejeitados), 0) FROM obs.v_nfe_lote WHERE $__timeFilter(recebido_em)""",
+               thresholds=ZERO_GOOD_WARN, desc="XML malformado/truncado (quarentena na ingestão)."), 4, 4)
+    b.add(stat("Latência p50 do lote", """
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY seg_total) FROM obs.v_nfe_lote
+        WHERE status = 'PROCESSADO' AND $__timeFilter(recebido_em)""", unit="s", color_mode="none",
+               desc="Da reserva do lote ao fim do dbt."), 4, 4)
+    b.add(table("Últimos lotes", """
+        SELECT lote_id, nome_lote, saude, qtd_arquivos AS arquivos, qtd_carregados AS carregados,
+               qtd_rejeitados AS rejeitados, qtd_reenvios AS reenvios,
+               ROUND(seg_ingestao::numeric, 1) AS ingestao_s, ROUND(seg_transformacao::numeric, 1) AS dbt_s,
+               recebido_em, mensagem
+        FROM obs.v_nfe_lote ORDER BY lote_id DESC LIMIT 30""", status_cols=(),
+                overrides=[{"matcher": {"id": "byName", "options": "saude"},
+                            "properties": [{"id": "mappings", "value": NFE_SAUDE},
+                                           {"id": "custom.cellOptions", "value": {"type": "color-text"}}]}]), 14, 9)
+    b.add(timeseries("Arquivos por lote", [sql_target("""
+        SELECT recebido_em AS time, qtd_carregados AS carregados, qtd_rejeitados AS rejeitados,
+               qtd_reenvios AS reenvios
+        FROM obs.v_nfe_lote WHERE $__timeFilter(recebido_em) ORDER BY 1""", fmt="time_series")],
+        draw="bars", color_overrides={"rejeitados": CRITICAL, "reenvios": WARN}), 10, 9)
+
+    # ------------------------------------------------------------- qualidade
+    b.row("Qualidade de dados — testes dbt (Elementary) e quarentena (dq_nfe)")
+    b.add(stat("Testes NF-e com falha", f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) status
+            FROM elementary.elementary_test_results WHERE {NFE_TESTS}
+            ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status IN ('fail', 'error')""", thresholds=ZERO_GOOD), 6, 4)
+    b.add(stat("Testes NF-e com aviso", f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) status
+            FROM elementary.elementary_test_results WHERE {NFE_TESTS}
+            ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status = 'warn'""", thresholds=ZERO_GOOD_WARN,
+               desc="Inconsistências de negócio em notas autorizadas: sinalizadas, não rejeitadas."), 6, 4)
+    b.add(stat("Registros sinalizados (último run)", f"""
+        SELECT COALESCE(SUM(failures), 0) FROM (
+            SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) status, failures
+            FROM elementary.elementary_test_results WHERE {NFE_TESTS}
+            ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status <> 'pass'""", thresholds=ZERO_GOOD_WARN), 6, 4)
+    b.add(stat("Execuções de teste NF-e", f"""
+        SELECT COUNT(*) FROM elementary.elementary_test_results
+        WHERE {NFE_TESTS} AND $__timeFilter(detected_at)""", unit="short", color_mode="none"), 6, 4)
+    b.add(table("Último resultado dos testes não aprovados", f"""
+        SELECT COALESCE(test_short_name, test_type) AS teste, table_name AS modelo, column_name AS coluna,
+               status, failures AS registros, detected_at
+        FROM (SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) *
+              FROM elementary.elementary_test_results WHERE {NFE_TESTS}
+              ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status <> 'pass' ORDER BY failures DESC NULLS LAST""",
+                desc="Detalhe das linhas: schema dq_nfe (store_failures), uma tabela por teste."), 14, 8)
+    b.add(table("Arquivos rejeitados na ingestão", """
+        SELECT lote_id, arquivo, LEFT(motivo, 80) AS motivo, rejeitado_em
+        FROM obs.v_nfe_rejeitados ORDER BY rejeitado_em DESC LIMIT 50""", status_cols=()), 10, 8)
+
+    # ------------------------------------------------------------- negócio
+    b.row("Desempenho fiscal — gold (IBS/CBS, ano-teste 2026)")
+    b.add(stat("IBS + CBS destacados", """
+        SELECT SUM(v_ibs + v_cbs) FROM gold.ag_nfe_ibscbs_mensal""", unit="currencyBRL", color_mode="none"), 5, 4)
+    b.add(stat("Líquido de devoluções", """
+        SELECT SUM(v_ibscbs_liquido) FROM gold.ag_nfe_ibscbs_mensal""", unit="currencyBRL", color_mode="none",
+               desc="Saídas menos devoluções (sinal_arrecadacao da dm_nfe_operacao)."), 5, 4)
+    b.add(stat("Tributo diferido", """
+        SELECT SUM(v_diferido) FROM gold.ag_nfe_ibscbs_mensal""", unit="currencyBRL", color_mode="none",
+               desc="gDif: IBS/CBS cujo recolhimento foi postergado (insumos agropecuários, CST 515)."), 5, 4)
+    b.add(stat("Carga efetiva", """
+        SELECT 100 * SUM(v_ibs + v_cbs) / NULLIF(SUM(v_base_ibscbs), 0) FROM gold.ag_nfe_ibscbs_mensal""",
+               unit="percent", decimals=3, color_mode="none",
+               desc="Σ tributo / Σ base (nunca a média de percentuais). Referência 2026: 1% nominal."), 5, 4)
+    b.add(stat("Emitentes", "SELECT COUNT(DISTINCT sk_emitente) FROM gold.ft_nfe_documento",
+               unit="short", color_mode="none"), 4, 4)
+    b.add(timeseries("IBS, CBS e diferimento por mês de emissão", [sql_target("""
+        SELECT to_timestamp(ano_mes::text, 'YYYYMM') AS time,
+               SUM(v_ibs) AS ibs, SUM(v_cbs) AS cbs, SUM(v_diferido) AS diferido
+        FROM gold.ag_nfe_ibscbs_mensal GROUP BY 1 ORDER BY 1""", fmt="time_series")],
+        unit="currencyBRL", draw="bars"), 24, 8)
+    b.add(table("Por classificação tributária", """
+        SELECT a.cst_ibscbs AS cst, a.cclasstrib, COALESCE(t.tipo_tributacao, '? não catalogado') AS tipo,
+               SUM(a.qtd_itens) AS itens, ROUND(SUM(a.v_base_ibscbs), 2) AS base,
+               ROUND(SUM(a.v_ibs), 2) AS ibs, ROUND(SUM(a.v_cbs), 2) AS cbs, ROUND(SUM(a.v_diferido), 2) AS diferido,
+               ROUND(100 * SUM(a.v_ibs + a.v_cbs) / NULLIF(SUM(a.v_base_ibscbs), 0), 4) AS carga_pct
+        FROM gold.ag_nfe_ibscbs_mensal a
+        LEFT JOIN gold.dm_nfe_tributacao t ON t.sk_tributacao = a.cst_ibscbs || a.cclasstrib
+        GROUP BY 1, 2, 3 ORDER BY base DESC""", status_cols=()), 12, 8)
+    b.add(table("Top 10 emitentes (IBS + CBS)", """
+        SELECT p.doc AS cnpj, p.nome, p.uf, COUNT(DISTINCT f.chave_acesso) AS notas,
+               ROUND(SUM(f.v_ibs + f.v_cbs), 2) AS ibs_cbs,
+               ROUND(100 * SUM(f.v_ibs + f.v_cbs) / NULLIF(SUM(f.vbc_ibscbs), 0), 4) AS carga_pct
+        FROM gold.ft_nfe_item f
+        JOIN gold.dm_nfe_participante v ON v.sk_participante = f.sk_emitente
+        JOIN gold.dm_nfe_participante p ON p.doc = v.doc AND p.fl_vigente
+        GROUP BY 1, 2, 3 ORDER BY ibs_cbs DESC LIMIT 10""", status_cols=()), 12, 8)
+    return b
+
+
 if __name__ == "__main__":
-    for board in (pipeline_health(), airflow_platform(), logs_explorer()):
+    for board in (pipeline_health(), airflow_platform(), logs_explorer(), nfe_fiscal()):
         print("wrote", board.write())
