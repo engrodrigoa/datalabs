@@ -79,7 +79,10 @@ with DAG(
             mkdir -p "$DST"
             find "{NFE_DIR}/inbox" -maxdepth 1 -name '*.xml' -print0 \\
               | head -z -n {MAX_ARQUIVOS_LOTE} | xargs -0 -r mv -t "$DST"
-            chmod -R a+rX "$DST"     # o Postgres (outro container/usuário) precisa ler
+            # o Postgres (outro container/usuário) precisa ler. Só dá para mudar a permissão do que é nosso:
+            # arquivos gerados no host (ex.: Windows via bind mount) têm outro dono e já chegam legíveis (0644).
+            chmod a+rx "$DST"
+            find "$DST" -maxdepth 1 -name '*.xml' -user "$(id -u)" -exec chmod a+r {{}} +
             N=$(find "$DST" -maxdepth 1 -name '*.xml' | wc -l)
             if [ "$N" -eq 0 ]; then rmdir "$DST"; echo "nada a processar"; exit 99; fi
             echo "lote {LOTE}: $N arquivos em $DST"

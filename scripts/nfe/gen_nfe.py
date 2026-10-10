@@ -585,6 +585,7 @@ def serializar(root) -> str:
 def escrever_atomico(destino: Path, conteudo: str) -> None:
     tmp = destino.with_suffix(".tmp")
     tmp.write_text(conteudo, encoding="utf-8")
+    os.chmod(tmp, 0o644)   # legível pelo Postgres seja quem for o dono (host, container, CI)
     os.replace(tmp, destino)
 
 
