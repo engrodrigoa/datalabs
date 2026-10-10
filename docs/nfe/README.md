@@ -74,8 +74,17 @@ SELECT count(*) FROM silver.nfe_nota;   -- 2000
 
 Testes em amarelo (WARN) no grupo `dbt_nfe` são esperados: são as inconsistências injetadas pelo gerador.
 
-**Demonstrar o incremental** (depois da 1ª carga): `make nfe-demo` (+500 notas) ou `make nfe-stream`
-(12 lotes, um a cada 5 min). Cada lote aparece em `obs.v_nfe_lote` e no painel "Arquivos por lote".
+**Gerar notas a qualquer momento (atalho)** — roda no host (só biblioteca padrão do Python) e grava
+direto na inbox do lab; o sensor do `dag_nfe` pega na execução corrente ou na próxima (≤ 10 min):
+
+```bash
+python scripts/nfe/gen_nfe.py 100                  # 100 notas "de agora"
+python scripts/nfe/gen_nfe.py 100 --sujo           # + anomalias: defeitos 2%, reenvios 1%, truncados 0,5%
+python scripts/nfe/gen_nfe.py 100 --sujo --agora   # + dispara o dag_nfe na hora
+```
+
+No Windows, gerar pelo host é bem mais rápido que via `docker compose exec` (evita a escrita arquivo a
+arquivo pelo bind mount). `make nfe-demo` / `make nfe-stream` continuam disponíveis.
 
 **Executar uma etapa à mão, sem Airflow** (útil para depurar):
 
