@@ -32,6 +32,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__METRICS__STATSD_PREFIX: airflow
     AIRFLOW__COSMOS__USE_DATASET_AIRFLOW3_URI_STANDARD: "1"
     AIRFLOW_CONN_POSTGRES_DEFAULT: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_DB}
+    # FileSensor (dag_nfe): `airflow db migrate` não cria as conexões padrão, então declaramos aqui
+    AIRFLOW_CONN_FS_DEFAULT: '{"conn_type": "fs", "extra": {"path": "/"}}'
     OPENLINEAGE_DISABLED: "true"
     PYTHONPATH: /opt/airflow
     DB_HOST: postgres
