@@ -166,6 +166,16 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * Download → bronze → silver → landing with parallel entities (bounded by `max_active_tasks`), with the `ref_month` parameter set from the UI.
 * Dataset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
 
+### 🧾 NF-e — tax reform DW (IBS/CBS/IS) (`dag_nfe`, sensor-driven)
+
+`simulated issuer → inbox → batch (ctrl) → bronze via SQL (pg_read_file) → dbt: XMLTABLE silver → gold star schema`
+
+* **SQL + dbt only:** ingestion is a PL/pgSQL function and parsing is `XMLTABLE` in dbt. Python only orchestrates and simulates the source system. The XML structure is validated against the official XSDs (IBS/CBS/IS groups, alphanumeric CNPJ).
+* **Batch-level control instead of a per-row flag:** the bronze table is insert-only, each batch moves `CARREGADO → PROCESSADO`, and corrected batches are re-queued and merged idempotently ([ADR 0006](docs/adr/0006-nfe-incremental-lotes.md)).
+* **SCD2 that survives late-arriving notes:** the participant version key is derived from the note's own attributes, with no date-range join. A `dbt snapshot` is used only where processing time is the right semantics (the cClassTrib reference table).
+* **Quality scoped to the batch in flight:** contracts on silver, custom generic tests (access-key and CNPJ check digits, cClassTrib × CST), header × item reconciliation, `store_failures` quarantine in `dq_nfe`, Elementary volume monitor.
+* Details: [docs/nfe/README.md](docs/nfe/README.md) · try it: `make nfe-quickstart` (from zero to the `DataLabs · NF-e` dashboard), then `make nfe-stream`.
+
 ### 🤖 RAG — fuel price assistant (`dag_rag_anp`, triggered when ANP gold changes)
 
 `gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings → pgvector HNSW → evaluation gate`
@@ -262,6 +272,7 @@ scripts/                      sample data generator
 * [0003 — Promtail now, Grafana Alloy next](docs/adr/0003-promtail-to-alloy.md)
 * [0004 — Object storage after MinIO's image freeze](docs/adr/0004-object-storage.md)
 * [0005 — RAG over tabular data: SQL first, vectors second](docs/adr/0005-rag-router.md)
+* [0006 — NF-e: batch-level control, immutable bronze, SQL-only transformation](docs/adr/0006-nfe-incremental-lotes.md)
 
 ## Roadmap
 
