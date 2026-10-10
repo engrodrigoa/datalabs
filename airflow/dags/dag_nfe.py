@@ -64,7 +64,10 @@ with DAG(
         poke_interval=30,
         timeout=9 * 60,
         mode="reschedule",
-        soft_fail=True,          # sem arquivos -> run SKIPPED (não é falha)
+        # sem arquivos -> run SKIPPED (não é falha). ATENÇÃO (Airflow 2.9): soft_fail transforma
+        # QUALQUER exceção do poke em SKIPPED (ex.: conexão fs_default inexistente). Skip em ~1 s, em vez
+        # de ~9 min, indica erro mascarado: veja o log e a conexão (declarada no docker-compose).
+        soft_fail=True,
     )
 
     reservar_lote = BashOperator(
