@@ -36,6 +36,7 @@ x-airflow-common: &airflow-common
     AIRFLOW_CONN_FS_DEFAULT: '{"conn_type": "fs", "extra": {"path": "/"}}'
     OPENLINEAGE_DISABLED: "true"
     PYTHONPATH: /opt/airflow
+    DBT_PACKAGES_INSTALL_PATH: /opt/airflow/dbt_vol/dbt_packages
     DB_HOST: postgres
     DB_PORT: "5432"
     MINIO_ENDPOINT: http://minio:9000
@@ -48,6 +49,11 @@ x-airflow-common: &airflow-common
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/audit_logs:/opt/airflow/audit_logs
     - ./pipelines:/opt/airflow/pipelines
+    # dbt_packages fora do bind mount do Windows (~260x mais lento aqui: 2000 arquivos pequenos = 104 s no
+    # bind mount x 0,4 s no disco do container). O volume é montado em /opt/airflow/dbt_vol e o dbt instala
+    # em um SUBdiretório dele (DBT_PACKAGES_INSTALL_PATH): `dbt deps` faz rmtree do diretório de instalação,
+    # e um ponto de montagem não pode ser removido ([Errno 16] Device or resource busy).
+    - dbt_vol:/opt/airflow/dbt_vol
     - ./infra:/opt/airflow/infra:ro
     - ./scripts:/opt/airflow/scripts:ro
     - ./datasource:/mnt/datasource
@@ -122,9 +128,9 @@ services:
         # db migrate + admin user (official entrypoint behaviour)
         /entrypoint airflow version
         # dbt packages once, so Cosmos never runs `dbt deps` while parsing DAGs
-        [ -d /opt/airflow/pipelines/dbt_projects/dbt_packages/dbt_utils ] && echo "dbt packages already installed" || /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
+        [ -d /opt/airflow/dbt_vol/dbt_packages/dbt_utils ] && echo "dbt packages already installed" || /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
           --profiles-dir /opt/airflow/pipelines/dbt_projects
-        chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects
+        chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects /opt/airflow/dbt_vol
     environment:
       <<: *airflow-env
       _AIRFLOW_DB_MIGRATE: "true"
@@ -276,6 +282,7 @@ services:
 
 # named volumes: Docker handles ownership for images that do not run as root
 volumes:
+  dbt_vol:
   grafana_data:
   prometheus_data:
   loki_data:
