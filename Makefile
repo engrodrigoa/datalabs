@@ -58,6 +58,9 @@ demo-offline: sample-data ## no internet: synthetic ANP files -> landing -> dbt 
 health: ## run all data health checks now
 	$(AF) python -m pipelines.observability.run obs pipelines.observability.checks --module --step health_checks_manual -- --pipeline all --fail-on never
 
+dbt-deps: ## install/refresh dbt packages (only when packages.yml changes; DAGs never run `dbt deps`)
+	docker compose exec -T airflow-scheduler /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects --profiles-dir /opt/airflow/pipelines/dbt_projects
+
 db-bootstrap: ## (existing volume) create the airflow DB, grafana_ro role and apply DDL
 	$(COMPOSE) exec -T postgres bash /docker-entrypoint-initdb.d/00_bootstrap.sh
 

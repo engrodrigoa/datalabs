@@ -122,7 +122,7 @@ services:
         # db migrate + admin user (official entrypoint behaviour)
         /entrypoint airflow version
         # dbt packages once, so Cosmos never runs `dbt deps` while parsing DAGs
-        /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
+        [ -d /opt/airflow/pipelines/dbt_projects/dbt_packages/dbt_utils ] && echo "dbt packages already installed" || /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
           --profiles-dir /opt/airflow/pipelines/dbt_projects
         chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects
     environment:

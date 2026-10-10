@@ -43,12 +43,9 @@ with DAG(
     **OBS_DAG_CALLBACKS,
 ) as dag:
 
-    dbt_deps = dbt_command("dbt_deps", "deps", execution_timeout=timedelta(minutes=5))
-
     dbt_transformations = DbtTaskGroup(
         group_id="dbt_transformations",
-        # packages are installed once by airflow-init (and refreshed by the dbt_deps task):
-        # no `dbt deps` on every DAG parse / every Cosmos task
+        # dbt packages are installed once by airflow-init (`make dbt-deps` to refresh): DAG runs never touch the network
         project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
@@ -63,4 +60,4 @@ with DAG(
     data_health = health_checks("rfb", trigger_rule=TriggerRule.ALL_DONE)
     end = PythonOperator(task_id="end", python_callable=consolidate_dag_audit_logs, trigger_rule=TriggerRule.ALL_DONE)
 
-    dbt_deps >> dbt_transformations >> elementary_models >> elementary_html >> archive_artifacts >> data_health >> end
+    dbt_transformations >> elementary_models >> elementary_html >> archive_artifacts >> data_health >> end
