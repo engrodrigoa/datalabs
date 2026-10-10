@@ -24,6 +24,7 @@ from airflow.utils.trigger_rule import TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cosmos import DbtTaskGroup, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
+from cosmos.constants import TestBehavior  # type: ignore
 
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import DBT_BIN, DBT_PROJECT_DIR
@@ -100,8 +101,15 @@ with DAG(
         project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
-        render_config=RenderConfig(select=["tag:nfe"], exclude=["package:elementary"],
-                                   load_method=LoadMode.DBT_LS, emit_datasets=False),
+        render_config=RenderConfig(
+            select=["tag:nfe"], exclude=["package:elementary"], load_method=LoadMode.DBT_LS, emit_datasets=False,
+            # 1 tarefa por modelo (`dbt build`: modelo + seus testes) em vez de run + test separados
+            test_behavior=TestBehavior.BUILD,
+            # testes com 2+ pais (relationships fato->dimensão, reconciliação nota x item) viram tarefas
+            # próprias, executadas depois de TODOS os pais. Sem isso, o teste da dimensão roda antes da
+            # fato existir ("relation gold.ft_nfe_item does not exist").
+            should_detach_multiple_parents_tests=True,
+        ),
         operator_args={"vars": {"nfe_lote_max": LOTE_ID}},   # 'vars' é campo templatizado no Cosmos
     )
 
