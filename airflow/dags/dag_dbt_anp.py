@@ -78,12 +78,9 @@ with DAG(
     join_landing = EmptyOperator(task_id="join_landing", trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS)
 
     # ---------------------------------------------------------------- transformation
-    dbt_deps = dbt_command("dbt_deps", "deps", execution_timeout=timedelta(minutes=5))
-
     dbt_transformations = DbtTaskGroup(
         group_id="dbt_transformations",
-        # packages are installed once by airflow-init (and refreshed by the dbt_deps task):
-        # no `dbt deps` on every DAG parse / every Cosmos task
+        # dbt packages are installed once by airflow-init (`make dbt-deps` to refresh): DAG runs never touch the network
         project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
@@ -108,6 +105,6 @@ with DAG(
     setup_infra >> [scrap_semanal, scrap_mensal]
     scrap_semanal >> landing_semanal
     scrap_mensal >> landing_mensal
-    [landing_semanal, landing_mensal] >> join_landing >> dbt_deps >> dbt_transformations >> publish_gold
+    [landing_semanal, landing_mensal] >> join_landing >> dbt_transformations >> publish_gold
     dbt_transformations >> elementary_models >> elementary_html >> archive_artifacts
     [publish_gold, archive_artifacts] >> data_health >> end
