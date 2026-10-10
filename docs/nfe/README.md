@@ -116,7 +116,7 @@ As decisões de arquitetura estão em [ADR 0006](../adr/0006-nfe-incremental-lot
 ## Plano / próximos passos
 
 1. ✅ Gerador validado no XSD, ingestão SQL, silver, gold, testes, DAG, CI
-2. Painel Grafana (lotes, latência, rejeitados, falhas por regra) — `grafana/dashboards-src/build.py`
+2. ✅ Painel Grafana **DataLabs · NF-e (IBS/CBS)** (`/d/datalabs-nfe`): operação dos lotes, qualidade (Elementary + `dq_nfe`) e desempenho fiscal da gold
 3. Trilha "legado" para contraste: procedure PL/pgSQL com flag por linha + `postgres_fdw` (simula dblink) e reconciliação com a gold dbt
 4. Eventos (cancelamento, CC-e) como fato própria
 5. Gold exportada em Parquet (MinIO) + DuckDB: primeiro passo para lakehouse
