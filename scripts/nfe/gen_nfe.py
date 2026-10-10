@@ -22,7 +22,12 @@ Anomalias (somente as plausíveis em nota autorizada / no transporte):
 
 Dados 100% fictícios. Somente códigos públicos (IBGE, NCM, CFOP, CST) são reais.
 
-Exemplos:
+Uso rápido (atalho):
+  python scripts/nfe/gen_nfe.py 100                  # 100 notas na inbox do lab (descoberta automática)
+  python scripts/nfe/gen_nfe.py 100 --sujo           # + anomalias padrão (defeitos, reenvios, truncados)
+  python scripts/nfe/gen_nfe.py 100 --sujo --agora   # + dispara o dag_nfe imediatamente
+
+Exemplos completos:
   python scripts/nfe/gen_nfe.py --inbox datasource/nfe/inbox --n 500
   python scripts/nfe/gen_nfe.py --inbox datasource/nfe/inbox --n 200 --lotes 10 --intervalo 30
   python scripts/nfe/gen_nfe.py --inbox /tmp/x --n 2000 --data-ini 2026-01-01 --data-fim 2026-09-30 \\
@@ -35,7 +40,9 @@ import base64
 import csv
 import os
 import random
+import shutil
 import string
+import subprocess
 import time
 import zlib
 from dataclasses import dataclass, field, replace
@@ -581,10 +588,39 @@ def escrever_atomico(destino: Path, conteudo: str) -> None:
     os.replace(tmp, destino)
 
 
+# ------------------------------------------------------------------------------ atalhos
+REPO = Path(__file__).resolve().parents[2]
+INBOX_CONTAINER = Path("/mnt/datasource/nfe/inbox")
+ANOMALIAS_PADRAO = {"defect_rate": 0.02, "dup_rate": 0.01, "corrupt_rate": 0.005}
+
+
+def inbox_padrao() -> Path:
+    """Dentro do container do Airflow: /mnt/datasource/nfe/inbox. No host: <repo>/datasource/nfe/inbox."""
+    return INBOX_CONTAINER if INBOX_CONTAINER.parent.exists() else REPO / "datasource" / "nfe" / "inbox"
+
+
+def disparar_dag(dag_id: str = "dag_nfe") -> None:
+    """Dispara o DAG agora (em vez de esperar o próximo agendamento). Funciona no host ou no container."""
+    if shutil.which("airflow"):
+        cmd = ["airflow", "dags", "trigger", dag_id]
+    elif shutil.which("docker"):
+        cmd = ["docker", "compose", "exec", "-T", "airflow-scheduler", "airflow", "dags", "trigger", dag_id]
+    else:
+        print("--agora: nem 'airflow' nem 'docker' no PATH; dispare o DAG pela UI.", flush=True)
+        return
+    r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"{dag_id} disparado -> http://localhost:8080/dags/{dag_id}/grid", flush=True)
+    else:
+        print(f"--agora falhou ({r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}", flush=True)
+        print("as notas estão na inbox: o próximo agendamento (<= 10 min) processa.", flush=True)
+
+
 # ------------------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--inbox", required=True, type=Path, help="pasta de chegada monitorada pelo Airflow")
+    ap.add_argument("quantidade", nargs="?", type=int, metavar="N", help="atalho para --n (ex.: gen_nfe.py 100)")
+    ap.add_argument("--inbox", type=Path, help="pasta de chegada (padrão: inbox do lab, host ou container)")
     ap.add_argument("--n", type=int, default=200, help="notas por lote")
     ap.add_argument("--lotes", type=int, default=1, help="quantos lotes gerar")
     ap.add_argument("--intervalo", type=float, default=0, help="segundos entre lotes (simula chegada contínua)")
@@ -595,14 +631,23 @@ def main():
     ap.add_argument("--emitentes", type=int, default=300)
     ap.add_argument("--pct-cnpj-alfa", type=float, default=0.05, help="fração de CNPJ alfanumérico")
     ap.add_argument("--pct-mudanca-cadastral", type=float, default=0.10)
-    ap.add_argument("--defect-rate", type=float, default=0.0)
-    ap.add_argument("--dup-rate", type=float, default=0.0)
-    ap.add_argument("--corrupt-rate", type=float, default=0.0)
+    ap.add_argument("--defect-rate", type=float)
+    ap.add_argument("--dup-rate", type=float)
+    ap.add_argument("--corrupt-rate", type=float)
+    ap.add_argument("--sujo", action="store_true",
+                    help="anomalias padrão: defeitos 2%%, reenvios 1%%, truncados 0,5%% (taxas explícitas prevalecem)")
+    ap.add_argument("--agora", action="store_true", help="ao final, dispara o dag_nfe (não espera o agendamento)")
     ap.add_argument("--com-is", action="store_true", help="inclui Imposto Seletivo (simulação 2027+)")
     ap.add_argument("--sem-protocolo", action="store_true", help="raiz <NFe> em vez de <nfeProc>")
     ap.add_argument("--xsd", type=Path, help="nfe_v4.00.xsd: valida cada NF-e gerada (requer lxml)")
     ap.add_argument("--manifesto", type=Path, help="CSV com as anomalias injetadas (gabarito)")
     a = ap.parse_args()
+    if a.quantidade is not None:
+        a.n = a.quantidade
+    a.inbox = a.inbox or inbox_padrao()
+    for k, v in ANOMALIAS_PADRAO.items():
+        if getattr(a, k) is None:
+            setattr(a, k, v if a.sujo else 0.0)
 
     a.inbox.mkdir(parents=True, exist_ok=True)
     rng = random.Random(a.seed)
@@ -660,6 +705,9 @@ def main():
             if novo:
                 w.writerow(["lote", "arquivo", "chave", "anomalia"])
             w.writerows(manifesto)
+
+    if a.agora:
+        disparar_dag()
 
 
 if __name__ == "__main__":
