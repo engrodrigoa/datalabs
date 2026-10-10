@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health db-bootstrap dashboards sample-data test lint urls nfe-demo nfe-stream nfe-backfill
+.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -67,6 +67,17 @@ dashboards: ## regenerate Grafana dashboards from grafana/dashboards-src/build.p
 sample-data: ## offline synthetic ANP files (no internet needed)
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp
 
+nfe-quickstart: up ## NF-e do zero: tabelas Elementary, 2000 notas, despausa e dispara o dag_nfe
+	$(AF) bash -c "$(DBT) run --select elementary --profiles-dir ."
+	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 2000 \
+	  --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
+	@echo "aguardando o Airflow registrar o dag_nfe..."
+	@until $(AF) airflow dags unpause dag_nfe >/dev/null 2>&1; do sleep 5; done
+	$(AF) airflow dags trigger dag_nfe
+	@echo ""
+	@echo "  acompanhe:  http://localhost:8080/dags/dag_nfe/grid"
+	@echo "  resultado:  http://localhost:3000/d/datalabs-nfe   (DataLabs · NF-e)"
+
 nfe-demo: ## NF-e: simula a chegada de 500 notas na inbox (o dag_nfe processa em até 10 min)
 	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 500 \
 	  --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
@@ -88,7 +99,7 @@ lint: ## ruff
 urls:
 	@echo ""
 	@echo "  Airflow     http://localhost:8080"
-	@echo "  Grafana     http://localhost:3000   (DataLabs · Pipeline Health)"
+	@echo "  Grafana     http://localhost:3000   (DataLabs · Pipeline Health · NF-e: /d/datalabs-nfe)"
 	@echo "  MinIO       http://localhost:9091"
 	@echo "  Prometheus  http://localhost:9090"
 	@echo "  credentials: .env"
