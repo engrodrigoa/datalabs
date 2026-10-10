@@ -130,6 +130,10 @@ services:
         # dbt packages once, so Cosmos never runs `dbt deps` while parsing DAGs
         [ -d /opt/airflow/dbt_vol/dbt_packages/dbt_utils ] && echo "dbt packages already installed" || /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects \
           --profiles-dir /opt/airflow/pipelines/dbt_projects
+        # manifest para o Cosmos montar as DAGs sem rodar `dbt ls` no parse (refresh: make dbt-parse)
+        /opt/airflow/dbt_venv/bin/dbt parse --project-dir /opt/airflow/pipelines/dbt_projects \
+          --profiles-dir /opt/airflow/pipelines/dbt_projects --target-path /opt/airflow/dbt_vol/manifest \
+          || echo "WARN: dbt parse falhou; Cosmos vai usar dbt ls (lento)"
         chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects /opt/airflow/dbt_vol
     environment:
       <<: *airflow-env

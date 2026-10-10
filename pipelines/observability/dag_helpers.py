@@ -1,6 +1,8 @@
 """Small factories so every DAG runs scripts the same, observable way."""
 from __future__ import annotations
 
+import logging
+import os
 from datetime import timedelta
 
 from airflow.operators.bash import BashOperator  # type: ignore
@@ -9,6 +11,23 @@ PIPELINES_DIR = "/opt/airflow/pipelines"
 DBT_PROJECT_DIR = f"{PIPELINES_DIR}/dbt_projects"
 DBT_BIN = "/opt/airflow/dbt_venv/bin/dbt"
 EDR_BIN = "/opt/airflow/dbt_venv/bin/edr"
+
+# Manifest que o Cosmos lê para montar o grafo das tasks (gerado por `dbt parse`: airflow-init / `make dbt-parse`).
+# Sem ele o Cosmos roda `dbt ls` a CADA parse do arquivo da DAG (a cada ~30 s); no bind mount do Windows isso passa
+# de 120 s, o DagFileProcessor é morto e a DAG some da UI.
+DBT_MANIFEST_DIR = os.getenv("DBT_MANIFEST_DIR", "/opt/airflow/dbt_vol/manifest")
+DBT_MANIFEST_PATH = f"{DBT_MANIFEST_DIR}/manifest.json"
+
+
+def dbt_load_config() -> dict:
+    """kwargs de ProjectConfig/RenderConfig: manifest se existir, senão `dbt ls` (lento, mas funciona)."""
+    from cosmos import LoadMode  # type: ignore
+
+    if os.path.exists(DBT_MANIFEST_PATH):
+        return {"manifest_path": DBT_MANIFEST_PATH, "load_method": LoadMode.DBT_MANIFEST}
+    logging.getLogger(__name__).warning(
+        "dbt manifest ausente (%s): Cosmos vai usar `dbt ls` no parse. Rode `make dbt-parse`.", DBT_MANIFEST_PATH)
+    return {"manifest_path": None, "load_method": LoadMode.DBT_LS}
 
 
 def observed_script(task_id: str, pipeline: str, script: str, args: str = "", **kwargs) -> BashOperator:
