@@ -27,17 +27,57 @@ gold.ft_nfe_item · ft_nfe_documento · ag_nfe_ibscbs_mensal
 ctrl.fn_nfe_finalizar_lotes()  CARREGADO → PROCESSADO  ·  obs.v_nfe_lote → Grafana
 ```
 
-## Rodando
+## Primeira execução (runbook)
+
+Ambiente limpo, do clone ao dashboard. **Linux/macOS/WSL: um comando.**
 
 ```bash
-make up                 # stack do lab (o 05_nfe.sql é aplicado no bootstrap / dag_setup_infrastructure)
-# Airflow: despausar dag_nfe
-make nfe-backfill       # histórico jan–set/2026 (5000 notas)
-make nfe-demo           # +500 notas "de agora" (com anomalias)
-make nfe-stream         # 12 lotes, 1 a cada 5 min (chegada contínua)
+git clone https://github.com/engrodrigoa/datalabs && cd datalabs
+make nfe-quickstart
 ```
 
-Ao vivo, sem Airflow:
+O que ele faz, em ordem:
+
+| # | Passo | Por quê |
+|---|---|---|
+| 1 | `make up`: cria o `.env` com senhas aleatórias e sobe a stack | no volume novo, o Postgres roda `infra/postgres/init` (inclusive `05_nfe.sql`: schemas, `ctrl.nfe_lote`, funções, grants) |
+| 2 | `dbt run --select elementary` | cria as tabelas do Elementary (histórico de testes); sem elas o bloco de qualidade do dashboard fica vazio. Uma vez só |
+| 3 | `gen_nfe.py --n 2000` (jan–set/2026, com anomalias) | o "sistema de origem" deposita os XMLs na inbox |
+| 4 | `airflow dags unpause dag_nfe` | DAGs nascem pausados no lab (`DAGS_ARE_PAUSED_AT_CREATION`) |
+| 5 | `airflow dags trigger dag_nfe` | 1ª execução imediata (sem esperar o agendamento de 10 min) |
+
+Acompanhe em http://localhost:8080/dags/dag_nfe/grid e veja o resultado em http://localhost:3000/d/datalabs-nfe.
+
+**Windows (PowerShell, sem `make`):**
+
+```powershell
+Copy-Item .env.example .env            # e troque as senhas
+New-Item -ItemType Directory -Force -Path datasource\nfe\inbox, datasource\nfe\processando, datasource\nfe\processados
+docker compose up -d --build
+docker compose exec -T airflow-scheduler bash -c "cd /opt/airflow/pipelines/dbt_projects && /opt/airflow/dbt_venv/bin/dbt run --select elementary --profiles-dir ."
+docker compose exec -T airflow-scheduler python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox `
+  --n 2000 --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
+docker compose exec -T airflow-scheduler airflow dags unpause dag_nfe
+docker compose exec -T airflow-scheduler airflow dags trigger dag_nfe
+```
+
+**Volume já existente** (stack rodando antes deste projeto): aplique o DDL uma vez com `make db-bootstrap`
+(PowerShell: `docker compose exec -T postgres bash /docker-entrypoint-initdb.d/00_bootstrap.sh`).
+
+**Como saber que deu certo:**
+
+```sql
+SELECT lote_id, status, qtd_arquivos, qtd_carregados, qtd_rejeitados, qtd_reenvios FROM obs.v_nfe_lote;
+-- 1 lote PROCESSADO; rejeitados = arquivos truncados; reenvios = duplicatas
+SELECT count(*) FROM silver.nfe_nota;   -- 2000
+```
+
+Testes em amarelo (WARN) no grupo `dbt_nfe` são esperados: são as inconsistências injetadas pelo gerador.
+
+**Demonstrar o incremental** (depois da 1ª carga): `make nfe-demo` (+500 notas) ou `make nfe-stream`
+(12 lotes, um a cada 5 min). Cada lote aparece em `obs.v_nfe_lote` e no painel "Arquivos por lote".
+
+**Executar uma etapa à mão, sem Airflow** (útil para depurar):
 
 ```sql
 SELECT ctrl.fn_nfe_ingerir_lote('manual-1', '/mnt/datasource/nfe/processando/manual-1');

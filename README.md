@@ -174,7 +174,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * **Batch-level control instead of a per-row flag:** the bronze table is insert-only, each batch moves `CARREGADO → PROCESSADO`, and corrected batches are re-queued and merged idempotently ([ADR 0006](docs/adr/0006-nfe-incremental-lotes.md)).
 * **SCD2 that survives late-arriving notes:** the participant version key is derived from the note's own attributes, with no date-range join. A `dbt snapshot` is used only where processing time is the right semantics (the cClassTrib reference table).
 * **Quality scoped to the batch in flight:** contracts on silver, custom generic tests (access-key and CNPJ check digits, cClassTrib × CST), header × item reconciliation, `store_failures` quarantine in `dq_nfe`, Elementary volume monitor.
-* Details: [docs/nfe/README.md](docs/nfe/README.md) · try it: `make nfe-backfill`, `make nfe-stream`.
+* Details: [docs/nfe/README.md](docs/nfe/README.md) · try it: `make nfe-quickstart` (from zero to the `DataLabs · NF-e` dashboard), then `make nfe-stream`.
 
 ### 🤖 RAG — fuel price assistant (`dag_rag_anp`, triggered when ANP gold changes)
 
