@@ -44,6 +44,8 @@ INDEX_HNSW = "ix_rag_context_anp_hnsw"
 UF = os.getenv("RAG_UF", "GO").upper()
 LIMITE_EXTRACAO = int(os.getenv("RAG_MAX_ROWS", "0"))  # 0 = no limit
 BATCH_SIZE = int(os.getenv("RAG_EMBED_BATCH", "64"))
+# embedding runs in blocks of this many rows, with one progress event per block (rows, rate, ETA)
+PROGRESS_ROWS = int(os.getenv("RAG_EMBED_PROGRESS_ROWS", "1000"))
 # above this many new rows, drop the HNSW index and rebuild it once (bulk pattern);
 # below it, inserting into the live index is cheaper than rebuilding it
 INDEX_REBUILD_MIN_ROWS = int(os.getenv("RAG_INDEX_REBUILD_MIN_ROWS", "5000"))
@@ -78,13 +80,29 @@ def estado_atual(engine) -> tuple[set, set, int | None]:
 
 
 def vetorizar(modelo, df: pl.DataFrame, step) -> pl.DataFrame:
+    """Embeds in blocks of PROGRESS_ROWS and emits `rag_embed_progress` after each block, so a long
+    run is never a black box: the Airflow log, Loki and Grafana show done/total, rows/s and ETA."""
+    textos = df["chunk_text"].to_list()
+    total = len(textos)
+    vetores: list[list[float]] = []
     t1 = time.perf_counter()
-    vectors = encode_passages(modelo, df["chunk_text"].to_list(), batch_size=BATCH_SIZE)
+    for inicio in range(0, total, PROGRESS_ROWS):
+        bloco = encode_passages(modelo, textos[inicio:inicio + PROGRESS_ROWS], batch_size=BATCH_SIZE)
+        vetores.extend(bloco.tolist())
+        feitos = len(vetores)
+        decorrido = time.perf_counter() - t1
+        taxa = feitos / decorrido if decorrido else 0.0
+        eta_s = (total - feitos) / taxa if taxa else None
+        log_event(logger, "rag_embed_progress",
+                  f"embedding {feitos:,}/{total:,} ({100 * feitos / total:.0f}%) · {taxa:.1f} linhas/s"
+                  + (f" · ETA {eta_s / 60:.0f} min" if eta_s else ""),
+                  done=feitos, total=total, pct=round(100 * feitos / total, 1), rows_per_s=round(taxa, 1),
+                  eta_s=round(eta_s) if eta_s is not None else None)
     embed_s = time.perf_counter() - t1
-    step.set(embedding_dim=int(vectors.shape[1]), embed_s=round(embed_s, 2),
-             embed_rows_per_s=round(df.height / embed_s, 1) if embed_s else None)
+    step.set(embedding_dim=len(vetores[0]) if vetores else None, embed_s=round(embed_s, 2),
+             embed_rows_per_s=round(total / embed_s, 1) if embed_s else None)
     return df.with_columns(
-        pl.Series("embedding", [json.dumps(v) for v in vectors.tolist()], dtype=pl.Utf8),
+        pl.Series("embedding", [json.dumps(v) for v in vetores], dtype=pl.Utf8),
         pl.lit(MODEL_NAME).alias("embedding_model"),
     ).select(["chunk_id", "source_id", "chunk_text", "metadata", "embedding", "embedding_model"])
 
