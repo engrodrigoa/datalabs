@@ -4,7 +4,6 @@
 # timeout_s: per-check statement_timeout (default OBS_CHECK_TIMEOUT_S=120); a timeout ends as status "error"
 # cost: heavy -> skipped by the periodic health DAG (--skip-heavy), runs only after its own pipeline
 # suspended: "<motivo>" -> não executa; grava status skipped com o motivo (visível no Grafana). Temporário.
-# suspended: retirado
 
 defaults:
   severity: error
