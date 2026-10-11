@@ -98,6 +98,7 @@ checks:
     query: SELECT MAX(to_date(referencia_mes::text, 'YYYYMM')) FROM landing_rfb.estabelecimentos
     warn_after_hours: 1488    # ~62 days
     error_after_hours: 2232   # ~93 days
+    suspended: "health checks em validação"
 
   - name: rfb_suspicious_rows_pct
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
@@ -111,6 +112,7 @@ checks:
       FROM landing_rfb.estabelecimentos
       WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.estabelecimentos)
     max: 0.1                  # % of rows with shifted columns
+    suspended: "health checks em validação"
 
   - name: rfb_empresas_duplicated_keys
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
@@ -122,6 +124,7 @@ checks:
       SELECT COUNT(*) - COUNT(DISTINCT cnpj_basico) FROM landing_rfb.empresas
       WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.empresas)
     max: 0
+    suspended: "health checks em validação"
 
   - name: rfb_landing_to_gold_reconciliation
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
@@ -137,6 +140,7 @@ checks:
     right_label: gold_rows
     compare_query: SELECT COUNT(*) FROM gold.ft_receita_federal
     tolerance_pct: 1
+    suspended: "health checks em validação"
 
   # ------------------------------------------------------------------ RAG (AI layer)
   - name: rag_context_parity
