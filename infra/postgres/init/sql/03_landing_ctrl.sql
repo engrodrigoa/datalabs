@@ -32,3 +32,6 @@ CREATE TABLE IF NOT EXISTS bronze.anp_landing_semanal (
 );
 CREATE INDEX IF NOT EXISTS ix_anp_semanal_arquivo ON bronze.anp_landing_semanal (arquivo);
 CREATE INDEX IF NOT EXISTS ix_anp_mensal_arquivo  ON bronze.anp_landing_mensal (arquivo);
+-- health checks (freshness / volume da última carga) filtram por ingestion_timestamp: sem índice = full scan
+CREATE INDEX IF NOT EXISTS ix_anp_semanal_ingestao ON bronze.anp_landing_semanal (ingestion_timestamp);
+CREATE INDEX IF NOT EXISTS ix_anp_mensal_ingestao  ON bronze.anp_landing_mensal (ingestion_timestamp);
