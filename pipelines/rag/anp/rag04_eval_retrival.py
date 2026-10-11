@@ -21,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 from pipelines.commons.env_loader import CONSTRING
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger, log_event
+from pipelines.commons.ai.embeddings import MODEL_NAME as EMBEDDING_MODEL
 from pipelines.observability import current_step
 
 
@@ -35,7 +36,7 @@ SCHEMA = "ai"
 TABELA_CONTEXTO = "rag_context_anp"
 TABELA_METRICAS = "rag_eval_metrics"
 TABELA_RESUMO = "rag_eval_summary"
-MODELO_NOME = "intfloat/multilingual-e5-base"
+MODELO_NOME = EMBEDDING_MODEL   # one model for writing and querying (pipelines/commons/ai/embeddings.py)
 TOP_K = 5
 
 VERSAO_PIPELINE = os.getenv("RAG_PIPELINE_VERSION", "v2_router")

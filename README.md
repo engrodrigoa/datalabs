@@ -58,7 +58,7 @@ flowchart LR
   ANP --> RUN --> PG
   RFB --> RUN --> MINIO --> PG
   PG --> DBT --> PG
-  PG -- gold --> EMB[embeddings<br/>e5-base] --> VEC --> RAG[SQL/vector router<br/>+ Ollama LLM]
+  PG -- gold --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[SQL/vector router<br/>+ Ollama LLM]
 
   subgraph Observability
     LOKI[Loki] --- GRAF[Grafana]
@@ -178,7 +178,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 
 ### 🤖 RAG — fuel price assistant (`dag_rag_anp`, triggered when ANP gold changes)
 
-`gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings → pgvector HNSW → evaluation gate`
+`gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings (incremental by chunk_id) → pgvector HNSW → evaluation gate`
 
 * **Router:** questions with a CNPJ or an aggregation go to exact SQL on gold. Open questions go to vector search. The LLM is told which lines are exact ([ADR 0005](docs/adr/0005-rag-router.md)).
 * **Evaluation as a quality gate:** a golden set with SQL ground truth measures routing and value accuracy after every rebuild, and the task **fails below the threshold**. History lives in `ai.rag_eval_*` and is plotted in Grafana.
