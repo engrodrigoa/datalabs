@@ -14,7 +14,7 @@ whole UF on every gold publication (~32k rows, ~1h40) did not fit the 2h timeout
 delta is a few thousand rows.
 """
 import argparse
-import json
+import io
 import os
 import sys
 import time
@@ -33,7 +33,6 @@ from pipelines.commons.ai.embeddings import MODEL_NAME, encode_passages, load_mo
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.env_loader import CONSTRING
 from pipelines.commons.logger import get_logger, log_event
-from pipelines.commons.pg_copy import copy_dataframe
 from pipelines.observability import current_step
 
 logger = get_logger("rag01_context")
@@ -49,6 +48,9 @@ PROGRESS_ROWS = int(os.getenv("RAG_EMBED_PROGRESS_ROWS", "1000"))
 # above this many new rows, drop the HNSW index and rebuild it once (bulk pattern);
 # below it, inserting into the live index is cheaper than rebuilding it
 INDEX_REBUILD_MIN_ROWS = int(os.getenv("RAG_INDEX_REBUILD_MIN_ROWS", "5000"))
+# memory for the HNSW build. Postgres allocates it in /dev/shm for parallel builds: keep it below the
+# container's shm_size (docker-compose sets 1g; Docker's default 64 MB fails with "No space left on device")
+INDEX_MAINTENANCE_MEM = os.getenv("RAG_INDEX_MAINTENANCE_MEM", "256MB")
 
 
 def ler_gold() -> pl.DataFrame:
@@ -102,18 +104,71 @@ def vetorizar(modelo, df: pl.DataFrame, step) -> pl.DataFrame:
     step.set(embedding_dim=len(vetores[0]) if vetores else None, embed_s=round(embed_s, 2),
              embed_rows_per_s=round(total / embed_s, 1) if embed_s else None)
     return df.with_columns(
-        pl.Series("embedding", [json.dumps(v) for v in vetores], dtype=pl.Utf8),
+        pl.Series("embedding", ["[" + ",".join(f"{x:.7g}" for x in v) + "]" for v in vetores], dtype=pl.Utf8),
         pl.lit(MODEL_NAME).alias("embedding_model"),
     ).select(["chunk_id", "source_id", "chunk_text", "metadata", "embedding", "embedding_model"])
 
 
-def recriar_indice(engine, step) -> None:
+def indice_existe(engine) -> bool:
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT to_regclass(:ix) IS NOT NULL"),
+                            {"ix": f"{SCHEMA}.{INDEX_HNSW}"}).scalar()
+
+
+def _criar_indice(cur, step) -> None:
     t = time.perf_counter()
-    with engine.begin() as conn:
-        conn.execute(text("SET LOCAL maintenance_work_mem = '256MB'"))
-        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {INDEX_HNSW} ON {SCHEMA}.{TABELA} "
-                          "USING hnsw (embedding vector_cosine_ops)"))
+    cur.execute(f"SET LOCAL maintenance_work_mem = '{INDEX_MAINTENANCE_MEM}'")
+    cur.execute(f"CREATE INDEX IF NOT EXISTS {INDEX_HNSW} ON {SCHEMA}.{TABELA} "
+                "USING hnsw (embedding vector_cosine_ops)")
     step.set(index_build_s=round(time.perf_counter() - t, 2))
+
+
+def _copy(cur, df: pl.DataFrame, step) -> int:
+    if df.is_empty():
+        return 0
+    t = time.perf_counter()
+    buffer = io.StringIO()
+    df.write_csv(buffer)
+    buffer.seek(0)
+    cols = ", ".join(f'"{c}"' for c in df.columns)
+    cur.copy_expert(f"COPY {SCHEMA}.{TABELA} ({cols}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)", buffer)
+    step.set(copy_s=round(time.perf_counter() - t, 2))
+    return df.height
+
+
+def aplicar(engine, plano, novos: pl.DataFrame, dim_coluna, dim_modelo, step) -> int:
+    """All writes of one sync in ONE transaction: a failure (disk, shm, timeout) rolls back to the
+    previous store instead of leaving it truncated, half-loaded or without its index."""
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        if plano.mode == "full":
+            # bulk pattern: drop index, load, build the HNSW index once
+            cur.execute(f"DROP INDEX IF EXISTS {SCHEMA}.{INDEX_HNSW}")
+            cur.execute(f"TRUNCATE TABLE {SCHEMA}.{TABELA}")
+            if dim_modelo and dim_coluna != dim_modelo:   # e.g. e5-base (768) -> e5-small (384); table is empty
+                cur.execute(f"ALTER TABLE {SCHEMA}.{TABELA} ALTER COLUMN embedding "
+                            f"TYPE vector({dim_modelo}) USING NULL")
+                log_event(logger, "rag_vector_resized",
+                          f"embedding column: vector({dim_coluna}) -> vector({dim_modelo})")
+            escritos = _copy(cur, novos, step)
+            _criar_indice(cur, step)
+        else:
+            if plano.stale_ids:
+                cur.execute(f"DELETE FROM {SCHEMA}.{TABELA} WHERE chunk_id = ANY(%s)", (list(plano.stale_ids),))
+                step.set(rows_deleted=cur.rowcount)
+            rebuild = novos.height >= INDEX_REBUILD_MIN_ROWS
+            if rebuild:
+                cur.execute(f"DROP INDEX IF EXISTS {SCHEMA}.{INDEX_HNSW}")
+            escritos = _copy(cur, novos, step)
+            _criar_indice(cur, step)        # no-op when it exists; (re)builds after a bulk delta or a past failure
+        raw.commit()
+        return escritos
+    except Exception:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
 
 
 def main(argv=None) -> int:
@@ -152,49 +207,23 @@ def main(argv=None) -> int:
               kept=plano.kept)
 
     if plano.mode == "incremental" and not plano.new_ids and not plano.stale_ids:
-        log_event(logger, "no_new_data", "vector store already in sync with gold: nothing to embed")
-        return 99
-
-    novos = desejado.filter(pl.col("chunk_id").is_in(list(plano.new_ids)))
-    modelo = None
-    if novos.height:
-        t0 = time.perf_counter()
-        modelo = load_model()
-        step.set(model_load_s=round(time.perf_counter() - t0, 2))
-        novos = vetorizar(modelo, novos, step)
-
-    if plano.mode == "full":
-        # Bulk-load pattern for pgvector: build the HNSW index once after the load, not row by row.
-        dim_modelo = model_dim(modelo)
-        with engine.begin() as conn:
-            conn.execute(text(f"DROP INDEX IF EXISTS {SCHEMA}.{INDEX_HNSW}"))
-            conn.execute(text(f"TRUNCATE TABLE {SCHEMA}.{TABELA}"))
-            if dim_coluna != dim_modelo:   # e.g. e5-base (768) -> e5-small (384); the table is empty here
-                conn.execute(text(f"ALTER TABLE {SCHEMA}.{TABELA} ALTER COLUMN embedding "
-                                  f"TYPE vector({dim_modelo}) USING NULL"))
-                log_event(logger, "rag_vector_resized",
-                          f"embedding column: vector({dim_coluna}) -> vector({dim_modelo})")
-        t2 = time.perf_counter()
-        escritos = copy_dataframe(novos, engine, SCHEMA, TABELA)
-        step.set(copy_s=round(time.perf_counter() - t2, 2))
-        recriar_indice(engine, step)
+        if indice_existe(engine):
+            log_event(logger, "no_new_data", "vector store already in sync with gold: nothing to embed")
+            return 99
+        # data is in sync but the HNSW index is missing (e.g. a previous build failed): self-heal
+        log_event(logger, "rag_index_missing", f"{INDEX_HNSW} missing: rebuilding it", level=30)
+        step.set(sync_mode="index_only")
+        escritos = aplicar(engine, plano, desejado.head(0), dim_coluna, None, step)
     else:
-        if plano.stale_ids:
-            with engine.begin() as conn:
-                apagados = conn.execute(text(f"DELETE FROM {SCHEMA}.{TABELA} WHERE chunk_id = ANY(:ids)"),
-                                        {"ids": list(plano.stale_ids)}).rowcount
-            step.set(rows_deleted=apagados)
-        escritos = 0
+        novos = desejado.filter(pl.col("chunk_id").is_in(list(plano.new_ids)))
+        dim_modelo = None
         if novos.height:
-            rebuild = novos.height >= INDEX_REBUILD_MIN_ROWS
-            if rebuild:
-                with engine.begin() as conn:
-                    conn.execute(text(f"DROP INDEX IF EXISTS {SCHEMA}.{INDEX_HNSW}"))
-            t2 = time.perf_counter()
-            escritos = copy_dataframe(novos, engine, SCHEMA, TABELA)
-            step.set(copy_s=round(time.perf_counter() - t2, 2))
-            if rebuild:
-                recriar_indice(engine, step)
+            t0 = time.perf_counter()
+            modelo = load_model()
+            dim_modelo = model_dim(modelo)
+            step.set(model_load_s=round(time.perf_counter() - t0, 2))
+            novos = vetorizar(modelo, novos, step)
+        escritos = aplicar(engine, plano, novos, dim_coluna, dim_modelo, step)
 
     step.add(rows_out=escritos)
     log_event(logger, "rag_build_finished",
