@@ -35,3 +35,10 @@ The two checks suspended because of the slow disk were re-enabled; the staging r
   every table is rebuilt by the pipelines from public sources (ANP, RFB) or generators (NF-e), see
   `docs/runbook-rebuild.md`. Nothing in the lab is a system of record.
 - Volumes live inside the WSL2 virtual disk (on `C:`), which grows and is not shrunk automatically.
+
+**Follow-up: input files stay on the bind mount, so scripts must stream them.** The RFB step extracted
+each CSV in full next to its ZIP in `./datasource` before reading it: extracting Estabelecimentos0 (2.2 GB zipped)
+ran at ~3 MB/s before a single row was read, even in `dev_mode`, which uses only 500k rows. Reading the CSV as a stream from the ZIP
+(`zipfile.open`) removed the write and re-read: 25 files / 10M rows (`dev_mode`) in 8 min, ~35 s per
+Estabelecimentos file. Rule for new pipelines: read from the input mount, write temporaries to the
+container disk or to a volume.
