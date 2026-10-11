@@ -1,5 +1,7 @@
+import io
 import os
 import sys
+import tempfile
 import zipfile
 import re
 import csv
@@ -45,6 +47,13 @@ validate_env({
 REFERENCIA = rfb_reference()  # YYYY-MM from dag_rfb param (RFB_REF_MONTH)
 SOURCE_DIR = f"/mnt/datasource/rfb/ref{REFERENCIA.replace('-', '')}"
 BUCKET_BRONZE = "bronze"
+
+# Each CSV is read as a stream straight from its zip (never extracted to disk): SOURCE_DIR is a
+# bind mount, and on Docker Desktop/Windows writing then re-reading GBs there is the bottleneck.
+# In DEV_MODE this also stops after DEV_ROW_LIMIT rows without decompressing the rest of the file.
+# The temporary parquet goes to the container disk (RFB_TMP_DIR), not to the bind mount.
+TMP_DIR = os.getenv("RFB_TMP_DIR", tempfile.gettempdir())
+PROGRESS_ROWS = int(os.getenv("RFB_PROGRESS_ROWS", "1000000"))
 
 def to_snake_case(text):
     text = re.sub(r'(?<!^)(?=[A-Z])', '_', text).lower()
@@ -108,68 +117,69 @@ def process_zips_to_parquet():
         file_name_clean = to_snake_case(base_name)
         entity = get_entity_name(base_name)
         
-        local_parquet = os.path.join(SOURCE_DIR, f"{file_name_clean}.parquet")
+        local_parquet = os.path.join(TMP_DIR, f"{file_name_clean}.parquet")
         s3_prefix = f"rfb/{entity}/ref_month={ref_partition}/{file_name_clean}.parquet"
-        extracted_file = None
-        
-        logger.info(f"Processing archive: {zip_file} into entity: {entity} as {file_name_clean}.parquet")
-        
-        try:
-            with zipfile.ZipFile(zip_path, 'r') as z:
-                internal_name = z.namelist()[0]
-                z.extract(internal_name, path=SOURCE_DIR)
-                extracted_file = os.path.join(SOURCE_DIR, internal_name)
+        writer = None
 
+        logger.info(f"Processing archive: {zip_file} into entity: {entity} as {file_name_clean}.parquet")
+
+        try:
             writer = pq.ParquetWriter(local_parquet, base_schema, compression='snappy')
             chunk_size = 100_000
             batch_data = {col: [] for col in column_names}
             batch_data["referencia_mes"] = []
             row_count = 0
 
-            with open(extracted_file, 'r', encoding='iso-8859-1', errors='replace', newline='') as file:
-                leitor = csv.reader(file, delimiter=';', quotechar='"')
-                for fields in leitor:
-                    if not fields or (len(fields) == 1 and fields[0].strip() == ''):
-                        continue
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                internal_name = z.namelist()[0]
+                with z.open(internal_name) as raw, \
+                        io.TextIOWrapper(raw, encoding='iso-8859-1', errors='replace', newline='') as file:
+                    leitor = csv.reader(file, delimiter=';', quotechar='"')
+                    for fields in leitor:
+                        if not fields or (len(fields) == 1 and fields[0].strip() == ''):
+                            continue
 
-                    fields = [c.strip() for c in fields]
+                        fields = [c.strip() for c in fields]
 
-                    if len(fields) > N_COLUNAS:
-                        # ... (código existente mantido) ...
-                        adjusted_fields = fields[:N_COLUNAS-1]
-                        adjusted_fields.append(" ".join(fields[N_COLUNAS-1:]))
-                        fields = adjusted_fields
-                    elif len(fields) < N_COLUNAS:
-                        fields.extend([""] * (N_COLUNAS - len(fields)))
+                        if len(fields) > N_COLUNAS:
+                            adjusted_fields = fields[:N_COLUNAS-1]
+                            adjusted_fields.append(" ".join(fields[N_COLUNAS-1:]))
+                            fields = adjusted_fields
+                        elif len(fields) < N_COLUNAS:
+                            fields.extend([""] * (N_COLUNAS - len(fields)))
 
-                    for idx, col in enumerate(column_names):
-                        batch_data[col].append(fields[idx])
-                    batch_data["referencia_mes"].append(REFERENCIA)
+                        for idx, col in enumerate(column_names):
+                            batch_data[col].append(fields[idx])
+                        batch_data["referencia_mes"].append(REFERENCIA)
 
-                    row_count += 1
+                        row_count += 1
 
-                    # --- DEV_MODE ---
-                    if DEV_MODE and entity in BIG_ENTITIES and row_count >= DEV_ROW_LIMIT:
-                        logger.info(f"[DEV_MODE] rows limit reached at {DEV_ROW_LIMIT} for file {zip_file}.")
-                        break
-                    # --- DEV_MODE ---
+                        # --- DEV_MODE ---
+                        if DEV_MODE and entity in BIG_ENTITIES and row_count >= DEV_ROW_LIMIT:
+                            logger.info(f"[DEV_MODE] rows limit reached at {DEV_ROW_LIMIT} for file {zip_file}.")
+                            break
+                        # --- DEV_MODE ---
 
-                    if row_count % chunk_size == 0:
-                        table_batch = pa.Table.from_pydict(batch_data, schema=base_schema)
-                        writer.write_table(table_batch)
-                        batch_data = {col: [] for col in column_names}
-                        batch_data["referencia_mes"] = []
+                        if row_count % chunk_size == 0:
+                            table_batch = pa.Table.from_pydict(batch_data, schema=base_schema)
+                            writer.write_table(table_batch)
+                            batch_data = {col: [] for col in column_names}
+                            batch_data["referencia_mes"] = []
+
+                        if row_count % PROGRESS_ROWS == 0:
+                            logger.info(f"{zip_file}: {row_count:,} rows read")
 
             if batch_data[column_names[0]]:
                 table_batch = pa.Table.from_pydict(batch_data, schema=base_schema)
                 writer.write_table(table_batch)
 
             writer.close()
+            writer = None
 
             logger.info(f">>> deploying on s3://{BUCKET_BRONZE}/{s3_prefix} ({row_count} rows)")
             s3_client.upload_file(local_parquet, BUCKET_BRONZE, s3_prefix)
             logger.info(f">>> >>> deployment complete for {base_name}")
-            
+
             processed_count += 1
             step.add(files_ok=1, rows_out=row_count)
 
@@ -177,10 +187,10 @@ def process_zips_to_parquet():
             failed_files.append(zip_file)
             step.add(files_failed=1)
             logger.error(f"unrecoverable error processing {zip_file}: {e}")
-            
+
         finally:
-            if extracted_file and os.path.exists(extracted_file):
-                os.remove(extracted_file)
+            if writer is not None:
+                writer.close()
             if os.path.exists(local_parquet):
                 os.remove(local_parquet)
 
