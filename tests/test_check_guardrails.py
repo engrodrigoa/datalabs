@@ -17,9 +17,10 @@ def test_heavy_checks_are_skipped_by_the_periodic_run():
     all_checks = {c["name"] for c in checks.load_checks(checks.DEFAULT_CONFIG, "all")}
     light = {c["name"] for c in checks.load_checks(checks.DEFAULT_CONFIG, "all", skip_heavy=True)}
     heavy = all_checks - light
-    assert heavy == {"rfb_suspicious_rows_pct", "rfb_empresas_duplicated_keys", "rfb_landing_to_gold_reconciliation"}
-    # ...but the RFB DAG still runs them right after its load
-    assert heavy <= {c["name"] for c in checks.load_checks(checks.DEFAULT_CONFIG, "rfb")}
+    assert heavy == {"rfb_suspicious_rows_pct", "rfb_empresas_duplicated_keys", "rfb_landing_to_gold_reconciliation",
+                     "anp_stg_to_silver_reconciliation"}
+    # ...but each pipeline DAG still runs its own heavy checks right after its load
+    assert heavy <= {c["name"] for p in ("rfb", "anp") for c in checks.load_checks(checks.DEFAULT_CONFIG, p)}
 
 
 def _check(query, **kw):

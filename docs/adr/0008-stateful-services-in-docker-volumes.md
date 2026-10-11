@@ -14,6 +14,19 @@ lived on the same mounts.
 kept only for code (DAGs, pipelines, dbt project) and input files (`./datasource`), which humans and
 the NF-e generator write from the host.
 
+**Measured after the switch (same data: 789,803 ANP rows rebuilt from zero).**
+
+| Query | Bind mount | Docker volume |
+|---|---|---|
+| `anp_invalid_prices` (full scan of silver) | 46.5 s | 0.35 s |
+| `anp_silver_to_gold_reconciliation` | 42.8 s | 0.31 s |
+| `anp_fact_orphan_postos` | 51.9 s | 0.41 s |
+| `anp_stg_to_silver_reconciliation` (staging views over all bronze) | > 5 min (timeout) | 35 s |
+| whole `health_checks_anp` | ~7 min, 2 timeouts | 2.0 s |
+
+The two checks suspended because of the slow disk were re-enabled; the staging reconciliation runs as
+`cost: heavy` (after each ANP load, not in the 6-hourly health DAG).
+
 **Consequences.**
 - Database and object storage run at Linux disk speed on any host OS; the lab behaves the same on
   Windows, macOS and Linux.

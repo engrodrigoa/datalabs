@@ -45,7 +45,6 @@ checks:
       SELECT COUNT(DISTINCT estado_sigla) FROM silver.anp_combustivel
       WHERE data_coleta >= (SELECT MAX(data_coleta) - 7 FROM silver.anp_combustivel)
     min: 27                   # every UF + DF must appear in the latest week
-    suspended: "timeout (>120 s) sem índice em silver.anp_combustivel(data_coleta); reativar após índice/migração do Postgres"
 
   - name: anp_invalid_prices
     pipeline: anp
@@ -67,7 +66,10 @@ checks:
     right_label: silver_rows
     compare_query: SELECT COUNT(*) FROM silver.anp_combustivel
     tolerance_pct: 0
-    suspended: "recalcula as views de staging sobre toda a bronze (>5 min); garantia coberta por unique+not_null em silver.chave"
+    # recomputes the staging views over the whole bronze (~35 s): catches keys LOST between staging and
+    # silver (unique/not_null on silver.chave only catch duplicates/nulls). Runs after each ANP load only.
+    cost: heavy
+    timeout_s: 300
 
   - name: anp_silver_to_gold_reconciliation
     pipeline: anp
@@ -112,7 +114,7 @@ checks:
       FROM landing_rfb.estabelecimentos
       WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.estabelecimentos)
     max: 0.1                  # % of rows with shifted columns
-    suspended: "health checks em validação"
+    
 
   - name: rfb_empresas_duplicated_keys
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
@@ -124,7 +126,7 @@ checks:
       SELECT COUNT(*) - COUNT(DISTINCT cnpj_basico) FROM landing_rfb.empresas
       WHERE referencia_mes = (SELECT MAX(referencia_mes) FROM landing_rfb.empresas)
     max: 0
-    suspended: "health checks em validação"
+    
 
   - name: rfb_landing_to_gold_reconciliation
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
@@ -140,7 +142,7 @@ checks:
     right_label: gold_rows
     compare_query: SELECT COUNT(*) FROM gold.ft_receita_federal
     tolerance_pct: 1
-    suspended: "health checks em validação"
+    
 
   # ------------------------------------------------------------------ RAG (AI layer)
   - name: rag_context_parity
