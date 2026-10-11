@@ -9,12 +9,12 @@ from airflow.operators.python import PythonOperator  # type: ignore
 from airflow.utils.trigger_rule import TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from cosmos import DbtTaskGroup, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
+from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
 
 from pipelines.commons.audit_logger import consolidate_dag_audit_logs
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import (
-    DBT_BIN, DBT_PROJECT_DIR, dbt_command, elementary_report, health_checks, observed_module,
+    DBT_BIN, DBT_PROJECT_DIR, dbt_command, dbt_load_config, elementary_report, health_checks, observed_module,
 )
 
 LANDING_RFB = Dataset("datalabs://landing/rfb")
@@ -24,6 +24,7 @@ profile_config = ProfileConfig(
     target_name="dev",
     profiles_yml_filepath=f"{DBT_PROJECT_DIR}/profiles.yml",
 )
+DBT_LOAD = dbt_load_config()   # manifest (rápido) ou dbt ls (fallback)
 
 with DAG(
     dag_id="dag_rfb_dw_dbt",
@@ -46,10 +47,10 @@ with DAG(
     dbt_transformations = DbtTaskGroup(
         group_id="dbt_transformations",
         # dbt packages are installed once by airflow-init (`make dbt-deps` to refresh): DAG runs never touch the network
-        project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
+        project_config=ProjectConfig(DBT_PROJECT_DIR, manifest_path=DBT_LOAD["manifest_path"], install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
-        render_config=RenderConfig(select=["tag:rfb"], exclude=["package:elementary"], load_method=LoadMode.DBT_LS,
+        render_config=RenderConfig(select=["tag:rfb"], exclude=["package:elementary"], load_method=DBT_LOAD["load_method"],
                                    emit_datasets=False),
     )
 

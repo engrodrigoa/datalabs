@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
+.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,9 @@ health: ## run all data health checks now
 
 dbt-deps: ## install/refresh dbt packages (only when packages.yml changes; DAGs never run `dbt deps`)
 	docker compose exec -T airflow-scheduler /opt/airflow/dbt_venv/bin/dbt deps --project-dir /opt/airflow/pipelines/dbt_projects --profiles-dir /opt/airflow/pipelines/dbt_projects
+
+dbt-parse: ## regenerate the dbt manifest Cosmos reads (run after adding/renaming dbt models or tags)
+	docker compose exec -T airflow-scheduler /opt/airflow/dbt_venv/bin/dbt parse --project-dir /opt/airflow/pipelines/dbt_projects --profiles-dir /opt/airflow/pipelines/dbt_projects --target-path /opt/airflow/dbt_vol/manifest
 
 db-bootstrap: ## (existing volume) create the airflow DB, grafana_ro role and apply DDL
 	$(COMPOSE) exec -T postgres bash /docker-entrypoint-initdb.d/00_bootstrap.sh

@@ -23,11 +23,11 @@ from airflow.sensors.filesystem import FileSensor  # type: ignore
 from airflow.utils.trigger_rule import TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from cosmos import DbtTaskGroup, ExecutionConfig, LoadMode, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
+from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
 from cosmos.constants import TestBehavior  # type: ignore
 
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
-from pipelines.observability.dag_helpers import DBT_BIN, DBT_PROJECT_DIR
+from pipelines.observability.dag_helpers import DBT_BIN, DBT_PROJECT_DIR, dbt_load_config
 
 NFE_DIR = os.getenv("NFE_DIR", "/mnt/datasource/nfe")      # mesmo caminho no Airflow e no Postgres
 MAX_ARQUIVOS_LOTE = int(os.getenv("NFE_MAX_ARQUIVOS_LOTE", "5000"))
@@ -39,6 +39,7 @@ profile_config = ProfileConfig(
     target_name="dev",
     profiles_yml_filepath=f"{DBT_PROJECT_DIR}/profiles.yml",
 )
+DBT_LOAD = dbt_load_config()   # manifest (rápido) ou dbt ls (fallback)
 
 with DAG(
     dag_id="dag_nfe",
@@ -101,11 +102,11 @@ with DAG(
 
     dbt_nfe = DbtTaskGroup(
         group_id="dbt_nfe",
-        project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
+        project_config=ProjectConfig(DBT_PROJECT_DIR, manifest_path=DBT_LOAD["manifest_path"], install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
         render_config=RenderConfig(
-            select=["tag:nfe"], exclude=["package:elementary"], load_method=LoadMode.DBT_LS, emit_datasets=False,
+            select=["tag:nfe"], exclude=["package:elementary"], load_method=DBT_LOAD["load_method"], emit_datasets=False,
             # 1 tarefa por modelo (`dbt build`: modelo + seus testes) em vez de run + test separados
             test_behavior=TestBehavior.BUILD,
             # testes com 2+ pais (relationships fato->dimensão, reconciliação nota x item) viram tarefas

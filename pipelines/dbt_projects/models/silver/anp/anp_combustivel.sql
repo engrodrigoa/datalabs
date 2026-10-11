@@ -1,4 +1,6 @@
-{{ config(materialized='table') }}
+{#- data_coleta é o filtro de quase toda consulta (health checks, Grafana, gold incremental). A tabela é
+    recriada a cada run, então o índice é reconstruído junto: custo no build, ganho em toda leitura. -#}
+{{ config(materialized='table', indexes=[{'columns': ['data_coleta']}]) }}
 
 -- Weekly + monthly loads overlap: keep the most recent ingestion of each natural key.
 WITH uniao_bases AS (

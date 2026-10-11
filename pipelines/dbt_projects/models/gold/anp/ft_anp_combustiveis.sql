@@ -1,8 +1,10 @@
+{#- índice em data_coleta: incremental só cria índices no 1º build / --full-refresh -#}
 {{
     config(
         materialized='incremental',
         unique_key='id_fato',
         incremental_strategy='delete+insert',
+        indexes=[{'columns': ['data_coleta']}],
         on_schema_change='append_new_columns',
         tags=['gold', 'fato']
     )

@@ -3,6 +3,7 @@
 # severity: error -> status "fail" (task goes red + alert) | warn -> status "warn" (alert only)
 # timeout_s: per-check statement_timeout (default OBS_CHECK_TIMEOUT_S=120); a timeout ends as status "error"
 # cost: heavy -> skipped by the periodic health DAG (--skip-heavy), runs only after its own pipeline
+# suspended: "<motivo>" -> não executa; grava status skipped com o motivo (visível no Grafana). Temporário.
 
 defaults:
   severity: error
@@ -44,6 +45,7 @@ checks:
       SELECT COUNT(DISTINCT estado_sigla) FROM silver.anp_combustivel
       WHERE data_coleta >= (SELECT MAX(data_coleta) - 7 FROM silver.anp_combustivel)
     min: 27                   # every UF + DF must appear in the latest week
+    suspended: "timeout (>120 s) sem índice em silver.anp_combustivel(data_coleta); reativar após índice/migração do Postgres"
 
   - name: anp_invalid_prices
     pipeline: anp
@@ -65,6 +67,7 @@ checks:
     right_label: silver_rows
     compare_query: SELECT COUNT(*) FROM silver.anp_combustivel
     tolerance_pct: 0
+    suspended: "recalcula as views de staging sobre toda a bronze (>5 min); garantia coberta por unique+not_null em silver.chave"
 
   - name: anp_silver_to_gold_reconciliation
     pipeline: anp

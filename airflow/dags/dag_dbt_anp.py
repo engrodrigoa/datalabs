@@ -25,7 +25,8 @@ from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, 
 from pipelines.commons.audit_logger import consolidate_dag_audit_logs
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS, on_sla_miss
 from pipelines.observability.dag_helpers import (
-    DBT_BIN, DBT_PROJECT_DIR, dbt_command, elementary_report, health_checks, observed_module, observed_script,
+    DBT_BIN, DBT_PROJECT_DIR, dbt_command, dbt_load_config, elementary_report, health_checks, observed_module,
+    observed_script,
 )
 
 GOLD_ANP = Dataset("datalabs://gold/anp")
@@ -35,6 +36,7 @@ profile_config = ProfileConfig(
     target_name="dev",
     profiles_yml_filepath=f"{DBT_PROJECT_DIR}/profiles.yml",
 )
+DBT_LOAD = dbt_load_config()   # manifest (rápido) ou dbt ls (fallback)
 
 default_args = {
     "owner": "datalab",
@@ -81,12 +83,13 @@ with DAG(
     dbt_transformations = DbtTaskGroup(
         group_id="dbt_transformations",
         # dbt packages are installed once by airflow-init (`make dbt-deps` to refresh): DAG runs never touch the network
-        project_config=ProjectConfig(DBT_PROJECT_DIR, install_dbt_deps=False),
+        project_config=ProjectConfig(DBT_PROJECT_DIR, manifest_path=DBT_LOAD["manifest_path"], install_dbt_deps=False),
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
         # emit_datasets lives in RenderConfig since Cosmos 1.9 (operator_args is overridden): we publish
         # our own coarse dataset (publish_gold) instead of one dataset per dbt model
-        render_config=RenderConfig(select=["tag:anp"], exclude=["package:elementary"], emit_datasets=False),
+        render_config=RenderConfig(select=["tag:anp"], exclude=["package:elementary"], emit_datasets=False,
+                                   load_method=DBT_LOAD["load_method"]),
     )
 
     publish_gold = EmptyOperator(task_id="publish_gold", outlets=[GOLD_ANP], sla=timedelta(hours=3))
