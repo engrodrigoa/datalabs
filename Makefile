@@ -30,9 +30,9 @@ up-gpu: env ## + Ollama on an NVIDIA GPU
 down: ## stop everything (data is kept)
 	$(COMPOSE) --profile ai --profile tools down
 
-clean: ## stop and DELETE all local data (volumes + ./datalake)
+clean: ## stop and DELETE all local data (Docker volumes: Postgres, MinIO, models, Grafana...)
 	$(COMPOSE) --profile ai --profile tools down -v
-	rm -rf datalake airflow/logs/dag_id=* airflow/logs/scheduler
+	rm -rf datalake airflow/logs/dag_id=* airflow/logs/scheduler   # datalake/: pre-ADR-0008 bind mounts
 
 ps: ## container status / health
 	$(COMPOSE) ps
