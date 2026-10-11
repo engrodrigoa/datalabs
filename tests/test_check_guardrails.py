@@ -26,6 +26,13 @@ def _check(query, **kw):
     return {"name": "t", "pipeline": "test", "type": "threshold", "severity": "error", "query": query, "max": 10, **kw}
 
 
+def test_suspended_check_is_recorded_as_skipped_without_touching_the_db():
+    # conn=None: um check suspenso não pode executar nada no banco
+    r = checks.run_check(None, _check("SELECT 1", suspended="motivo do teste"))
+    assert r.status == "skipped"
+    assert r.message == "suspended: motivo do teste"
+
+
 @needs_db
 def test_slow_query_ends_as_error_and_the_connection_stays_usable():
     import psycopg2

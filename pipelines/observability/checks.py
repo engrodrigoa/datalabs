@@ -152,6 +152,10 @@ def run_check(conn, check: dict) -> CheckResult:
     def result(**kw) -> CheckResult:
         return CheckResult(**base, duration_ms=round((time.perf_counter() - started) * 1000, 1), **kw)
 
+    if check.get("suspended"):
+        # suspenso conscientemente: não executa, mas fica registrado (status skipped) no audit/Grafana
+        return result(status="skipped", message=f"suspended: {check['suspended']}")
+
     try:
         _apply_timeouts(conn, check)
         status, obs, exp, msg = _evaluate(conn, check)
