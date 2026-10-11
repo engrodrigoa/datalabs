@@ -70,6 +70,9 @@ services:
   postgres:
     image: pgvector/pgvector:pg15
     container_name: postgres
+    # Docker gives /dev/shm only 64 MB; Postgres uses it for parallel index builds (HNSW of the RAG):
+    # "could not resize shared memory segment ... No space left on device" without this
+    shm_size: 1g
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}

@@ -1,11 +1,12 @@
--- Vector store for the ANP RAG (multilingual-e5-base -> 768 dims)
+-- Vector store for the ANP RAG (default model multilingual-e5-small -> 384 dims).
+-- rag01 resizes the column on a model change (full rebuild), so the DDL only sets the initial size.
 CREATE TABLE IF NOT EXISTS ai.rag_context_anp (
     id               bigserial PRIMARY KEY,
     chunk_id         text,
     source_id        text,                  -- lineage: gold.ft_anp_combustiveis.id_fato
     chunk_text       text NOT NULL,
     metadata         jsonb,
-    embedding        vector(768),
+    embedding        vector(384),
     embedding_model  text,
     created_at       timestamptz NOT NULL DEFAULT now()
 );
@@ -20,7 +21,7 @@ BEGIN
     CREATE INDEX IF NOT EXISTS ix_rag_context_anp_hnsw
         ON ai.rag_context_anp USING hnsw (embedding vector_cosine_ops);
 EXCEPTION WHEN others THEN
-    RAISE NOTICE 'HNSW index not created (%). Recreate ai.rag_context_anp with embedding vector(768).', SQLERRM;
+    RAISE NOTICE 'HNSW index not created (%). Run rag01 with --full-refresh: it resizes the column to the model dimension.', SQLERRM;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_rag_context_anp_chunk ON ai.rag_context_anp (chunk_id);
 

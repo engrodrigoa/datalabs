@@ -23,7 +23,7 @@ metrics, per-step volumes, and data health checks, all in Grafana.
 
 | Area | Evidence in this repo |
 |---|---|
-| **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 3 dashboards as code, alerting to Telegram/Slack/Discord |
+| **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 5 dashboards as code, alerting to Telegram/Slack/Discord |
 | **Data quality** | dbt tests + **Elementary anomaly detection** (volume, freshness, column) + config-driven **freshness / volume / reconciliation** checks across layers |
 | **Reliability** | idempotent loads, late-arriving data handled, schema-drift detection, honest exit codes (no "green with no data") |
 | **AI data engineering** | embeddings → pgvector (HNSW), SQL-vs-vector query router, **golden-set evaluation as a quality gate** in the DAG |
@@ -58,7 +58,7 @@ flowchart LR
   ANP --> RUN --> PG
   RFB --> RUN --> MINIO --> PG
   PG --> DBT --> PG
-  PG -- gold --> EMB[embeddings<br/>e5-base] --> VEC --> RAG[SQL/vector router<br/>+ Ollama LLM]
+  PG -- gold --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[SQL/vector router<br/>+ Ollama LLM]
 
   subgraph Observability
     LOKI[Loki] --- GRAF[Grafana]
@@ -130,6 +130,8 @@ RAG context parity, RAG accuracy, and stale "running" steps (killed by OOM).
 | **Pipeline Health** (home) | success rate, failed steps, rows loaded, failing checks, data age · last run of every step · volume vs. baseline · check status · dbt/Elementary test results · slowest models · Airflow DAG runs and task failures · RAG accuracy per evaluation · error logs |
 | **Airflow Platform** | scheduler heartbeat, import errors, executor slots, task outcomes, p95 duration per DAG, schedule delay, DAG parse time |
 | **Logs Explorer** | filter by DAG / level / event / free text, parsed JSON events and raw logs |
+| **ANP (combustíveis)** | data product view: every load (files, rows, duration, slowest tasks) · batch profile per load (rows/price by product, coverage, volume vs. median) · health checks incl. suspended ones · dbt tests · weekly prices by UF (`gold.ag_anp_preco_semanal`) · RAG sync (full/incremental, embedding speed, parity, eval gate) |
+| **NF-e (IBS/CBS)** | batches (`ctrl.nfe_lote`), quarantine, dbt/Elementary tests, tax performance of the gold layer |
 
 Grafana reads Postgres through a **read-only role** (`grafana_ro`), and Airflow metadata lives in its own database.
 
@@ -178,7 +180,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 
 ### 🤖 RAG — fuel price assistant (`dag_rag_anp`, triggered when ANP gold changes)
 
-`gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings → pgvector HNSW → evaluation gate`
+`gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings (incremental by chunk_id) → pgvector HNSW → evaluation gate`
 
 * **Router:** questions with a CNPJ or an aggregation go to exact SQL on gold. Open questions go to vector search. The LLM is told which lines are exact ([ADR 0005](docs/adr/0005-rag-router.md)).
 * **Evaluation as a quality gate:** a golden set with SQL ground truth measures routing and value accuracy after every rebuild, and the task **fails below the threshold**. History lives in `ai.rag_eval_*` and is plotted in Grafana.

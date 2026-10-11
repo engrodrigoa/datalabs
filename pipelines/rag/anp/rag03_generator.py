@@ -14,6 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
+from pipelines.commons.ai.embeddings import MODEL_NAME as EMBEDDING_MODEL
 
 # roteador: SQL exato/agregado na gold quando a pergunta pede, vetorial (pgvector) no resto
 from pipelines.commons.ai.rag_query_router import carregar_dimensoes, recuperar_contexto
@@ -23,7 +24,7 @@ logger = get_logger("rag03_generator")
 # ==========================================
 # TARGETS & CONFIG
 # ==========================================
-MODELO_EMBEDDING = "intfloat/multilingual-e5-base"
+MODELO_EMBEDDING = EMBEDDING_MODEL   # one model for writing and querying (pipelines/commons/ai/embeddings.py)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 TOP_K = 5

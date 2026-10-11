@@ -15,6 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 from pipelines.commons.env_loader import CONSTRING
 from pipelines.commons.dw_client import test_pg_connection
 from pipelines.commons.logger import get_logger
+from pipelines.commons.ai.embeddings import MODEL_NAME as EMBEDDING_MODEL
 
 logger = get_logger("rag02_retriever")
 
@@ -23,7 +24,7 @@ logger = get_logger("rag02_retriever")
 # ==========================================
 SCHEMA = "ai"
 TABELA = "rag_context_anp"
-MODELO_NOME = "intfloat/multilingual-e5-base"
+MODELO_NOME = EMBEDDING_MODEL   # one model for writing and querying (pipelines/commons/ai/embeddings.py)
 TOP_K = 3  
 
 # ==========================================
