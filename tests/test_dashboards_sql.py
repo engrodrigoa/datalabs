@@ -21,6 +21,7 @@ def grafana_macros(sql: str) -> str:
     sql = re.sub(r"\$__timeFilter\(([^)]+)\)", r"\1 BETWEEN now() - interval '30 days' AND now()", sql)
     sql = re.sub(r"\$__timeGroupAlias\(([^,]+),\s*'?[^)']+'?\)", r"date_trunc('hour', \1) AS time", sql)
     sql = sql.replace("$pipeline", "'anp','rfb','rag','obs'")
+    sql = sql.replace("$uf", "'GO','SP'")
     return sql
 
 

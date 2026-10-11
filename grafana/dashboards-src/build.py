@@ -628,6 +628,245 @@ def nfe_fiscal() -> Board:
     return b
 
 
+# =====================================================================================================
+# 5) ANP — data product (operation · batch profile · quality · prices · RAG downstream)
+# =====================================================================================================
+ANP_STEPS = "pipeline = 'anp'"
+ANP_LANDING = "pipeline = 'anp' AND step IN ('landing_semanal', 'landing_mensal')"
+ANP_TESTS = "(test_unique_id ILIKE '%anp%' OR table_name IN ('dm_postos', 'dm_produtos'))"
+RAG_BUILD = "pipeline = 'rag' AND step = 'build_context'"
+DAY_S = 86400
+
+
+def anp_produto() -> Board:
+    b = Board("datalabs-anp", "DataLabs · ANP (combustíveis)",
+              "Produto de dados da ANP: cada carga (audit.pipeline_step_runs), perfil do lote, qualidade "
+              "(health checks + dbt/Elementary), preços (gold.ag_anp_preco_semanal) e o RAG que consome a gold.",
+              ["datalabs", "anp", "dbt", "rag"], refresh="5m", time_from="now-90d")
+    b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"},
+               {"title": "Logs explorer", "type": "link", "url": "/d/datalabs-logs", "icon": "doc"},
+               {"title": "Airflow · dag_dbt_anp", "type": "link", "url": "http://localhost:8080/dags/dag_dbt_anp/grid",
+                "targetBlank": True, "icon": "external link"}]
+    b.templating.append({
+        "name": "uf", "label": "UF", "type": "query", "datasource": DW,
+        "query": "SELECT DISTINCT uf FROM gold.ag_anp_preco_semanal ORDER BY 1",
+        "definition": "SELECT DISTINCT uf FROM gold.ag_anp_preco_semanal ORDER BY 1",
+        "multi": True, "includeAll": True, "current": {"text": ["All"], "value": ["$__all"]},
+        "refresh": 1, "sort": 1})
+
+    # ------------------------------------------------------------- operação
+    b.row("Operação — cada carga (audit.pipeline_step_runs)")
+    b.add(stat("Última carga", f"""
+        SELECT EXTRACT(EPOCH FROM now() - MAX(finished_at)) FROM audit.pipeline_step_runs
+        WHERE {ANP_LANDING} AND status = 'success'""", unit="s", decimals=0,
+               thresholds=[{"color": GOOD, "value": None}, {"color": WARN, "value": 8 * DAY_S},
+                           {"color": CRITICAL, "value": 15 * DAY_S}],
+               desc="Tempo desde o último landing com sucesso. Fonte semanal: alerta em 8 dias, crítico em 15."), 4, 4)
+    b.add(stat("Linhas na última carga", f"""
+        SELECT rows_out FROM audit.pipeline_step_runs
+        WHERE {ANP_LANDING} AND status = 'success' ORDER BY started_at DESC LIMIT 1""",
+               unit="short", color_mode="none"), 4, 4)
+    b.add(stat("Arquivos com falha", f"""
+        SELECT COALESCE(SUM(files_failed), 0) FROM audit.pipeline_step_runs
+        WHERE {ANP_LANDING} AND $__timeFilter(started_at)""", thresholds=ZERO_GOOD,
+               desc="Arquivos rejeitados no landing (ex.: schema drift) no período."), 4, 4)
+    b.add(stat("Sucesso dos steps", f"""
+        SELECT 100.0 * COUNT(*) FILTER (WHERE status IN ('success', 'skipped')) / NULLIF(COUNT(*), 0)
+        FROM audit.pipeline_step_runs WHERE {ANP_STEPS} AND status <> 'running' AND $__timeFilter(started_at)""",
+               unit="percent", decimals=1, thresholds=GREEN_RED_RATE), 4, 4)
+    b.add(stat("Última execução da DAG", """
+        SELECT EXTRACT(EPOCH FROM end_date - start_date) FROM dag_run
+        WHERE dag_id = 'dag_dbt_anp' AND end_date IS NOT NULL ORDER BY end_date DESC LIMIT 1""", ds=AF,
+               unit="s", decimals=0, color_mode="none", desc="Duração ponta a ponta do último run da dag_dbt_anp."), 4, 4)
+    b.add(stat("Coletas na gold", "SELECT COALESCE(SUM(qtd_coletas), 0) FROM gold.ag_anp_preco_semanal",
+               unit="short", color_mode="none",
+               desc="Lido do agregado (Σ qtd_coletas = linhas da fato; reconciliado por teste dbt)."), 4, 4)
+    b.add(table("Cargas recentes", f"""
+        SELECT started_at, step, status, ROUND(duration_s::numeric, 1) AS duracao_s,
+               files_ok AS arquivos_ok, files_failed AS arquivos_falha, rows_in AS linhas_lidas,
+               rows_out AS linhas_gravadas, rows_rejected AS rejeitadas, LEFT(error_message, 80) AS erro
+        FROM audit.pipeline_step_runs WHERE {ANP_LANDING} AND $__timeFilter(started_at)
+        ORDER BY started_at DESC LIMIT 30"""), 14, 8)
+    b.add(table("Tasks mais lentas da dag_dbt_anp (média no período)", """
+        SELECT task_id, COUNT(*) AS execucoes, ROUND(AVG(duration)::numeric, 1) AS media_s,
+               ROUND(MAX(duration)::numeric, 1) AS max_s, MAX(end_date) AS ultima
+        FROM task_instance
+        WHERE dag_id = 'dag_dbt_anp' AND state = 'success' AND duration IS NOT NULL AND $__timeFilter(start_date)
+        GROUP BY task_id ORDER BY media_s DESC LIMIT 12""", ds=AF, status_cols=(),
+                desc="Onde o tempo da DAG vai: landing, modelos dbt (Cosmos) e checks."), 10, 8)
+    b.add(timeseries("Duração por step", [sql_target(f"""
+        SELECT started_at AS time, step AS metric, duration_s AS value
+        FROM audit.pipeline_step_runs
+        WHERE ({ANP_STEPS} OR (pipeline = 'obs' AND step = 'health_checks_anp'))
+          AND status IN ('success', 'skipped') AND $__timeFilter(started_at)
+        ORDER BY 1""", fmt="time_series")], unit="s", draw="points",
+        desc="Cada ponto é uma execução. Ganhos de performance (índices, volumes) aparecem aqui."), 24, 7)
+
+    # ------------------------------------------------------------- perfil do lote
+    b.row("Perfil do lote — o dado mudou? (metrics → profile, gravado pelo landing)")
+    b.add(timeseries("Linhas por produto em cada carga", [sql_target(f"""
+        SELECT r.started_at AS time, p.key AS metric, p.value::numeric AS value
+        FROM audit.pipeline_step_runs r
+        CROSS JOIN LATERAL jsonb_each_text(r.metrics -> 'profile' -> 'rows_by_product') p
+        WHERE {ANP_LANDING} AND r.status = 'success' AND $__timeFilter(r.started_at)
+        ORDER BY 1""", fmt="time_series")], unit="short", draw="bars", stack=True), 12, 8)
+    b.add(timeseries("Preço médio por produto no lote (antes do dbt)", [sql_target(f"""
+        SELECT r.started_at AS time, p.key AS metric, p.value::numeric AS value
+        FROM audit.pipeline_step_runs r
+        CROSS JOIN LATERAL jsonb_each_text(r.metrics -> 'profile' -> 'avg_price_by_product') p
+        WHERE {ANP_LANDING} AND r.status = 'success' AND $__timeFilter(r.started_at)
+        ORDER BY 1""", fmt="time_series")], unit="currencyBRL", draw="points", min_zero=False,
+        overrides=[{"matcher": {"id": "byName", "options": "GLP"},
+                    "properties": [{"id": "custom.axisPlacement", "value": "right"}]}],
+        desc="Perfil calculado no landing: um salto aqui, antes de chegar à gold, indica arquivo anômalo. "
+             "GLP (botijão) no eixo da direita."), 12, 8)
+    b.add(timeseries("Cobertura por carga", [sql_target(f"""
+        SELECT r.started_at AS time,
+               (r.metrics -> 'profile' ->> 'municipios')::int AS municipios,
+               (r.metrics -> 'profile' ->> 'bandeiras')::int  AS bandeiras,
+               (r.metrics -> 'profile' ->> 'cnpjs')::int      AS cnpjs
+        FROM audit.pipeline_step_runs r
+        WHERE {ANP_LANDING} AND r.status = 'success' AND r.metrics ? 'profile' AND $__timeFilter(r.started_at)
+        ORDER BY 1""", fmt="time_series")], unit="short", draw="points",
+        overrides=[{"matcher": {"id": "byName", "options": "cnpjs"},
+                    "properties": [{"id": "custom.axisPlacement", "value": "right"}]}],
+        desc="Queda brusca de municípios/postos = arquivo incompleto. CNPJs no eixo da direita."), 12, 8)
+    b.add(table("Volume da última carga vs. mediana das 10 anteriores", f"""
+        SELECT step, last_run_at AS ultima_carga, last_rows_out AS linhas,
+               ROUND(median_rows_out::numeric) AS mediana_anteriores, deviation_pct AS desvio_pct
+        FROM obs.v_step_volume_baseline WHERE {ANP_STEPS} ORDER BY step""", status_cols=(),
+                overrides=[{"matcher": {"id": "byName", "options": "desvio_pct"},
+                            "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                                           {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                                               {"color": CRITICAL, "value": None}, {"color": WARN, "value": -50},
+                                               {"color": GOOD, "value": -20}, {"color": WARN, "value": 20},
+                                               {"color": CRITICAL, "value": 50}]}}]}]), 12, 8)
+
+    # ------------------------------------------------------------- qualidade
+    b.row("Qualidade — health checks (audit.data_quality_checks) e testes dbt (Elementary)")
+    b.add(stat("Checks com falha/erro", """
+        SELECT COUNT(*) FROM obs.v_check_last_result WHERE pipeline = 'anp' AND status IN ('fail', 'error')""",
+               thresholds=ZERO_GOOD), 6, 4)
+    b.add(stat("Checks em alerta", """
+        SELECT COUNT(*) FROM obs.v_check_last_result WHERE pipeline = 'anp' AND status = 'warn'""",
+               thresholds=ZERO_GOOD_WARN), 6, 4)
+    b.add(stat("Checks suspensos", """
+        SELECT COUNT(*) FROM obs.v_check_last_result
+        WHERE pipeline = 'anp' AND status = 'skipped' AND message LIKE 'suspended:%'""",
+               thresholds=ZERO_GOOD_WARN, desc="Suspensão explícita no checks.yml (com motivo). Dívida a quitar."), 6, 4)
+    b.add(stat("Testes dbt ANP com falha", f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) status
+            FROM elementary.elementary_test_results WHERE {ANP_TESTS}
+            ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status IN ('fail', 'error')""", thresholds=ZERO_GOOD), 6, 4)
+    b.add(table("Health checks — último resultado", """
+        SELECT check_name AS check, check_type AS tipo, status, severity AS severidade,
+               observed_value AS observado, expected AS esperado, LEFT(message, 90) AS mensagem, checked_at
+        FROM obs.v_check_last_result WHERE pipeline = 'anp' ORDER BY status, check_name"""), 14, 8)
+    b.add(table("Testes dbt ANP — último resultado não aprovado", f"""
+        SELECT COALESCE(test_short_name, test_type) AS teste, table_name AS modelo, column_name AS coluna,
+               status, failures AS registros, detected_at
+        FROM (SELECT DISTINCT ON (test_unique_id, column_name, test_sub_type) *
+              FROM elementary.elementary_test_results WHERE {ANP_TESTS}
+              ORDER BY test_unique_id, column_name, test_sub_type, detected_at DESC) t
+        WHERE status <> 'pass' ORDER BY failures DESC NULLS LAST"""), 10, 8)
+
+    # ------------------------------------------------------------- negócio
+    b.row("Preços — gold.ag_anp_preco_semanal (filtro: UF)")
+    b.add(stat("Semana mais recente", """
+        SELECT EXTRACT(EPOCH FROM MAX(semana)::timestamp) * 1000 FROM gold.ag_anp_preco_semanal""",
+               unit="dateTimeAsLocalNoDateIfToday", color_mode="none"), 6, 4)
+    b.add(stat("Postos na última semana", """
+        SELECT SUM(qtd_postos) FROM (
+            SELECT uf, MAX(qtd_postos) AS qtd_postos FROM gold.ag_anp_preco_semanal
+            WHERE uf IN ($uf) AND semana = (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal) GROUP BY uf) t""",
+               unit="short", color_mode="none",
+               desc="Maior nº de postos entre os produtos de cada UF (um posto vende vários produtos)."), 6, 4)
+    b.add(stat("Gasolina — preço médio (última semana)", """
+        SELECT SUM(preco_medio * qtd_coletas) / NULLIF(SUM(qtd_coletas), 0) FROM gold.ag_anp_preco_semanal
+        WHERE produto = 'GASOLINA' AND uf IN ($uf)
+          AND semana = (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal)""",
+               unit="currencyBRL", decimals=3, color_mode="none",
+               desc="Média ponderada pelas coletas (nunca a média das médias por UF)."), 6, 4)
+    b.add(stat("Etanol / gasolina", """
+        WITH s AS (SELECT produto, SUM(preco_medio * qtd_coletas) / NULLIF(SUM(qtd_coletas), 0) AS p
+                   FROM gold.ag_anp_preco_semanal
+                   WHERE produto IN ('ETANOL', 'GASOLINA') AND uf IN ($uf)
+                     AND semana = (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal) GROUP BY produto)
+        SELECT 100 * MAX(p) FILTER (WHERE produto = 'ETANOL') / NULLIF(MAX(p) FILTER (WHERE produto = 'GASOLINA'), 0)
+        FROM s""", unit="percent", decimals=1,
+               thresholds=[{"color": GOOD, "value": None}, {"color": NEUTRAL, "value": 70}],
+               desc="Regra de bolso: abaixo de 70% o etanol compensa."), 6, 4)
+    b.add(timeseries("Preço médio semanal por produto", [sql_target("""
+        SELECT semana::timestamp AS time, produto AS metric,
+               SUM(preco_medio * qtd_coletas) / NULLIF(SUM(qtd_coletas), 0) AS value
+        FROM gold.ag_anp_preco_semanal
+        WHERE uf IN ($uf) AND $__timeFilter(semana)
+        GROUP BY 1, 2 ORDER BY 1""", fmt="time_series")], unit="currencyBRL", min_zero=False,
+        overrides=[{"matcher": {"id": "byName", "options": "GLP"},
+                    "properties": [{"id": "custom.axisPlacement", "value": "right"}]}],
+        desc="GLP (botijão 13 kg) no eixo da direita."), 24, 8)
+    b.add(table("Maiores variações: última semana vs. anterior", """
+        WITH s AS (
+            SELECT uf, produto, semana, preco_medio,
+                   LAG(preco_medio) OVER (PARTITION BY uf, produto ORDER BY semana) AS anterior,
+                   ROW_NUMBER() OVER (PARTITION BY uf, produto ORDER BY semana DESC) AS rn
+            FROM gold.ag_anp_preco_semanal
+            WHERE uf IN ($uf) AND semana >= (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal) - 7)
+        SELECT uf, produto, semana, ROUND(preco_medio::numeric, 3) AS preco, ROUND(anterior::numeric, 3) AS anterior,
+               ROUND((100 * (preco_medio / anterior - 1))::numeric, 2) AS variacao_pct
+        FROM s WHERE rn = 1 AND anterior > 0
+        ORDER BY ABS(preco_medio / anterior - 1) DESC LIMIT 15""", status_cols=(),
+                overrides=[{"matcher": {"id": "byName", "options": "variacao_pct"},
+                            "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                                           {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                                               {"color": GOOD, "value": None}, {"color": WARN, "value": 2},
+                                               {"color": CRITICAL, "value": 5}]}}]}]), 12, 9)
+    b.add(table("Preço médio por UF (última semana)", """
+        SELECT uf,
+               ROUND(AVG(preco_medio) FILTER (WHERE produto = 'GASOLINA')::numeric, 3)   AS gasolina,
+               ROUND(AVG(preco_medio) FILTER (WHERE produto = 'ETANOL')::numeric, 3)     AS etanol,
+               ROUND(AVG(preco_medio) FILTER (WHERE produto = 'DIESEL S10')::numeric, 3) AS diesel_s10,
+               ROUND(AVG(preco_medio) FILTER (WHERE produto = 'GNV')::numeric, 3)        AS gnv,
+               ROUND(AVG(preco_medio) FILTER (WHERE produto = 'GLP')::numeric, 2)        AS glp,
+               SUM(qtd_coletas) AS coletas
+        FROM gold.ag_anp_preco_semanal
+        WHERE uf IN ($uf) AND semana = (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal)
+        GROUP BY uf ORDER BY gasolina DESC NULLS LAST""", status_cols=()), 12, 9)
+
+    # ------------------------------------------------------------- RAG
+    b.row("Downstream — RAG sobre a gold (ai.rag_context_anp)")
+    b.add(stat("Último sync do vector store", f"""
+        SELECT COALESCE(metrics ->> 'sync_mode', 'full (legado)') FROM audit.pipeline_step_runs
+        WHERE {RAG_BUILD} AND status IN ('success', 'skipped') ORDER BY started_at DESC LIMIT 1""",
+               color_mode="none", desc="incremental = só o delta da gold; full = store vazio, troca de modelo ou pedido."), 6, 4)
+    b.add(stat("Vetores no store", "SELECT COUNT(*) FROM ai.rag_context_anp", unit="short", color_mode="none"), 6, 4)
+    b.add(stat("Paridade gold (GO) ↔ vetores", """
+        SELECT (SELECT COUNT(*) FROM ai.rag_context_anp)
+             - (SELECT COALESCE(SUM(qtd_coletas), 0) FROM gold.ag_anp_preco_semanal WHERE uf = 'GO')""",
+               thresholds=[{"color": WARN, "value": None}, {"color": GOOD, "value": 0}, {"color": WARN, "value": 1}],
+               desc="Vetores − coletas de GO na gold. 0 = o RAG enxerga exatamente a gold."), 6, 4)
+    b.add(stat("Acurácia do último gate", """
+        SELECT 100 * LEAST(acuracia_roteamento, acuracia_valor) FROM ai.rag_eval_summary
+        ORDER BY executado_em DESC LIMIT 1""", unit="percent", decimals=1, thresholds=GREEN_RED_RATE,
+               desc="Menor entre roteamento e valor no golden set (gate: 90%)."), 6, 4)
+    b.add(table("Execuções do build_context", f"""
+        SELECT started_at, status, ROUND(duration_s::numeric) AS duracao_s,
+               metrics ->> 'sync_mode' AS modo, (metrics ->> 'chunks_new')::int AS novos,
+               (metrics ->> 'chunks_stale')::int AS obsoletos, (metrics ->> 'embed_rows_per_s')::numeric AS linhas_por_s,
+               metrics ->> 'model' AS modelo, LEFT(error_message, 60) AS erro
+        FROM audit.pipeline_step_runs WHERE {RAG_BUILD} AND $__timeFilter(started_at)
+        ORDER BY started_at DESC LIMIT 20"""), 14, 8)
+    b.add(timeseries("Velocidade de embedding por modelo", [sql_target(f"""
+        SELECT started_at AS time, metrics ->> 'model' AS metric, (metrics ->> 'embed_rows_per_s')::numeric AS value
+        FROM audit.pipeline_step_runs
+        WHERE {RAG_BUILD} AND metrics ? 'embed_rows_per_s' AND $__timeFilter(started_at) ORDER BY 1""",
+        fmt="time_series")], draw="points",
+        desc="Linhas/s no cálculo dos embeddings (CPU). e5-base ≈ 6-7, e5-small ≈ 26 no lab."), 10, 8)
+    return b
+
+
 if __name__ == "__main__":
-    for board in (pipeline_health(), airflow_platform(), logs_explorer(), nfe_fiscal()):
+    for board in (pipeline_health(), airflow_platform(), logs_explorer(), nfe_fiscal(), anp_produto()):
         print("wrote", board.write())
