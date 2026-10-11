@@ -58,7 +58,7 @@ x-airflow-common: &airflow-common
     - ./scripts:/opt/airflow/scripts:ro
     - ./datasource:/mnt/datasource
     - ./.env:/opt/airflow/.env:ro
-    - ./datalake/hf_cache:/opt/airflow/hf_cache
+    - hf_cache:/opt/airflow/hf_cache              # embedding models (Hugging Face)
   depends_on: &airflow-depends
     postgres:
       condition: service_healthy
@@ -81,7 +81,7 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
-      - ./datalake/postgres_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data          # Docker volume, not a Windows bind mount (ADR 0008)
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
       # NF-e: a ingestão é SQL (pg_read_file) -> o Postgres lê os lotes no MESMO caminho do Airflow
       - ./datasource/nfe:/mnt/datasource/nfe:ro
@@ -105,7 +105,7 @@ services:
       - "9005:9000"
       - "9091:9001"
     volumes:
-      - ./datalake/minio_data:/data
+      - minio_data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -127,7 +127,7 @@ services:
                  /mnt/datasource/nfe/inbox /mnt/datasource/nfe/processando /mnt/datasource/nfe/processados \
                  /opt/airflow/pipelines/dbt_projects/logs/elementary_logs
         chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/logs /opt/airflow/plugins /opt/airflow/audit_logs \
-                 /mnt/datasource /opt/airflow/pipelines/dbt_projects
+                 /mnt/datasource /opt/airflow/pipelines/dbt_projects /opt/airflow/hf_cache
         # db migrate + admin user (official entrypoint behaviour)
         /entrypoint airflow version
         # dbt packages once, so Cosmos never runs `dbt deps` while parsing DAGs
@@ -264,7 +264,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ./datalake/ollama_data:/root/.ollama
+      - ollama_data:/root/.ollama
     restart: unless-stopped
 
   ollama-pull:
@@ -287,8 +287,14 @@ services:
       - "8081:8080"
     restart: unless-stopped
 
-# named volumes: Docker handles ownership for images that do not run as root
+# Stateful services live in Docker volumes (ADR 0008): on Docker Desktop/WSL2 a Windows bind mount was
+# ~260x slower for small-file I/O. Bind mounts are kept only for code and input files (./datasource).
+# `make clean` deletes these volumes; everything is rebuilt by the pipelines (see docs/runbook-rebuild.md).
 volumes:
+  pg_data:
+  minio_data:
+  hf_cache:
+  ollama_data:
   dbt_vol:
   grafana_data:
   prometheus_data:

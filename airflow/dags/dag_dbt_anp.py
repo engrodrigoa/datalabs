@@ -88,8 +88,11 @@ with DAG(
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
         # emit_datasets lives in RenderConfig since Cosmos 1.9 (operator_args is overridden): we publish
         # our own coarse dataset (publish_gold) instead of one dataset per dbt model
+        # tests with 2+ parents (relationships fact->dim, ag_anp_preco_semanal x fact reconciliation) become
+        # their own tasks, run after ALL parents; otherwise Cosmos attaches them to one parent and they can run
+        # before the other model exists ("relation gold.ag_anp_preco_semanal does not exist")
         render_config=RenderConfig(select=["tag:anp"], exclude=["package:elementary"], emit_datasets=False,
-                                   load_method=DBT_LOAD["load_method"]),
+                                   load_method=DBT_LOAD["load_method"], should_detach_multiple_parents_tests=True),
     )
 
     publish_gold = EmptyOperator(task_id="publish_gold", outlets=[GOLD_ANP], sla=timedelta(hours=3))

@@ -51,6 +51,7 @@ with DAG(
         profile_config=profile_config,
         execution_config=ExecutionConfig(dbt_executable_path=DBT_BIN),
         render_config=RenderConfig(select=["tag:rfb"], exclude=["package:elementary"], load_method=DBT_LOAD["load_method"],
+                                   should_detach_multiple_parents_tests=True,  # multi-parent tests after all parents
                                    emit_datasets=False),
     )
 
