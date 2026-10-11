@@ -100,7 +100,7 @@ checks:
     query: SELECT MAX(to_date(referencia_mes::text, 'YYYYMM')) FROM landing_rfb.estabelecimentos
     warn_after_hours: 1488    # ~62 days
     error_after_hours: 2232   # ~93 days
-    suspended: "health checks em validação"
+   
 
   - name: rfb_suspicious_rows_pct
     cost: heavy               # full scan of a ~60M-row table: runs after the RFB load, not every 6h
