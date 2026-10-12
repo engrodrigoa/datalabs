@@ -34,6 +34,9 @@ grew with history, not with what changed: a weekly ANP file adds a few thousand 
 
 **Measured (lab, full rebuild of 32,097 GO chunks with e5-small):** embedding 2,430 s (13.2 rows/s:
 real chunks are ~2x longer than the benchmark sentence, which ran at 26.5 rows/s), `COPY` 336 s.
+After moving Postgres to a Docker volume ([ADR 0008](0008-stateful-services-in-docker-volumes.md)), the same
+rebuild measured: embedding 2,763 s (11.6 rows/s), `COPY` 9.6 s, HNSW build 13.9 s. Evaluation gate:
+100% routing and 100% value accuracy, parity 32,097 = 32,097.
 
 **Consequences.** A normal run embeds only the weekly delta (minutes). Changing the model
 or the chunk template (`CHUNK_TEMPLATE_VERSION`) costs one full rebuild, by design. The

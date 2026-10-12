@@ -25,8 +25,9 @@ metrics, per-step volumes, and data health checks, all in Grafana.
 |---|---|
 | **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 5 dashboards as code, alerting to Telegram/Slack/Discord |
 | **Data quality** | dbt tests + **Elementary anomaly detection** (volume, freshness, column) + config-driven **freshness / volume / reconciliation** checks across layers |
-| **Reliability** | idempotent loads, late-arriving data handled, schema-drift detection, honest exit codes (no "green with no data") |
-| **AI data engineering** | embeddings → pgvector (HNSW), SQL-vs-vector query router, **golden-set evaluation as a quality gate** in the DAG |
+| **Reliability** | idempotent and resumable loads (a re-run skips what already landed), late-arriving data handled, schema-drift detection, honest exit codes (no "green with no data") |
+| **AI data engineering** | **incremental embeddings** (deterministic chunk ids, set-difference sync) → pgvector (HNSW), SQL-vs-vector query router, **golden-set evaluation as a quality gate** in the DAG |
+| **Performance engineering** | bottlenecks measured, fixed and recorded in ADRs: stateful services on Docker volumes (health checks 7 min → 2 s), Cosmos from a pre-built dbt manifest, RFB read as a stream from the ZIP (~35 s per file instead of extracting multi-GB CSVs at ~3 MB/s) |
 | **DataOps** | CI runs lint, unit tests, a real Postgres + dbt build + checks, and executes every Grafana query; pinned images; one-command setup |
 | **Data modeling** | medallion layers (landing → staging → silver → gold), star schemas for ANP and RFB, incremental models |
 
@@ -123,6 +124,10 @@ that silently stops publishing is detected even when no DAG runs. Coverage inclu
 coverage, invalid prices, orphan facts, stg→silver→gold reconciliation, suspicious RFB rows, duplicate keys,
 RAG context parity, RAG accuracy, and stale "running" steps (killed by OOM).
 
+Each check also carries guardrails: `timeout_s` (a slow query ends as `error`, never hangs the DAG),
+`cost: heavy` (full scans run after their own pipeline, not in the 6-hourly sweep) and
+`suspended: "<reason>"` (temporarily recorded as `skipped` with the reason, visible in Grafana).
+
 ### Dashboards (versioned as code: `grafana/dashboards-src/build.py`)
 
 | Dashboard | Content |
@@ -164,6 +169,8 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 `WebDAV ZIPs → bronze parquet (MinIO) → silver parquet (typed, audited) → DW landing (COPY) → dbt gold`
 
 * Tens of millions of rows on a single node with Polars + PyArrow batches ([ADR 0002](docs/adr/0002-polars-single-node.md)).
+* **CSV read as a stream straight from the ZIP:** nothing is extracted to disk. With `dev_mode` (500k rows per big entity), the reader stops at the limit without decompressing the rest. Extracting a 2.2 GB ZIP to the bind mount ran at ~3 MB/s before reading a single row. Each Estabelecimentos file now loads in about 35 s.
+* **Resumable bronze:** a file counts as done only when its parquet exists in MinIO, and the upload happens only after the whole file was read. A re-run continues from the first missing file.
 * Shifted-column detection (`_suspeita_deslocamento`) is tracked as a % metric with a threshold.
 * Download → bronze → silver → landing with parallel entities (bounded by `max_active_tasks`), with the `ref_month` parameter set from the UI.
 * Dataset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
@@ -184,8 +191,26 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 
 * **Router:** questions with a CNPJ or an aggregation go to exact SQL on gold. Open questions go to vector search. The LLM is told which lines are exact ([ADR 0005](docs/adr/0005-rag-router.md)).
 * **Evaluation as a quality gate:** a golden set with SQL ground truth measures routing and value accuracy after every rebuild, and the task **fails below the threshold**. History lives in `ai.rag_eval_*` and is plotted in Grafana.
-* **Bulk vector load:** the HNSW index is dropped and rebuilt around the COPY. On 8k vectors this is about 5× faster than inserting into a live index (104 s → 19 s, timings recorded in the step metrics).
+* **Incremental embeddings** ([ADR 0007](docs/adr/0007-rag-incremental-embeddings.md)): each chunk has a deterministic id (`id_fato:md5(text)`). A run embeds only `gold − store` and deletes `store − gold`, and a run with nothing new exits as *skipped* without loading the model. A full rebuild happens only on an empty store, a model change or an explicit `--full-refresh`.
+* **One transaction per sync:** delete/resize, `COPY` and the HNSW build commit together, so a failure rolls back to the previous store. A store that is in sync but missing its index rebuilds only the index.
+* **CPU-sized model:** `multilingual-e5-small` (384 dims), one module defines it for writing and querying. A full rebuild of 32,097 chunks takes ~46 min of embedding, 9.6 s of `COPY` and 14 s of HNSW build. The weekly delta takes minutes.
 * Interactive assistant (local LLM through Ollama): `python pipelines/rag/anp/rag03_generator.py`.
+
+---
+
+## Measured on the lab (Docker Desktop on Windows, single machine)
+
+| What | Before | After | Fix |
+|---|---|---|---|
+| ANP health checks | ~7 min, 2 timeouts | 2.0 s | Postgres on a Docker volume ([ADR 0008](docs/adr/0008-stateful-services-in-docker-volumes.md)) |
+| stg → silver reconciliation (all bronze) | > 5 min (timeout) | 35 s | same |
+| `COPY` of 32k vectors | 336 s | 9.6 s | same |
+| DAG parsing with Cosmos | `dbt ls` at parse time, 120 s timeouts (DAGs disappearing) | manifest read, no `dbt` call | `dbt parse` once at init, `LoadMode.DBT_MANIFEST` |
+| `dbt deps` | every run, often timing out | once at init | packages on a Docker volume |
+| RFB ZIP → bronze, `dev_mode` (25 files, 10M rows) | first file still extracting at ~3 MB/s | 8 min | stream from the ZIP instead of extracting |
+| RAG embedding | e5-base, ~6-7 rows/s, hit the 2 h timeout | e5-small ~12 rows/s, incremental | [ADR 0007](docs/adr/0007-rag-incremental-embeddings.md) |
+
+After a wipe ([runbook](docs/runbook-rebuild.md)): `dag_rfb_dw_dbt` in 9 min (5M establishments, landing = gold reconciled), ANP 789,803 rows silver = gold, RAG eval gate 100% routing / 100% value accuracy.
 
 ---
 
@@ -207,6 +232,10 @@ make demo      # unpauses the DAGs and runs the ANP pipeline with real data
 | Prometheus | http://localhost:9090 | |
 
 Credentials are in `.env`.
+
+> **Changed a dbt model?** Run `make dbt-parse`. The DAGs render from the dbt manifest generated at startup, so a new or renamed model only shows up in Airflow after the manifest is regenerated.
+>
+> **Rebuild from zero:** `make clean && make up` and follow [docs/runbook-rebuild.md](docs/runbook-rebuild.md). Every table is derived from public sources or generators.
 
 <details>
 <summary>Without make</summary>
@@ -256,6 +285,7 @@ grafana/
   dashboards-src/build.py     dashboards as code  ->  grafana/dashboards/*.json
 tests/                        unit tests + dashboard SQL validation
 docs/adr/                     architecture decision records
+docs/nfe/  docs/runbook-rebuild.md   NF-e design notes · rebuild-from-zero runbook
 scripts/                      sample data generator
 ```
 
@@ -275,15 +305,26 @@ scripts/                      sample data generator
 * [0004 — Object storage after MinIO's image freeze](docs/adr/0004-object-storage.md)
 * [0005 — RAG over tabular data: SQL first, vectors second](docs/adr/0005-rag-router.md)
 * [0006 — NF-e: batch-level control, immutable bronze, SQL-only transformation](docs/adr/0006-nfe-incremental-lotes.md)
+* [0007 — RAG: incremental embeddings and a CPU-sized model](docs/adr/0007-rag-incremental-embeddings.md)
+* [0008 — Stateful services in Docker volumes, not Windows bind mounts](docs/adr/0008-stateful-services-in-docker-volumes.md)
 
 ## Roadmap
 
-- [ ] Grafana Alloy + Loki 3 (structured metadata for `run_id`)
+**RAG (next focus)**
+- [ ] Retrieval quality: hybrid search (Postgres full-text + vectors with reciprocal rank fusion), per-station chunks, a similarity threshold that answers "not in the data"
+- [ ] Retrieval metrics in the eval gate (recall@k, MRR), answer-level evaluation (faithfulness), known gaps first: name queries (precision@5 = 0) and out-of-scope questions
+- [ ] Unstructured corpus (ANP resolutions, RFB manuals) with document-level chunking and metadata filters
+
+**Platform**
+- [ ] Airflow logs on a Docker volume + Grafana Alloy + Loki 3 (Promtail is EOL and polls the bind mount)
+- [ ] RFB download that tolerates an unavailable source when the month is already complete on disk
 - [ ] OpenLineage → Marquez lineage across Airflow and dbt
-- [ ] Unstructured corpus for RAG (ANP resolutions, RFB manuals) + answer-level evaluation
 - [ ] Data contracts published from dbt (`contract: enforced`) for the gold layer
 - [ ] Airflow 3 migration
 - [ ] Public read-only demo (Streamlit over a gold snapshot)
+
+**Scale (dedicated server)**
+- [ ] Full RFB load with reference history and SCD2 by snapshot diff (row hash per CNPJ, validity from the reference date)
 
 ## Author
 
