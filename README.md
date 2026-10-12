@@ -172,6 +172,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * **CSV read as a stream straight from the ZIP:** nothing is extracted to disk. With `dev_mode` (500k rows per big entity), the reader stops at the limit without decompressing the rest. Extracting a 2.2 GB ZIP to the bind mount ran at ~3 MB/s before reading a single row. Each Estabelecimentos file now loads in about 35 s.
 * **Resumable bronze:** a file counts as done only when its parquet exists in MinIO, and the upload happens only after the whole file was read. A re-run continues from the first missing file.
 * Shifted-column detection (`_suspeita_deslocamento`) is tracked as a % metric with a threshold.
+* **Download driven by a file contract** ([ADR 0009](docs/adr/0009-rfb-source-contract.md)): the source stopped listing its folders and answers intermittently under bursts, so the step fetches the 37 files every month must have, with retries and backoff, accepts a local file only if it is a readable ZIP of the announced size, and names the cause when it fails (link rotated, month not published yet, files that never came). The share link is public configuration (`RFB_SHARE_URL`), so a fresh clone needs no manual step.
 * Download → bronze → silver → landing with parallel entities (bounded by `max_active_tasks`), with the `ref_month` parameter set from the UI.
 * Dataset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
 
@@ -348,6 +349,7 @@ scripts/                      sample data generator
 * [0006 — NF-e: batch-level control, immutable bronze, SQL-only transformation](docs/adr/0006-nfe-incremental-lotes.md)
 * [0007 — RAG: incremental embeddings and a CPU-sized model](docs/adr/0007-rag-incremental-embeddings.md)
 * [0008 — Stateful services in Docker volumes, not Windows bind mounts](docs/adr/0008-stateful-services-in-docker-volumes.md)
+* [0009 — RFB download driven by a file contract, not by the source's listing](docs/adr/0009-rfb-source-contract.md)
 
 ## Roadmap
 

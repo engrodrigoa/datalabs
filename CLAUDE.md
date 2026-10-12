@@ -39,7 +39,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0008), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0009), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -113,7 +113,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **Secrets only in `.env`** (gitignored, together with every `.env.*` except `.env.example`). `make env` generates
   random passwords. Never commit, print, log or paste secret values; never read `.env` to answer a question —
   `.env.example` documents every key. Sensitive keys: `DB_PASSWORD`, `GRAFANA_DB_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`,
-  `MINIO_*`, `RFB_SHARE_TOKEN`, `TELEGRAM_BOT_TOKEN`, `ALERT_WEBHOOK_URL`.
+  `MINIO_*`, `TELEGRAM_BOT_TOKEN`, `ALERT_WEBHOOK_URL`. `RFB_SHARE_URL` is a public link (configuration, not a secret).
 - `profiles.yml` is committed because it only reads `env_var(...)`. Keep it free of literals.
 - **Least privilege:** Grafana uses the read-only role `grafana_ro`. A new schema that Grafana reads must be added
   to the grant loop in `infra/postgres/init/00_bootstrap.sh`. Airflow metadata stays in its own `airflow` database.
@@ -151,7 +151,6 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - Grafana `$uf` variable error on the ANP dashboard; `force_transform` param on `dag_dbt_anp`.
 - Airflow logs on a Docker volume + Grafana Alloy (Promtail CPU on the bind mount).
-- RFB download tolerant of an unavailable WebDAV source when the month is complete on disk.
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold, recall@k / MRR in the eval gate.
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
