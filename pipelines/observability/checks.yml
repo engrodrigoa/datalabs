@@ -4,6 +4,7 @@
 # timeout_s: per-check statement_timeout (default OBS_CHECK_TIMEOUT_S=120); a timeout ends as status "error"
 # cost: heavy -> skipped by the periodic health DAG (--skip-heavy), runs only after its own pipeline
 # suspended: "<motivo>" -> não executa; grava status skipped com o motivo (visível no Grafana). Temporário.
+# requires: ai -> skipped (with the reason) when the image was built without INSTALL_AI=true
 
 defaults:
   severity: error
@@ -147,6 +148,7 @@ checks:
   # ------------------------------------------------------------------ RAG (AI layer)
   - name: rag_context_parity
     pipeline: rag
+    requires: ai
     dataset: ai.rag_context_anp
     type: reconciliation
     severity: warn
@@ -161,6 +163,7 @@ checks:
 
   - name: rag_routing_accuracy_pct
     pipeline: rag
+    requires: ai
     dataset: ai.rag_eval_summary
     type: threshold
     severity: warn
@@ -169,6 +172,7 @@ checks:
 
   - name: rag_value_accuracy_pct
     pipeline: rag
+    requires: ai
     dataset: ai.rag_eval_summary
     type: threshold
     severity: warn
