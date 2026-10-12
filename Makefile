@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help elementary env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
+.PHONY: help preflight doctor creds models models-export models-import elementary env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -15,7 +15,23 @@ env: ## create .env with random passwords (keeps an existing one)
 	    v=$$(openssl rand -hex 12); sed -i.bak "s|^$$k=.*|$$k=$$v|" .env; done && \
 	  sed -i.bak "s|^MINIO_SECRET_KEY=.*|MINIO_SECRET_KEY=$$(grep ^MINIO_ROOT_PASSWORD= .env | cut -d= -f2)|" .env && \
 	  sed -i.bak "s|^AIRFLOW_UID=.*|AIRFLOW_UID=$$(id -u)|" .env && rm -f .env.bak && \
-	  echo ".env created (passwords randomised)" )
+	  echo ".env created (passwords randomised)" && $(MAKE) --no-print-directory creds )
+
+creds: ## logins for THIS machine (from .env; passwords are random per machine)
+	@test -f .env || { echo "no .env yet: make env"; exit 1; }
+	@v() { grep -E "^$$1=" .env | cut -d= -f2-; }; \
+	 echo ""; \
+	 echo "  Airflow  http://localhost:8080  $$(v AIRFLOW_ADMIN_USER) / $$(v AIRFLOW_ADMIN_PASSWORD)"; \
+	 echo "  Grafana  http://localhost:3000  $$(v GRAFANA_ADMIN_USER) / $$(v GRAFANA_ADMIN_PASSWORD)"; \
+	 echo "  S3 (Silo) console  http://localhost:9091  $$(v MINIO_ROOT_USER) / $$(v MINIO_ROOT_PASSWORD)"; \
+	 echo "  Your browser may autofill passwords saved for localhost on ANOTHER machine: ignore them."; \
+	 echo ""
+
+preflight: env ## check the machine before `make up` (Docker, memory, DNS/TLS from a container, pinned images)
+	./scripts/preflight.sh
+
+doctor: ## check a running stack for silent failures (empty bind mounts, missing models)
+	./scripts/doctor.sh
 
 up: env ## start core + observability stack
 	$(COMPOSE) up -d --build
@@ -45,7 +61,12 @@ demo: ## run the ANP pipeline end to end (real data from gov.br/anp)
 	$(AF) airflow dags unpause dag_dbt_anp
 	$(AF) airflow dags unpause dag_observability_health
 	$(AF) airflow dags unpause dag_rag_anp
-	$(AF) airflow dags trigger dag_dbt_anp
+	@# unpausing already schedules the latest interval: trigger only if no run shows up (no duplicate run)
+	@for i in 1 2 3 4 5 6; do \
+	  $(AF) airflow dags list-runs -d dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp && break; sleep 5; done; \
+	 if $(AF) airflow dags list-runs -d dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp; then \
+	   echo "dag_dbt_anp already has a run (scheduled on unpause): not triggering a duplicate"; \
+	 else $(AF) airflow dags trigger dag_dbt_anp; fi
 	@echo "follow it at http://localhost:8080  ·  results at http://localhost:3000"
 
 DBT := cd /opt/airflow/pipelines/dbt_projects && /opt/airflow/dbt_venv/bin/dbt
@@ -72,6 +93,18 @@ dashboards: ## regenerate Grafana dashboards from grafana/dashboards-src/build.p
 
 elementary: ## create/refresh the Elementary tables (airflow-init does it once on an empty database)
 	$(AF) bash -c "$(DBT) run --select elementary --profiles-dir ."
+
+models: ## download the embedding model into the hf_cache volume now (fails early instead of inside the RAG DAG)
+	$(AF) python -c "from pipelines.commons.ai.embeddings import MODEL_NAME, load_model; load_model(); print('cached:', MODEL_NAME)"
+
+models-export: ## pack the cached models (hf_cache volume) into ./hf_cache.tgz, to carry to a restricted network
+	docker run --rm -v datalabs_hf_cache:/c:ro -v "$(CURDIR)":/out alpine:3.20 tar czf /out/hf_cache.tgz -C /c .
+	@ls -lh hf_cache.tgz
+
+models-import: ## restore ./hf_cache.tgz into the hf_cache volume (then set HF_HUB_OFFLINE=1 in .env)
+	@test -f hf_cache.tgz || { echo "hf_cache.tgz not found (make models-export on a machine with access)"; exit 1; }
+	docker volume create datalabs_hf_cache >/dev/null
+	docker run --rm -v datalabs_hf_cache:/c -v "$(CURDIR)":/in:ro alpine:3.20 sh -c "tar xzf /in/hf_cache.tgz -C /c && chown -R $$(id -u):0 /c"
 
 sample-data: ## offline synthetic ANP files (no internet needed)
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp
@@ -109,6 +142,6 @@ urls:
 	@echo ""
 	@echo "  Airflow     http://localhost:8080"
 	@echo "  Grafana     http://localhost:3000   (DataLabs · Pipeline Health · NF-e: /d/datalabs-nfe)"
-	@echo "  MinIO       http://localhost:9091"
+	@echo "  S3 (Silo)   http://localhost:9091"
 	@echo "  Prometheus  http://localhost:9090"
-	@echo "  credentials: .env"
+	@echo "  logins: make creds"
