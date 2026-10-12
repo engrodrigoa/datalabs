@@ -302,7 +302,7 @@ scripts/                      sample data generator
 * [0001 — Observability: three signals + data health](docs/adr/0001-observability-architecture.md)
 * [0002 — Polars on a single node instead of Spark](docs/adr/0002-polars-single-node.md)
 * [0003 — Promtail now, Grafana Alloy next](docs/adr/0003-promtail-to-alloy.md)
-* [0004 — Object storage after MinIO's image freeze](docs/adr/0004-object-storage.md)
+* [0004 — Object storage: from MinIO to Silo](docs/adr/0004-object-storage.md)
 * [0005 — RAG over tabular data: SQL first, vectors second](docs/adr/0005-rag-router.md)
 * [0006 — NF-e: batch-level control, immutable bronze, SQL-only transformation](docs/adr/0006-nfe-incremental-lotes.md)
 * [0007 — RAG: incremental embeddings and a CPU-sized model](docs/adr/0007-rag-incremental-embeddings.md)
