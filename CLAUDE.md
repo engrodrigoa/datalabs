@@ -94,7 +94,15 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   volume and re-applied by `dag_setup_infrastructure` / `make db-bootstrap`.
 - Dashboards: edit `grafana/dashboards-src/build.py`, then `make dashboards`. Never hand-edit the JSON (CI fails on drift).
 
-**Tests & CI** (`.github/workflows/ci.yml`, must be green before merge)
+**Reproducibility (a fresh clone must work)**
+- A new external dependency (download host, container image, model) is added to `scripts/preflight.sh`, so a
+  blocked or deleted dependency fails *before* `make up` with its cause, not inside a build or a DAG.
+- Silent failures (empty bind mounts, missing model) belong in `scripts/doctor.sh`.
+- Optional layers degrade explicitly: no AI image -> RAG DAG exits 99 and its checks are `skipped` (`requires: ai`).
+- Images stay pinned (by digest when the publisher is not well established); `image-availability.yml` checks weekly
+  that every pinned image still exists.
+
+**Tests & CI** (`.github/workflows/ci.yml`, must be green before merge; `image-availability.yml` runs weekly)
 - `ruff check .` (line length 120) and `pytest`; dashboards regenerated with no diff; `docker compose config` for
   default and AI/GPU variants; data integration on real Postgres + pgvector (ANP landing → dbt + Elementary →
   NF-e batch → health checks → audit assertions → every Grafana query as `grafana_ro`).
@@ -147,3 +155,5 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold, recall@k / MRR in the eval gate.
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
+- Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
+- Pin the embedding model revision (commit hash) in `pipelines/commons/ai/embeddings.py`.

@@ -185,6 +185,22 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * **Quality scoped to the batch in flight:** contracts on silver, custom generic tests (access-key and CNPJ check digits, cClassTrib × CST), header × item reconciliation, `store_failures` quarantine in `dq_nfe`, Elementary volume monitor.
 * Details: [docs/nfe/README.md](docs/nfe/README.md) · try it: `make nfe-quickstart` (from zero to the `DataLabs · NF-e` dashboard), then `make nfe-stream`.
 
+**Where the data comes from.** There is no public NF-e dataset, so [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: it writes NF-e XMLs (layout 4.00 + IBS/CBS/IS groups, XSD-valid, alphanumeric CNPJ for part of the issuers) into `./datasource/nfe/inbox`, the way documents would reach the tax authority, and `dag_nfe` (FileSensor, every 10 min) picks them up. Everything is synthetic: a stable register of fictitious companies (`--seed-cadastro`), dated register changes that feed the SCD2, and only public codes (IBGE, NCM, CFOP, CST) are real. It needs only the Python standard library, so it runs on the host:
+
+```bash
+python scripts/nfe/gen_nfe.py 100                  # 100 notes "from now"
+python scripts/nfe/gen_nfe.py 100 --sujo           # + plausible anomalies: business defects 2%, re-sends 1%, truncated files 0.5%
+python scripts/nfe/gen_nfe.py 100 --sujo --agora   # + triggers dag_nfe immediately
+python scripts/nfe/gen_nfe.py --help               # dates, batches, arrival interval, --manifesto (answer key of injected anomalies)
+```
+
+| Make target | Simulates |
+|---|---|
+| `make nfe-quickstart` | from zero: 2,000 notes Jan–Sep/2026 with anomalies, then triggers the DAG |
+| `make nfe-demo` | one arrival of 500 notes |
+| `make nfe-stream` | continuous arrival: 12 batches of 200, one every 5 min |
+| `make nfe-backfill` | history: 5,000 notes Jan–Sep/2026 |
+
 ### 🤖 RAG — fuel price assistant (`dag_rag_anp`, triggered when ANP gold changes)
 
 `gold → semantic chunks (lineage to id_fato) → multilingual-e5 embeddings (incremental by chunk_id) → pgvector HNSW → evaluation gate`
@@ -216,22 +232,24 @@ After a wipe ([runbook](docs/runbook-rebuild.md)): `dag_rfb_dw_dbt` in 9 min (5M
 
 ## Quickstart
 
-**Requirements:** Docker with Compose v2, ~8 GB RAM free, ~10 GB disk. GNU make is optional (the raw commands are below).
+**Requirements:** Docker with Compose v2 · 6 GB of RAM for Docker (8 GB with the AI profile) · ~15 GB of disk · internet (gov.br, PyPI, Docker Hub). GNU make is optional (the raw commands are below). **Windows:** clone inside WSL (`~/datalabs`), not under `/mnt/c`, and size the WSL VM with [docs/wslconfig.example](docs/wslconfig.example).
 
 ```bash
 git clone https://github.com/engrodrigoa/datalabs.git && cd datalabs
-make up        # creates .env with random passwords, builds and starts the stack
+make preflight # creates .env (random passwords, printed once) and checks Docker, memory, DNS/TLS and pinned images
+make up        # builds and starts the stack
 make demo      # unpauses the DAGs and runs the ANP pipeline with real data
+make doctor    # checks the running stack for silent failures (empty bind mounts, missing models)
 ```
 
 | Service | URL | |
 |---|---|---|
 | Grafana | http://localhost:3000 | home = *DataLabs · Pipeline Health* |
 | Airflow | http://localhost:8080 | DAGs start paused |
-| MinIO console | http://localhost:9091 | |
+| S3 console (Silo, MinIO-compatible) | http://localhost:9091 | |
 | Prometheus | http://localhost:9090 | |
 
-Credentials are in `.env`.
+**Logins:** `make creds` (read from `.env`). Passwords are generated per machine: if your browser autofills a password saved for `localhost` on another machine, the login fails with the right user name.
 
 > **Changed a dbt model?** Run `make dbt-parse`. The DAGs render from the dbt manifest generated at startup, so a new or renamed model only shows up in Airflow after the manifest is regenerated.
 >
@@ -242,6 +260,7 @@ Credentials are in `.env`.
 
 ```bash
 cp .env.example .env            # then change the passwords
+./scripts/preflight.sh          # bash: WSL, Linux, macOS or Git Bash
 docker compose up -d --build
 docker compose exec airflow-scheduler airflow dags unpause dag_dbt_anp
 docker compose exec airflow-scheduler airflow dags trigger dag_dbt_anp
@@ -255,7 +274,11 @@ docker compose exec airflow-scheduler airflow dags trigger dag_dbt_anp
 make up-ai     # image with sentence-transformers (CPU torch) + Ollama on CPU (llama3.2:1b)
 make up-gpu    # same, Ollama on an NVIDIA GPU (needs nvidia-container-toolkit)
 ```
-The default stack does **not** require a GPU. Without the AI image, `dag_rag_anp` skips cleanly.
+The default stack does **not** require a GPU. Without the AI image, `dag_rag_anp` skips cleanly and the RAG health checks are recorded as *skipped* (`requires: ai`), not as permanent warnings.
+
+To keep the AI profile across restarts without make, put `INSTALL_AI=true` and `COMPOSE_PROFILES=ai` in `.env`.
+Download the embedding model at setup time, not inside the first DAG run: `make models`.
+The RAG DAG (embeddings → pgvector → evaluation gate) does not need Ollama; only the interactive assistant does.
 </details>
 
 <details>
@@ -264,6 +287,24 @@ The default stack does **not** require a GPU. Without the AI image, `dag_rag_anp
 ```bash
 make up && make demo-offline   # synthetic ANP files (real layout) -> landing -> dbt + Elementary -> health checks
 ```
+</details>
+
+<details>
+<summary>Fresh machine / troubleshooting (every case below happened on a clean clone)</summary>
+
+`make preflight` detects most of these before `make up`; `make doctor` detects the silent ones afterwards.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `pull access denied for minio/minio, repository does not exist` | the image was deleted from Docker Hub (2026-09-11) | already fixed: the stack uses Silo pinned by digest ([ADR 0004](docs/adr/0004-object-storage.md)); a weekly CI job checks every pinned image |
+| pip fails with `SSLEOFError` / `UNEXPECTED_EOF` on `files.pythonhosted.org` during the build | the ISP/router DNS resolves it to a `100.64.0.0/10` address | Docker Desktop → Settings → Docker Engine: add `"dns": ["1.1.1.1", "8.8.8.8"]` at the **top level** of the JSON, *Apply & restart* (no Windows admin needed) |
+| `x509: certificate signed by unknown authority` / `self-signed certificate in certificate chain` (Hugging Face, Ollama) | TLS inspection by a corporate proxy/antivirus | use another network, or `make models-export` on a machine with access + `make models-import` here + `HF_HUB_OFFLINE=1`. Do **not** disable TLS verification |
+| Docker/host memory at ~97% | the WSL2 VM has no limit and keeps its page cache | [docs/wslconfig.example](docs/wslconfig.example), then `wsl --shutdown` |
+| Grafana shows an empty *DataLabs* folder / no logs in Loki after `wsl --shutdown` | containers restarted by their restart policy mounted the bind mounts **empty** | `docker compose up -d --force-recreate grafana promtail prometheus` (`make doctor` detects it); cloning under `~/` avoids it |
+| Elementary anomaly tests fail with `relation "none" does not exist` | Elementary tables missing on an empty database | fixed: `airflow-init` creates them; manual refresh: `make elementary` |
+| Edited `.env` but nothing changed | `.env` is read when a container is **created** | `docker compose up -d` (recreates the containers whose configuration changed) |
+| `dag_rag_anp` skipped | the image was built without the AI layer | `make up-ai` (by design: the RAG layer is opt-in) |
+
 </details>
 
 ---
