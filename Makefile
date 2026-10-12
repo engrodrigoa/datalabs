@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
+.PHONY: help elementary env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -69,6 +69,9 @@ db-bootstrap: ## (existing volume) create the airflow DB, grafana_ro role and ap
 
 dashboards: ## regenerate Grafana dashboards from grafana/dashboards-src/build.py
 	python grafana/dashboards-src/build.py
+
+elementary: ## create/refresh the Elementary tables (airflow-init does it once on an empty database)
+	$(AF) bash -c "$(DBT) run --select elementary --profiles-dir ."
 
 sample-data: ## offline synthetic ANP files (no internet needed)
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp

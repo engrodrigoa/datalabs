@@ -138,6 +138,15 @@ services:
         /opt/airflow/dbt_venv/bin/dbt parse --project-dir /opt/airflow/pipelines/dbt_projects \
           --profiles-dir /opt/airflow/pipelines/dbt_projects --target-path /opt/airflow/dbt_vol/manifest \
           || echo "WARN: dbt parse falhou; Cosmos vai usar dbt ls (lento)"
+        # Elementary tables before the first DAG run: its anomaly tests read them and fail with
+        # 'relation "none" does not exist' on an empty database. Idempotent, skipped once they exist.
+        if python -c "import os,sys,psycopg2; c=psycopg2.connect(os.environ['AIRFLOW_CONN_POSTGRES_DEFAULT']); cur=c.cursor(); cur.execute(\"select to_regclass('elementary.data_monitoring_metrics')\"); sys.exit(0 if cur.fetchone()[0] else 1)"; then
+          echo "elementary models already installed"
+        else
+          /opt/airflow/dbt_venv/bin/dbt run --select elementary --project-dir /opt/airflow/pipelines/dbt_projects \
+            --profiles-dir /opt/airflow/pipelines/dbt_projects \
+            || echo "WARN: elementary bootstrap falhou; rode: make elementary"
+        fi
         chown -R "${AIRFLOW_UID:-1000}:0" /opt/airflow/pipelines/dbt_projects /opt/airflow/dbt_vol
     environment:
       <<: *airflow-env
