@@ -113,3 +113,24 @@ def test_failure_callback_closes_orphan_running_rows(monkeypatch):
         status, err = cur.fetchone()
     conn.close()
     assert closed == 1 and status == "failed" and "Timeout" in err
+
+
+def test_ai_check_is_skipped_without_the_ai_image(monkeypatch):
+    monkeypatch.setattr(checks, "ai_runtime_available", lambda: False)
+    r = checks.run_check(None, _check("SELECT 1", requires="ai"))
+    assert r.status == "skipped"
+    assert "INSTALL_AI" in r.message
+
+
+def test_ai_check_runs_when_the_ai_image_is_present(monkeypatch):
+    monkeypatch.setattr(checks, "ai_runtime_available", lambda: True)
+
+    class _Boom:  # reaching the DB proves the check was not skipped
+        def cursor(self):
+            raise RuntimeError("db reached")
+
+        def rollback(self):
+            pass
+
+    r = checks.run_check(_Boom(), _check("SELECT 1", requires="ai"))
+    assert r.status == "error" and "db reached" in r.message

@@ -21,7 +21,7 @@ work there (the runbooks show the `docker compose exec -T airflow-scheduler ...`
 | Orchestration | Airflow 2.9.0 (Python 3.12, LocalExecutor) + astronomer-cosmos 1.15.1 |
 | Transform | dbt-core 1.11.15, dbt-postgres 1.11.0, Elementary 0.25.1 (CLI = package version), isolated venv `/opt/airflow/dbt_venv` |
 | Processing | Polars 1.x + PyArrow, single node (ADR 0002) |
-| Storage | Postgres 15 + pgvector (`pg_data` volume, `shm_size: 1g`), MinIO (frozen image, ADR 0004) |
+| Storage | Postgres 15 + pgvector (`pg_data` volume, `shm_size: 1g`), Silo (community MinIO fork, pinned by digest, ADR 0004) |
 | AI | sentence-transformers on CPU torch, `intfloat/multilingual-e5-small` (384 dims), Ollama `llama3.2:1b` (profile `ai`) |
 | Observability | Loki 2.9.2 + Promtail 2.9.2 (EOL, ADR 0003), statsd-exporter → Prometheus v2.53.0, Grafana 12.0.0 |
 
@@ -50,7 +50,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **0002 Polars single node:** batches (`iter_batches` + Parquet), bounded by batch size env vars,
   `POLARS_MAX_THREADS` and `max_active_tasks=2` in `dag_rfb`. No Spark.
 - **0003 Promtail → Grafana Alloy + Loki 3:** planned; Promtail polls the `./airflow/logs` bind mount (high CPU on Windows).
-- **0004 MinIO frozen:** acceptable for the lab only. All S3 access goes through `boto3` in `s3_client.py`, so a swap is a compose change.
+- **0004 Object storage:** `minio/minio` was deleted from Docker Hub (2026-09-11); the lab runs Silo (`pgsty/silo`, drop-in MinIO
+  fork, tag + digest). All S3 access goes through `boto3` in `s3_client.py`, so a swap is a compose change. RustFS is the fallback.
 - **0005 RAG router:** CNPJ or aggregation questions → parameterised SQL on gold; open questions → pgvector.
   Golden-set eval gate fails the DAG below `RAG_MIN_ROUTING_ACC` / `RAG_MIN_VALUE_ACC` (0.9).
 - **0006 NF-e:** control per batch (`ctrl.nfe_lote`: `CARREGADO → PROCESSADO`), insert-only bronze, ingestion in
@@ -93,7 +94,15 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   volume and re-applied by `dag_setup_infrastructure` / `make db-bootstrap`.
 - Dashboards: edit `grafana/dashboards-src/build.py`, then `make dashboards`. Never hand-edit the JSON (CI fails on drift).
 
-**Tests & CI** (`.github/workflows/ci.yml`, must be green before merge)
+**Reproducibility (a fresh clone must work)**
+- A new external dependency (download host, container image, model) is added to `scripts/preflight.sh`, so a
+  blocked or deleted dependency fails *before* `make up` with its cause, not inside a build or a DAG.
+- Silent failures (empty bind mounts, missing model) belong in `scripts/doctor.sh`.
+- Optional layers degrade explicitly: no AI image -> RAG DAG exits 99 and its checks are `skipped` (`requires: ai`).
+- Images stay pinned (by digest when the publisher is not well established); `image-availability.yml` checks weekly
+  that every pinned image still exists.
+
+**Tests & CI** (`.github/workflows/ci.yml`, must be green before merge; `image-availability.yml` runs weekly)
 - `ruff check .` (line length 120) and `pytest`; dashboards regenerated with no diff; `docker compose config` for
   default and AI/GPU variants; data integration on real Postgres + pgvector (ANP landing → dbt + Elementary →
   NF-e batch → health checks → audit assertions → every Grafana query as `grafana_ro`).
@@ -115,7 +124,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `pg_read_file` works because the lab user is superuser and `./datasource/nfe` is mounted read-only; a non-lab
   deployment needs a dedicated role (`pg_read_server_files`) instead.
 - TLS verification stays on (pip, requests, boto3). Container images stay pinned.
-- Lab-only caveats: all ports bind to every host interface and MinIO has no security updates. Review port bindings and
+- Lab-only caveats: all ports bind to every host interface and the object store is a young community fork. Review port bindings and
   the object store before exposing the stack on a network (e.g. the dedicated lambda server).
 - **Destructive commands need explicit confirmation:** `make clean` / `docker compose ... down -v` (deletes every volume),
   dropping schemas, `--full-refresh` on large models, `RAG_FULL_REFRESH=1` (~45 min of CPU), force-push.
@@ -146,3 +155,5 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold, recall@k / MRR in the eval gate.
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
+- Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
+- Pin the embedding model revision (commit hash) in `pipelines/commons/ai/embeddings.py`.

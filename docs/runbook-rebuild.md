@@ -30,11 +30,15 @@ On an empty `pg_data`, Postgres runs `infra/postgres/init` (databases, roles, sc
 docker compose ps airflow-init     # Exited (0)
 ```
 
-## 3. Elementary tables (once)
+## 3. Elementary tables
 
+Automatic: on an empty database `airflow-init` runs `dbt run --select elementary` (its anomaly tests read
+those tables and fail with `relation "none" does not exist` without them). Check the init log for
+`elementary models already installed` or the dbt run summary. Manual refresh, if ever needed:
 ```powershell
 docker compose exec -T airflow-scheduler bash -c "cd /opt/airflow/pipelines/dbt_projects && /opt/airflow/dbt_venv/bin/dbt run --select elementary --profiles-dir ."
 ```
+(`make elementary` does the same.)
 
 ## 4. Repopulate
 

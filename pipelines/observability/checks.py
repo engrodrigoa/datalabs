@@ -9,7 +9,8 @@ that run on a schedule, independently of whether a pipeline ran at all:
 
     python -m pipelines.observability.checks --pipeline anp [--config path] [--fail-on error|warn|never]
 
-Statuses: pass | warn | fail | error (query broke or timed out) | skipped (relation not created yet).
+Statuses: pass | warn | fail | error (query broke or timed out) | skipped (relation not created yet,
+`suspended`, or `requires: ai` on a stack built without the AI image).
 
 Guard rails (a health check must never become the incident):
   * every query runs with statement_timeout (`timeout_s`, default OBS_CHECK_TIMEOUT_S=120) and
@@ -142,6 +143,12 @@ def _evaluate(conn, check: dict) -> tuple[str, float | None, str | None, str]:
     return "error", None, None, f"unknown check type {check['type']}"
 
 
+def ai_runtime_available() -> bool:
+    """True when the image was built with INSTALL_AI=true (cheap: finds the package, does not import torch)."""
+    import importlib.util
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
 def run_check(conn, check: dict) -> CheckResult:
     import psycopg2
 
@@ -155,6 +162,9 @@ def run_check(conn, check: dict) -> CheckResult:
     if check.get("suspended"):
         # suspenso conscientemente: não executa, mas fica registrado (status skipped) no audit/Grafana
         return result(status="skipped", message=f"suspended: {check['suspended']}")
+    if check.get("requires") == "ai" and not ai_runtime_available():
+        # the RAG layer is opt-in: on the base stack its checks would warn forever about a feature not enabled
+        return result(status="skipped", message="requires the AI image (INSTALL_AI=true / make up-ai)")
 
     try:
         _apply_timeouts(conn, check)
