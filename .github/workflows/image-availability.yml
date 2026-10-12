@@ -1,0 +1,17 @@
+name: image-availability
+
+# A pinned image can disappear upstream without any change in this repo: minio/minio was deleted from
+# Docker Hub on 2026-09-11 and was only noticed a month later, on a fresh machine (ADR 0004). Machines with
+# the image cached keep working, so nothing local ever fails. This job checks every pinned image weekly.
+on:
+  schedule:
+    - cron: "17 9 * * 1"   # Mondays 09:17 UTC
+  workflow_dispatch:
+
+jobs:
+  pinned-images-exist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: ./scripts/preflight.sh --images-only

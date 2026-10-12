@@ -1,0 +1,11 @@
+# Copy to %USERPROFILE%\.wslconfig (Windows), then run `wsl --shutdown` and restart Docker Desktop.
+# Without it, the WSL2 VM can take most of the RAM and keeps its page cache: on a 16 GB laptop the host
+# reached 97% memory with the stack running. Measured: the base stack fits in 6 GB; the AI profile
+# (torch + Ollama + the stack) needs 8 GB. Check with `free -h` inside WSL or `make preflight`.
+[wsl2]
+memory=8GB        # 6GB is enough without the AI profile
+processors=4
+swap=4GB
+
+[experimental]
+autoMemoryReclaim=gradual   # give unused page cache back to Windows
