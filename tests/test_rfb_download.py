@@ -20,6 +20,8 @@ ZIP = _zip_bytes()
 
 class _Resp:
     def __init__(self, status, body=b"", ctype="application/zip", length=None):
+        if status in (401, 403, 404):
+            ctype = "application/xml; charset=utf-8"
         self.status_code = status
         self.body = body
         self.headers = {"Content-Type": ctype}
@@ -37,28 +39,31 @@ class _Resp:
 
 
 class FakeSession:
-    """`script` maps a URL suffix to a list of answers consumed in order (the last one repeats)."""
+    """`script` maps a URL suffix to a list of answers consumed in order (the last one repeats). Ranged GETs (the
+    source probe) are answered from `probe` instead, 206 by default, like the real server."""
 
-    def __init__(self, script):
+    def __init__(self, script, probe=None):
         self.script = script
+        self.probe = probe or {}
         self.calls = []
 
-    def _answer(self, method, url):
+    def _answer(self, method, url, headers=None):
         self.calls.append((method, url))
-        for suffix, answers in self.script.items():
+        ranged = bool(headers and "Range" in headers)
+        for suffix, answers in (self.probe if ranged else self.script).items():
             if url.endswith(suffix):
                 return answers.pop(0) if len(answers) > 1 else answers[0]
-        return _Resp(200, ZIP)
+        return _Resp(206) if ranged else _Resp(200, ZIP)
 
-    def request(self, method, url, **kw):
-        return self._answer(method, url)
+    def request(self, method, url, headers=None, **kw):
+        return self._answer(method, url, headers)
 
-    def get(self, url, **kw):
-        return self._answer("GET", url)
+    def get(self, url, headers=None, **kw):
+        return self._answer("GET", url, headers)
 
 
-def _fetcher(script, retries=4):
-    return rfb.Fetcher("tok", session=FakeSession(script), retries=retries, pause_s=0, sleep=lambda s: None)
+def _fetcher(script, retries=4, probe=None):
+    return rfb.Fetcher("tok", session=FakeSession(script, probe), retries=retries, pause_s=0, sleep=lambda s: None)
 
 
 def test_contract_has_the_37_monthly_files():
@@ -81,20 +86,20 @@ def test_share_token_precedence(monkeypatch):
 
 def test_flaky_404_then_200_is_downloaded(tmp_path):
     # the source answered 404 and then 200 for the same file within minutes
-    f = _fetcher({"/2026-08": [_Resp(200)], "Empresas0.zip": [_Resp(404), _Resp(404), _Resp(200, ZIP)]})
+    f = _fetcher({"Empresas0.zip": [_Resp(404), _Resp(404), _Resp(200, ZIP)]})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 0
     assert len(os.listdir(tmp_path / "ref202608")) == 37
 
 
 def test_file_that_never_comes_fails_with_its_status_and_rerun_resumes(tmp_path):
-    f = _fetcher({"/2026-08": [_Resp(200)], "Socios3.zip": [_Resp(404)]})
+    f = _fetcher({"Socios3.zip": [_Resp(404)]})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 1
     assert "Socios3.zip" not in os.listdir(tmp_path / "ref202608")
     assert not [n for n in os.listdir(tmp_path / "ref202608") if n.endswith(".part")]
 
-    f2 = _fetcher({"/2026-08": [_Resp(200)]})
+    f2 = _fetcher({})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f2) == 0
-    gets = [u for m, u in f2.session.calls if m == "GET"]
+    gets = _downloads(f2)
     assert len(gets) == 1 and gets[0].endswith("Socios3.zip")   # only the missing file is fetched again
 
 
@@ -104,9 +109,9 @@ def test_truncated_local_zip_is_downloaded_again(tmp_path):
     for name in rfb.EXPECTED_FILES:
         (d / name).write_bytes(ZIP)
     (d / "Empresas5.zip").write_bytes(ZIP[:20])                    # killed mid-download by an old run
-    f = _fetcher({"/2026-08": [_Resp(200)]})
+    f = _fetcher({})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 0
-    assert [u for m, u in f.session.calls if m == "GET"][0].endswith("Empresas5.zip")
+    assert _downloads(f)[0].endswith("Empresas5.zip")
     assert rfb.is_valid_zip(str(d / "Empresas5.zip"))
 
 
@@ -122,20 +127,45 @@ def test_html_answer_is_not_a_file(tmp_path):
     assert not ok and "html" in reason
 
 
+def _downloads(f):
+    """GETs that downloaded a file (the source probe is a 1-byte GET on Cnaes.zip and is not counted)."""
+    return [u for m, u in f.session.calls if m == "GET"][1:]
+
+
+def test_source_is_probed_with_a_ranged_get_not_propfind(tmp_path):
+    f = _fetcher({})
+    assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 0
+    method, url = f.session.calls[0]
+    assert method == "GET" and url.endswith("/2026-08/Cnaes.zip")
+    assert not [m for m, _ in f.session.calls if m == "PROPFIND"]
+
+
 def test_rejected_link_is_reported_as_auth_failure(tmp_path):
-    f = _fetcher({"/2026-08": [_Resp(401)]})
+    f = _fetcher({}, probe={"/2026-08/Cnaes.zip": [_Resp(401)]})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 1
-    assert not [m for m, _ in f.session.calls if m == "GET"]             # fails fast, no downloads attempted
+    assert len(f.session.calls) == 1                     # 401 is definitive: no retries, no downloads attempted
 
 
 def test_month_not_published_is_a_skip(tmp_path):
-    f = _fetcher({"/2026-09": [_Resp(404)], "/CNPJ": [_Resp(200)]})
-    assert rfb.download_month("tok", "2026-09", str(tmp_path), fetcher=f) == rfb.NOT_PUBLISHED
+    f = _fetcher({}, probe={"/2026-10/Cnaes.zip": [_Resp(404)], "/2026-09/Cnaes.zip": [_Resp(206)]})
+    assert rfb.download_month("tok", "2026-10", str(tmp_path), fetcher=f) == rfb.NOT_PUBLISHED
+    assert all(u.endswith("Cnaes.zip") for _, u in f.session.calls)   # only probes (404 retried), nothing downloaded
+    assert f.session.calls[-1][1].endswith("/2026-09/Cnaes.zip")
 
 
 def test_wrong_share_dir_is_an_error(tmp_path):
-    f = _fetcher({"/2026-08": [_Resp(404)], "/CNPJ": [_Resp(404)]})
+    f = _fetcher({}, probe={"/Cnaes.zip": [_Resp(404)]})
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 1
+
+
+def test_flaky_404_on_the_probe_is_retried(tmp_path):
+    f = _fetcher({}, probe={"/2026-08/Cnaes.zip": [_Resp(404), _Resp(404), _Resp(206)]})
+    assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 0
+
+
+def test_previous_month():
+    assert rfb.previous_month("2026-08") == "2026-07"
+    assert rfb.previous_month("2026-01") == "2025-12"
 
 
 def test_complete_month_on_disk_does_not_touch_the_source(tmp_path):
@@ -143,6 +173,6 @@ def test_complete_month_on_disk_does_not_touch_the_source(tmp_path):
     d.mkdir()
     for name in rfb.EXPECTED_FILES:
         (d / name).write_bytes(ZIP)
-    f = _fetcher({"/2026-08": [_Resp(503)]})                            # source down
+    f = _fetcher({}, probe={"Cnaes.zip": [_Resp(503)]})                 # source down
     assert rfb.download_month("tok", "2026-08", str(tmp_path), fetcher=f) == 0
     assert f.session.calls == []

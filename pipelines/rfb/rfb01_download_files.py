@@ -2,14 +2,17 @@
 
 The source changed in Oct/2026 and the old "list the folder, download what is listed" stopped working:
   * the share link changed and its root moved up: the months now live under /Dados/Cadastros/CNPJ/<YYYY-MM>
-  * folder listing (PROPFIND) answers 200 with an empty body: there is nothing to list anymore
+  * folder listing (PROPFIND) answers 200 with an empty text/html body for ANY path, even a missing folder or a
+    rejected link: it carries no information at all (re-measured 2026-10-12)
   * direct downloads still work, but the server is flaky under bursts: the same file answered 200, then 404,
     then 200 again within minutes, and probing 37 files in a row came back with a random subset missing
 
 So the download is driven by a CONTRACT instead of a listing: every reference month has the same 37 files
 (EXPECTED_FILES). Each file is fetched with retries, backoff and a pause between requests, a 404 only counts
 as "missing" after every attempt, and a local file only counts as done if it is a readable ZIP of the expected
-size (a truncated ZIP from a killed run used to pass as "already downloaded").
+size (a truncated ZIP from a killed run used to pass as "already downloaded"). The source check is a 1-byte
+ranged GET on the smallest contract file (PROBE_FILE): GET is the only method whose status means something
+(206/200 present, 401 link rejected, 404 missing).
 
 Exit codes (observability runner): 0 all files present | 99 the month is not published yet (skipped, no new
 data) | 1 anything else, with the cause in a structured event: source_auth_failed (share link rotated ->
@@ -48,6 +51,8 @@ EXPECTED_FILES = (
     [f"{entity}{i}.zip" for entity in ("Empresas", "Estabelecimentos", "Socios") for i in range(10)]
     + [f"{name}.zip" for name in ("Simples", "Cnaes", "Motivos", "Municipios", "Naturezas", "Paises", "Qualificacoes")]
 )
+
+PROBE_FILE = "Cnaes.zip"  # smallest file of the contract (~22 KB): cheap even if a server ignores the Range header
 
 NOT_PUBLISHED = 99
 
@@ -155,20 +160,38 @@ def is_valid_zip(path: str) -> bool:
         return False
 
 
+def previous_month(ano_mes: str) -> str:
+    year, month = map(int, ano_mes.split("-"))
+    return f"{year - 1}-12" if month == 1 else f"{year}-{month - 1:02d}"
+
+
+def probe(fetcher: Fetcher, base: str, ano_mes: str) -> int:
+    """Status of a 1-byte GET on the month's PROBE_FILE (retried while flaky)."""
+    url = f"{WEBDAV}{quote(base)}/{ano_mes}/{PROBE_FILE}"
+    return fetcher.status("GET", url, headers={"Range": "bytes=0-0"}, stream=True)
+
+
 def check_source(fetcher: Fetcher, base: str, ano_mes: str) -> None:
-    """Fail fast with the real cause. The folder answers 200 (empty) when it exists and 404 when it does not."""
-    month = fetcher.status("PROPFIND", f"{WEBDAV}{quote(base)}/{ano_mes}", headers={"Depth": "0"})
+    """Fail fast with the real cause. PROPFIND is useless here (200 + empty body for any path, any link), so the
+    check reads one byte of a contract file: 206/200 present, 401/403 link rejected, 404 missing. A month that is
+    missing while the previous one exists is "not published yet"; both missing means the directory is wrong."""
+    month = probe(fetcher, base, ano_mes)
+    if month in (200, 206):
+        return
     if month == 0:
         raise SourceError("source_unreachable", f"no answer from {HOST} after {fetcher.retries} attempts")
     if month in (401, 403):
         raise SourceError("source_auth_failed", f"HTTP {month}: the share link was rejected. The Receita may have "
                                                 "re-created it: paste the new link in RFB_SHARE_URL")
     if month == 404:
-        parent = fetcher.status("PROPFIND", f"{WEBDAV}{quote(base)}", headers={"Depth": "0"})
-        if parent == 404:
-            raise SourceError("source_dir_not_found", f"'{base}' does not exist in this share: check RFB_SHARE_DIR, "
-                                                      "or an old RFB_SHARE_TOKEN in .env pointing to a previous share")
-        raise SourceError("source_month_not_published", f"{ano_mes} is not published under '{base}' yet")
+        prev = previous_month(ano_mes)
+        if probe(fetcher, base, prev) in (200, 206):
+            raise SourceError("source_month_not_published", f"{ano_mes} is not published under '{base}' yet "
+                                                            f"({prev} is)")
+        raise SourceError("source_dir_not_found", f"neither {ano_mes} nor {prev} found under '{base}': check "
+                                                  "RFB_SHARE_DIR, or an old RFB_SHARE_TOKEN in .env pointing to a "
+                                                  "previous share")
+    raise SourceError("source_unreachable", f"HTTP {month} from {HOST} after {fetcher.retries} attempts")
 
 
 def download_month(token: str, ano_mes: str, base_dir: str, fetcher: Fetcher | None = None,
