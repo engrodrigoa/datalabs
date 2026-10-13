@@ -64,6 +64,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `hf_cache`, `ollama_data`, `dbt_vol`, `grafana_data`, `prometheus_data`, `loki_data`). Bind mounts only for code
   and input files (`./datasource`). Input files are **streamed** (e.g. `zipfile.open`), temporaries go to the
   container disk or a volume. The Windows bind mount is ~260× slower for small-file I/O.
+- **0009 RFB source contract:** the Receita share (Nextcloud WebDAV) cannot be listed (`PROPFIND` answers 200 + empty
+  body for any path and any credentials), so `rfb01` downloads a fixed contract of 37 files per month, with retries
+  and backoff (the source flips 200/404). The source check is a 1-byte ranged `GET` on `Cnaes.zip`: 206 present,
+  401 link rejected, 404 missing (previous month present → exit 99, not published yet). The share token is static
+  and public (`RFB_SHARE_URL`); the browser's session cookie / CSRF token belong to the web UI, not to WebDAV.
 
 ## Development rules
 
@@ -71,7 +76,12 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Every script runs through the observability runner (`observed_script` / `observed_module` in `dag_helpers.py`).
   Exit codes: `0` success, `99` skipped (no new data), anything else failed. Never return 0 when nothing loaded.
 - Report volumes with `current_step().add(rows_in=..., rows_out=..., files_total=...)`; log with `log_event()`
-  and a stable `event` name (`file_loaded`, `schema_drift_*`, `step_finished`…).
+  and a stable `event` name (`file_loaded`, `schema_drift_*`, `step_finished`…). `add()` sums counters and numeric
+  metrics (`bytes_downloaded`), `set()` overwrites, `label()` keeps every distinct value (a step over several
+  entities). A step that loops over entities must not `set()` per-entity totals (it reported the last one only).
+- External sources: check them with the request the step really makes (a ranged `GET` of a real file), never with
+  a listing or metadata endpoint, and name each failure cause in its own event. Verify a source's behaviour with
+  live requests before coding against it; record what was measured, and when, in the ADR.
 - Configuration comes from `pipelines/commons/env_loader.py` (env > `.env` > defaults). New env vars go in
   `.env.example` with a comment.
 - Loads are idempotent and resumable: a re-run skips what already landed. Keep it true for new steps.
@@ -97,7 +107,17 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 **Reproducibility (a fresh clone must work)**
 - A new external dependency (download host, container image, model) is added to `scripts/preflight.sh`, so a
   blocked or deleted dependency fails *before* `make up` with its cause, not inside a build or a DAG.
-- Silent failures (empty bind mounts, missing model) belong in `scripts/doctor.sh`.
+- Silent failures (empty bind mounts, missing model, `.env` passwords rejected by an older volume) belong in
+  `scripts/doctor.sh`.
+- `.env` and the volumes are a pair: the compose project name is fixed (`datalabs`), so a clone in ANY folder reuses
+  the same `datalabs_*` volumes, and Postgres applies the `.env` passwords only when it creates `pg_data`. Keeping
+  the volumes means keeping (copying) the old `.env`; a new `.env` needs new volumes. `make env` never overwrites an
+  existing `.env`, adds only missing keys and never regenerates `AIRFLOW__CORE__FERNET_KEY`.
+- On Windows/WSL, clone inside the WSL filesystem (`~/datalabs`), not under `/mnt/c`: drvfs breaks `chown`, is slow
+  and can mount empty after `wsl --shutdown` (`make preflight` warns).
+- Selective cleanup keeps the expensive downloads: remove `pg_data`/`minio_data`/`dbt_vol`/`grafana_data`/
+  `prometheus_data`/`loki_data` by name, keep `hf_cache`, `ollama_data` and `./datasource` (RFB ZIPs ~21 min).
+  Removing `pg_data` also drops the audit history Grafana trends on and the RAG store (~45 min rebuild).
 - Optional layers degrade explicitly: no AI image -> RAG DAG exits 99 and its checks are `skipped` (`requires: ai`).
 - Images stay pinned (by digest when the publisher is not well established); `image-availability.yml` checks weekly
   that every pinned image still exists.
@@ -124,7 +144,10 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **NF-e data is 100% synthetic and fictitious** (`scripts/nfe/gen_nfe.py`). Never add real documents, CNPJs or CPFs.
   `pg_read_file` works because the lab user is superuser and `./datasource/nfe` is mounted read-only; a non-lab
   deployment needs a dedicated role (`pg_read_server_files`) instead.
-- TLS verification stays on (pip, requests, boto3). Container images stay pinned.
+- TLS verification stays on (pip, requests, boto3, Hugging Face, Ollama). Container images stay pinned. On a network
+  with TLS inspection (corporate machine) the AI layer cannot download its models: that is a limit of the network,
+  not a bug to work around. Never add `verify=False`, `CURL_CA_BUNDLE=""`, a custom CA bundle or
+  `--trusted-host`; run the AI layer on another machine, or `make models-export` there and `make models-import` here.
 - Lab-only caveats: all ports bind to every host interface and the object store is a young community fork. Review port bindings and
   the object store before exposing the stack on a network (e.g. the dedicated lambda server).
 - **Destructive commands need explicit confirmation:** `make clean` / `docker compose ... down -v` (deletes every volume),
@@ -156,4 +179,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold, recall@k / MRR in the eval gate.
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
 - Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
+  Same day: RFB, ANP and NF-e ran end to end on a clean clone (RFB dev_mode: download 21 min, `dag_rfb_dw_dbt` 5m18s,
+  landing × gold reconciliation 0.0%); RAG blocked by corporate TLS inspection, to be tested on a personal machine.
+- `gold.dm_socios` has 4,999,952 rows for 5,000,000 in landing (dev_mode): confirm the 48 are an intended dedup.
+- Default `ref_month` is 2026-08 while 2026-09 is published (`rfb_reference_freshness` warns, as designed).
 - Pin the embedding model revision (commit hash) in `pipelines/commons/ai/embeddings.py`.

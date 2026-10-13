@@ -97,7 +97,7 @@ checks:
     pipeline: rfb
     dataset: landing_rfb.estabelecimentos
     type: freshness
-    severity: warn            # monthly + manual token: warn only
+    severity: warn            # monthly source, month chosen by hand (ref_month): warn only
     query: SELECT MAX(to_date(referencia_mes::text, 'YYYYMM')) FROM landing_rfb.estabelecimentos
     warn_after_hours: 1488    # ~62 days
     error_after_hours: 2232   # ~93 days
