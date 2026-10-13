@@ -23,6 +23,24 @@ if [ -n "$unhealthy" ]; then fail "unhealthy: $unhealthy" "docker compose logs <
 init_exit=$(docker inspect -f '{{.State.ExitCode}}' airflow_init 2>/dev/null || echo "?")
 if [ "$init_exit" = "0" ]; then ok "airflow-init exited 0"; else fail "airflow-init exit code: $init_exit" "docker compose logs airflow-init"; fi
 
+echo "Database passwords (.env vs the pg_data volume)"
+# Postgres applies the .env passwords only when it creates the volume; a regenerated .env is rejected later.
+# -h postgres (the container's network address) forces password auth: local socket and 127.0.0.1 are trust.
+if running postgres; then
+  envv() { grep -E "^$1=" .env | cut -d= -f2-; }
+  db=$(envv DB_DB)
+  for pair in "$(envv DB_USER):DB_PASSWORD" "grafana_ro:GRAFANA_DB_PASSWORD"; do
+    user=${pair%%:*}; key=${pair#*:}
+    if docker compose exec -T -e PGPASSWORD="$(envv "$key")" postgres \
+         psql -h postgres -U "$user" -d "$db" -tAc 'select 1' >/dev/null 2>&1; then
+      ok "$user logs in with $key from .env"
+    else
+      fail "$user: $key in .env is rejected by Postgres" \
+        "the pg_data volume was created with another .env: restore it, or (nothing to keep) docker compose down -v && make up"
+    fi
+  done
+else fail "postgres is not running"; fi
+
 echo "Bind mounts (silent failures)"
 if running grafana; then
   n=$(docker compose exec -T grafana sh -c 'ls /var/lib/grafana/dashboards/*.json 2>/dev/null | wc -l' | tr -d '[:space:]')

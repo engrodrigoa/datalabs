@@ -155,7 +155,8 @@ def processar_arquivos_landing(
         raise FileNotFoundError(f"No silver files found at s3://{bucket_silver}/{prefixo_silver}")
 
     step = current_step()
-    step.set(files_total=len(arquivos_s3), entity=entidade, ref_month=ref_mes_int)
+    # add/label, not set: rfb11 calls this once per domain table inside ONE step (6 entities, 1 file each)
+    step.add(files_total=len(arquivos_s3)).label(entity=entidade).set(ref_month=ref_mes_int)
 
     preparar_schema_tabela(engine, schema, tabela, ddl, colunas_para_text, ref_mes_int, logger)
 
@@ -207,5 +208,5 @@ def processar_arquivos_landing(
             f"(all inserted; filter with _suspeita_deslocamento = false downstream if needed)"
         )
 
-    step.set(suspicious_rows=total_suspeitas_geral)
+    step.add(suspicious_rows=total_suspeitas_geral)
     return total_linhas_geral, total_suspeitas_geral

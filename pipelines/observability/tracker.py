@@ -14,7 +14,9 @@ Usage inside any script (no-op when not executed through the runner):
     step = current_step()
     step.add(rows_in=df.height, files_total=3)
     step.add(rows_out=loaded)
-    step.set(source_url=url)          # free-form metrics -> metrics jsonb
+    step.add(bytes_downloaded=n)      # numeric metrics accumulate too -> metrics jsonb
+    step.set(source_url=url)          # free-form metrics, overwritten -> metrics jsonb
+    step.label(entity="cnaes")        # distinct values, comma-joined ("cnaes,paises")
 """
 from __future__ import annotations
 
@@ -31,6 +33,10 @@ logger = get_logger("observability.tracker")
 
 COUNTERS = ("rows_in", "rows_out", "rows_rejected", "files_total", "files_ok", "files_failed")
 STATUS_BY_EXIT_CODE = {0: "success", 99: "skipped"}  # 99 = "no new data" (Airflow skip_on_exit_code)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _now() -> datetime:
@@ -66,14 +72,29 @@ class StepRun:
 
     # ---------------------------------------------------------------- metrics API
     def add(self, **values) -> "StepRun":
-        """Increment counters (rows_in, rows_out, rows_rejected, files_*); other keys go to metrics."""
+        """Increment counters (rows_in, rows_out, rows_rejected, files_*) and numeric metrics (bytes_downloaded...).
+        A non-numeric value (str, dict, bool) is stored as is, overwriting: use set() or label() for those."""
         for key, value in values.items():
             if value is None:
                 continue
             if key in COUNTERS:
                 self.counters[key] = self.counters.get(key, 0) + int(value)
+            elif _is_number(value) and _is_number(self.metrics.get(key, 0)):
+                self.metrics[key] = self.metrics.get(key, 0) + value
             else:
                 self.metrics[key] = value
+        return self
+
+    def label(self, **values) -> "StepRun":
+        """Record a dimension of the run; a step that handles several (one task loading 6 domain tables) keeps
+        all of them, distinct and in order, comma-joined: entity="cnaes,municipios,...". """
+        for key, value in values.items():
+            if value is None:
+                continue
+            seen = [v for v in str(self.metrics.get(key, "")).split(",") if v]
+            if str(value) not in seen:
+                seen.append(str(value))
+            self.metrics[key] = ",".join(seen)
         return self
 
     def set(self, **values) -> "StepRun":

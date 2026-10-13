@@ -84,6 +84,18 @@ if grep -qi microsoft /proc/version 2>/dev/null && [[ "$PWD" == /mnt/* ]]; then
     "clone inside WSL (e.g. ~/datalabs): /mnt/c bind mounts are slow, break file permissions and can mount EMPTY after 'wsl --shutdown'"
 else ok "repository path: $PWD"; fi
 
+# Postgres applies DB_PASSWORD only when it CREATES pg_data. An .env made after the volume (new clone in another
+# folder, deleted .env) leaves the database expecting the old password: airflow-init then fails with
+# "password authentication failed for user". Compared by the .env birth time (edits keep it); skipped when the
+# filesystem does not record it. `make doctor` does the definitive check on a running stack.
+vol_created=$(docker volume inspect -f '{{.CreatedAt}}' datalabs_pg_data 2>/dev/null)
+env_born=$(stat -c %W .env 2>/dev/null || echo 0)
+if [ -z "$vol_created" ]; then ok "no pg_data volume yet: Postgres will take the passwords of this .env"
+elif vol_s=$(date -d "$vol_created" +%s 2>/dev/null) && [ "${env_born:-0}" -gt $((vol_s + 60)) ]; then
+  warn "this .env is newer than the pg_data volume ($vol_created)" \
+    "Postgres keeps the passwords of the .env that created the volume: restore that .env, or (nothing to keep) docker compose down -v"
+else ok "pg_data volume and .env (created $vol_created)"; fi
+
 if [ -z "$(compose_cfg ps -q 2>/dev/null)" ]; then
   for port in 3000 5432 8080 9005 9091 9090 3100; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
