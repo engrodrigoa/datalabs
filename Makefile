@@ -8,7 +8,7 @@ AF := $(COMPOSE) exec -T airflow-scheduler
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-env: ## create .env with random passwords (keeps an existing one)
+env: ## create .env with random passwords (keeps an existing one, adds missing Airflow keys)
 	@test -f .env && echo ".env already exists" || ( \
 	  cp .env.example .env && \
 	  for k in DB_PASSWORD GRAFANA_DB_PASSWORD AIRFLOW_ADMIN_PASSWORD MINIO_ROOT_PASSWORD GRAFANA_ADMIN_PASSWORD; do \
@@ -16,6 +16,17 @@ env: ## create .env with random passwords (keeps an existing one)
 	  sed -i.bak "s|^MINIO_SECRET_KEY=.*|MINIO_SECRET_KEY=$$(grep ^MINIO_ROOT_PASSWORD= .env | cut -d= -f2)|" .env && \
 	  sed -i.bak "s|^AIRFLOW_UID=.*|AIRFLOW_UID=$$(id -u)|" .env && rm -f .env.bak && \
 	  echo ".env created (passwords randomised)" && $(MAKE) --no-print-directory creds )
+	@# Airflow keys: generated when missing or a placeholder, so an .env from before they existed gets them too.
+	@# Never regenerated once set: a new FERNET_KEY cannot decrypt what the old one encrypted.
+	@for k in AIRFLOW__WEBSERVER__SECRET_KEY AIRFLOW__CORE__FERNET_KEY; do \
+	  cur=$$(grep -E "^$$k=" .env | cut -d= -f2-); \
+	  case "$$cur" in ""|change-me*) \
+	    if [ "$$k" = AIRFLOW__CORE__FERNET_KEY ]; then v=$$(openssl rand -base64 32 | tr '+/' '-_'); \
+	    else v=$$(openssl rand -hex 32); fi; \
+	    if grep -qE "^$$k=" .env; then sed -i.bak "s|^$$k=.*|$$k=$$v|" .env && rm -f .env.bak; \
+	    else [ -n "$$(tail -c1 .env)" ] && echo >> .env; echo "$$k=$$v" >> .env; fi; \
+	    echo "$$k generated in .env (recreate Airflow to apply: docker compose up -d)";; \
+	  esac; done
 
 creds: ## logins for THIS machine (from .env; passwords are random per machine)
 	@test -f .env || { echo "no .env yet: make env"; exit 1; }

@@ -113,6 +113,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **Secrets only in `.env`** (gitignored, together with every `.env.*` except `.env.example`). `make env` generates
   random passwords. Never commit, print, log or paste secret values; never read `.env` to answer a question —
   `.env.example` documents every key. Sensitive keys: `DB_PASSWORD`, `GRAFANA_DB_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`,
+  `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW__CORE__FERNET_KEY` (never regenerate a set Fernet key),
   `MINIO_*`, `TELEGRAM_BOT_TOKEN`, `ALERT_WEBHOOK_URL`. `RFB_SHARE_URL` is a public link (configuration, not a secret).
 - `profiles.yml` is committed because it only reads `env_var(...)`. Keep it free of literals.
 - **Least privilege:** Grafana uses the read-only role `grafana_ro`. A new schema that Grafana reads must be added

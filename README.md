@@ -305,6 +305,8 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 | Elementary anomaly tests fail with `relation "none" does not exist` | Elementary tables missing on an empty database | fixed: `airflow-init` creates them; manual refresh: `make elementary` |
 | Edited `.env` but nothing changed | `.env` is read when a container is **created** | `docker compose up -d` (recreates the containers whose configuration changed) |
 | `dag_rag_anp` skipped | the image was built without the AI layer | `make up-ai` (by design: the RAG layer is opt-in) |
+| `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
+| Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | webserver and scheduler had no shared `AIRFLOW__WEBSERVER__SECRET_KEY`, so each made its own | `make env` adds it (and `AIRFLOW__CORE__FERNET_KEY`) to an existing `.env`, then `docker compose up -d` |
 
 </details>
 
