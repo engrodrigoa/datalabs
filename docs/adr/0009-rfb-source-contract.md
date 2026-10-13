@@ -10,9 +10,12 @@ notice:
 
 - **The share was re-created:** a new public link, and its root moved up one level; the months now live under
   `/Dados/Cadastros/CNPJ/<YYYY-MM>`. The token kept in `.env` on the lab machine pointed to the old share.
-- **Listing is gone:** `PROPFIND` on an existing folder answers `200` with an empty body (a missing folder still
-  answers `404` with a WebDAV error), so there is nothing to parse. The pipeline reported "WebDAV did not return
-  valid XML".
+- **Listing is gone:** `PROPFIND` answers `200` with an empty `text/html` body, so there is nothing to parse. The
+  pipeline reported "WebDAV did not return valid XML". Re-measured on 2026-10-12: the answer is the same for a
+  missing folder, a path outside the share and a rejected link, so `PROPFIND` carries no information at all.
+- **`GET` still tells the truth:** a 1-byte ranged `GET` on a file answers `206` when it exists, `404` when it does
+  not and `401` when the link is rejected (or no credentials are sent). The share token is static; the dynamic
+  values seen in the browser (session cookie, CSRF `requesttoken`) belong to the web UI and are not needed.
 - **Direct downloads still work, but the server is flaky under bursts:** `HEAD` on the same file returned `200`,
   then `404`, then `200` within minutes, and probing the 37 files in a row returned a different random subset
   each time (12 found, then 2).
@@ -28,6 +31,9 @@ notice:
   `404` is retried too; it only counts as missing after every attempt.
 - **A local file counts as done only if it is a readable ZIP of the announced size** (an interrupted download
   is never left as `.zip`; a truncated one from an older run is downloaded again).
+- **The source check is a ranged `GET` on `Cnaes.zip`** (the smallest contract file, ~22 KB), never `PROPFIND`.
+  `404` on the month and `206` on the previous month means "not published yet"; `404` on both means a wrong
+  directory or a stale share.
 - **Explicit causes, one event each:** `source_auth_failed` (link rejected → the share was re-created),
   `source_dir_not_found` (wrong `RFB_SHARE_DIR` or a stale token), `source_month_not_published` (exit `99`:
   the task is skipped, no new data), `source_unreachable`, `source_incomplete` (with the HTTP status per file).
