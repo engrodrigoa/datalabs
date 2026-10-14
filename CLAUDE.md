@@ -33,13 +33,13 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
   (dataset `datalabs://gold/anp`), `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
-- `pipelines/{anp,rfb,rag/anp}/` — numbered scripts, one per task
+- `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0009), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0010), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -69,6 +69,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   and backoff (the source flips 200/404). The source check is a 1-byte ranged `GET` on `Cnaes.zip`: 206 present,
   401 link rejected, 404 missing (previous month present → exit 99, not published yet). The share token is static
   and public (`RFB_SHARE_URL`); the browser's session cookie / CSRF token belong to the web UI, not to WebDAV.
+
+- **0010 Legislation RAG (LC 214):** structural source contract + sha256 versions (lc01); `pdftotext -layout`, the
+  indentation is a parser signal; one row per provision with ids from the printed labels, notes as columns (lc02);
+  source defects only via `pipelines/rag/lc214/known_anomalies.yml` (anything else fails the run); small-to-big
+  chunks under the 512-token limit (lc03). Revoked/vetoed provisions are rows, never vectors.
 
 ## Development rules
 

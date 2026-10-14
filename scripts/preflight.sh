@@ -108,7 +108,7 @@ fi
 # ------------------------------------------------------------------ network, seen from a container (what builds and DAGs see)
 echo "Network (from a container)"
 CURL_IMG="curlimages/curl:8.10.1"
-hosts="pypi.org files.pythonhosted.org raw.githubusercontent.com www.gov.br arquivos.receitafederal.gov.br"
+hosts="pypi.org files.pythonhosted.org raw.githubusercontent.com www.gov.br arquivos.receitafederal.gov.br www2.camara.leg.br"
 [ "$AI" -eq 1 ] && hosts="$hosts download.pytorch.org huggingface.co cas-server.xethub.hf.co us.aws.cdn.hf.co registry.ollama.ai"
 # one container, one line per host: exit code | resolved IP
 results=$(docker run --rm --entrypoint sh "$CURL_IMG" -c '
