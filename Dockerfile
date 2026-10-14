@@ -4,8 +4,9 @@ FROM apache/airflow:2.9.0-python3.12
 ARG AIRFLOW_VERSION=2.9.0
 ARG PYTHON_VERSION=3.12
 USER root
+# poppler-utils: pdftotext -layout for the LC 214 legislation RAG (pipelines/rag/lc214/lc01_extract.py)
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential git curl \
+  && apt-get install -y --no-install-recommends build-essential git curl poppler-utils \
   && apt-get autoremove -yqq --purge \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
