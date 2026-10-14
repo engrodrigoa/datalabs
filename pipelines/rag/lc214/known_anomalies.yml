@@ -1,0 +1,17 @@
+# Defects of the SOURCE (the law as published by the Câmara), not of the parser.
+# lc02 fails on any anomaly that is not listed here: a new one needs a human decision, not a silent guess.
+# An entry that no longer appears (the source was fixed) is logged as `anomaly_resolved` and can be removed.
+
+duplicate_articles:
+  - art: "260"
+    # the version whose caput carries "redação dada pela Lei Complementar nº 227" is the one in force
+    rule: annotated_wins
+    note: "the PDF prints the new caput (LC 227/2026) and, right below it, the old one with no marking"
+    verified: false   # pending: confirm against the consolidated text at planalto.gov.br
+
+repeated_labels:
+  # kept as printed (II, II) with a #2 suffix, so a citation still matches the published text
+  - id: "lc214-2025:art-444:par-4:inc-II#2"
+    note: "§ 4º lists incisos I, II, II (should be III) - Zona Franca de Manaus"
+  - id: "lc214-2025:art-462:par-4:inc-II#2"
+    note: "same defect in the parallel article for the Áreas de Livre Comércio"
