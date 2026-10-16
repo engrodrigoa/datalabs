@@ -74,6 +74,18 @@ def test_a_vector_case_must_be_retrievable_within_k_chunks():
     assert _rules(report) == [("content-01", "G6_retrievable")]           # 3 chunks needed, k=2
 
 
+def test_a_provision_split_into_windows_needs_one_slot_not_one_per_window():
+    # art. 517 (23k characters) becomes word windows that all carry the same id: any window retrieves it
+    windows = pl.DataFrame({"chunk_id": ["w1", "w2", "w3", "c1"],
+                            "dispositivo_ids": [[P + "5"], [P + "5"], [P + "5"], [P + "1", P + "1:par-1"]]})
+    index = g.chunk_index(windows)
+    assert index[P + "5"] == {"w1", "w2", "w3"}
+    assert g.chunks_needed([P + "5"], index) == 1
+    assert g.chunks_needed([P + "5", P + "1", P + "1:par-1"], index) == 2
+    report = g.check(_golden(_case(expected=(P + "5", P + "1")), k=2), _dispositivos(), windows, SHA)
+    assert report["passed"] and report["per_case"]["content-01"]["chunks_needed"] == 2
+
+
 def test_labels_from_another_law_version_fail_the_whole_set():
     report = g.check(_golden(_case()), _dispositivos(), _chunks(), "f" * 64)
     assert ("*", "G2_version") in _rules(report)

@@ -33,7 +33,9 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    the run: a new defect needs a human decision.
 5. **A data contract on the parse.** I1 articles 1..N without gaps, I2 unique ids, I3 contiguous sequences under
    each parent, I4 ≥ 98% of the body words inside a provision. The invariants found three parser bugs (`§ 10.`,
-   heading levels, column-0 articles) and both source defects before any table was written.
+   heading levels, column-0 articles) and both source defects before any table was written. I5 (parser v2):
+   revoked/vetoed ⇔ no body. The status comes from the marker right after the provision's own label ("§ 5º
+   (VETADO).", "b) (Revogada ...)"), the body from the text without notes: two rules that check each other.
 6. **Small-to-big chunks (lc03).** The model reads 512 tokens and sentence-transformers truncates the rest
    silently. An article that fits is one chunk; a longer one is split along its own structure (caput block, each §,
    each item, word windows as a last resort), every piece with a header (Título, Capítulo, Art.) and the start of
@@ -86,7 +88,7 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
 | | |
 |---|---|
 | provisions | 4,223: 580 articles, 1,228 §, 1,792 incisos, 623 alíneas; coverage 98.25% |
-| status | 4,164 in force, 33 revoked, 26 vetoed (= the 26 `(VETADO)` markers counted on the raw text) |
+| status | 4,165 in force, 33 revoked, 25 vetoed (parser v2; v1 counted 26: see the golden set below) |
 | notes | 371 provisions amended by LC 227/2026; 41 articles quote another law |
 | chunks | 854 (450 whole articles, 351 groups, 39 single provisions, 14 windows); 124 articles split |
 | tokens | `multilingual-e5-small` tokenizer, `passage: ` prefix and special tokens included: p50 265, p95 498, max 512 (0 over the limit) |
@@ -99,7 +101,11 @@ than one), within k = 5. Labelling them found a parser bug: lc02 marks art. 517 
 text it quotes contains "b) (VETADO)", so the whole article (23k characters of amendments to the Simples
 Nacional) is missing from the chunks. The check "vetoed rows = `(VETADO)` markers in the text" (26 = 26) could not
 see it: one marker is inside the quote, so a genuine count of 25 plus the false positive still adds up to 26.
-Case `content-22` carries it as a `known_issue` until lc02 is fixed.
+Fixed in parser v2 (`status_of`: the marker must follow the provision's own label) and guarded by I5, which on
+the v1 table flags exactly art. 517 and nothing else. Re-applying the v2 rule to the 4,223 provisions of version
+`0cf36f4433ce` changes one status (art. 517: vetado → vigente); the article becomes word windows (11 with the
+token estimate; the tokenizer run gives the real count in `chunks_report.json`). The lesson for checks: a count
+reconciliation cannot see a swap; a rule that ties two independent derivations of the same row can.
 
 **Consequences.** Next: lc04 loads the provisions and articles into Postgres (the router answers citations and
 revoked provisions by SQL) and embeds the chunks with the incremental sync of ADR 0007; lc05 adds a legal golden

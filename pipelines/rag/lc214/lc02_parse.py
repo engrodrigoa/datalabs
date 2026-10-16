@@ -23,6 +23,7 @@ Ids
 Data contract (the run fails, exit 1, instead of publishing a wrong table)
     I1 articles 1..N with no gap                    I3 contiguous sequences under each parent (I, II, III...)
     I2 unique ids                                   I4 >= LC214_MIN_COVERAGE of the body words land in a provision
+    I5 revoked/vetoed <=> no body (status and text come from different rules, so they check each other)
     Source defects are allowed only when listed in known_anomalies.yml (Art. 260 printed twice, inc. II twice).
 
 Exit codes: 0 parsed | 99 this version was already parsed by this parser version | 1 failed.
@@ -48,7 +49,7 @@ from pipelines.rag.lc214.lake import Lake, LakeError, LakeMissing, k_manifest, k
 
 logger = get_logger("lc02_parse")
 
-PARSER_VERSION = "1"            # bump when the output changes on purpose (forces a re-parse)
+PARSER_VERSION = "2"            # bump when the output changes on purpose (forces a re-parse)
 LAW_ID = "lc214-2025"
 MIN_COVERAGE = float(os.getenv("LC214_MIN_COVERAGE", "0.98"))
 ANOMALIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "known_anomalies.yml")
@@ -238,13 +239,37 @@ def parse_lines(lines: list[str], stats: Counter | None = None) -> list[Disp]:
 
 
 # --------------------------------------------------------------------------- notes, status, anomalies
+STATUS_MARK = re.compile(r"\s*[.)\-–—]?\s*\((?P<mark>VETAD[OA]|Revogad[oa])\b")
+
+
+def status_of(rotulo: str, full: str) -> str:
+    """Vetoed or revoked only when the marker follows the provision's OWN label.
+
+    The source prints "§ 5º (VETADO).", "III - (VETADO);", "b) (Revogada pela ...)", "Art. 334. (VETADO).": the
+    marker replaces the body. A marker further down belongs to text quoted from another law: art. 517 quotes the
+    LC 123 with "b) (VETADO);" inside, and searching the whole text marked the article itself as vetoed (parser
+    v1), dropping 23k characters of amendments to the Simples Nacional from the chunks.
+    "(VETADO na Lei Complementar nº 227, ...)" (a veto of the amending law) counts too.
+    """
+    if not full.startswith(rotulo):
+        return "vigente"
+    m = STATUS_MARK.match(full, len(rotulo))
+    if not m:
+        return "vigente"
+    return "vetado" if m["mark"].upper().startswith("VETAD") else "revogado"
+
+
+def body_text(rotulo: str, texto: str) -> str:
+    """What is left of a provision once its label and the punctuation around it are removed."""
+    t = texto.strip()
+    return (t[len(rotulo):] if t.startswith(rotulo) else t).strip(" .;:,-–—)")
+
+
 def finalize(d: Disp) -> dict:
     full = re.sub(r"\s+", " ", " ".join(d.texto)).strip()
     notes = [re.sub(r"\s+", " ", n).strip() for n in NOTE.findall(full)]
     clean = re.sub(r"\s+", " ", NOTE.sub(" ", full)).strip()
-    # "(VETADO)" and "(VETADO na Lei Complementar nº 227, ...)": a veto of the amending law counts too
-    status = ("vetado" if re.search(r"\(VETAD[OA]\b", full)
-              else "revogado" if any(n.lower().startswith("revogad") for n in notes) else "vigente")
+    status = status_of(d.rotulo, full)
     amended = sorted({f"LC {n}/{y}" for note in notes for n, y in AMENDED_BY.findall(note)})
     kinds = sorted({k for note in notes for k, rx in (("redacao_dada", r"reda[çc][ãa]o dada"), ("acrescido",
                     r"acrescid"), ("revogado", r"revogad"), ("vetado", r"vetad"), ("vide", r"^vide"))
@@ -318,6 +343,19 @@ def invariants(disps: list[Disp], body_words: int) -> dict:
     return result
 
 
+def status_invariant(df: pl.DataFrame) -> dict:
+    """I5: a revoked or vetoed provision has no body, and a provision in force has one.
+
+    Status and body come from different rules (the marker after the label, the text without notes), so they check
+    each other. A non-live provision WITH a body is text the chunks would silently drop (art. 517, parser v1); a live
+    one WITHOUT a body is a marker the status rule missed. Counting vetoed rows against "(VETADO)" markers in the
+    text cannot see a swap: 25 real vetoes plus one false positive also make 26.
+    """
+    bad = [r["dispositivo_id"] for r in df.select("dispositivo_id", "rotulo", "texto", "status").iter_rows(named=True)
+           if (r["status"] != "vigente") == bool(body_text(r["rotulo"], r["texto"]))]
+    return {"I5_status_matches_body": not bad, "status_body_mismatch": bad[:10]}
+
+
 def to_frame(disps: list[Disp], sha: str) -> pl.DataFrame:
     rows = []
     for ordem, d in enumerate(disps, 1):
@@ -372,6 +410,8 @@ def run(lake: Lake, anomalies_file: str = ANOMALIES_FILE, force: bool = False) -
     inv = invariants(disps, len(body[first:].split()))
 
     df = to_frame(disps, sha)
+    inv.update(status_invariant(df))
+    inv["passed"] = inv["passed"] and inv["I5_status_matches_body"]
     report = {
         "source_sha256": sha, "parser_version": PARSER_VERSION, "dispositivos": df.height,
         "by_type": dict(Counter(df["tipo"].to_list())), "by_status": dict(Counter(df["status"].to_list())),
