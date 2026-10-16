@@ -32,7 +32,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc03 → dataset `datalabs://silver/lc214`),
+  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc03 + golden contract → dataset
+  `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
@@ -79,6 +80,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   so a `PARSER_VERSION`/`CHUNKER_VERSION` bump applies without a new PDF; the AI gate is a ShortCircuit. Storage:
   the lake only (`pipelines/rag/lc214/lake.py`): `landing/lc214` (PDF versions + manifest), `bronze/lc214/text`,
   `silver/lc214/<sha12>/`; reports/manifest written last (commit point); `LC214_LAKE=file:///dir` for tests.
+  Golden set (`golden_set.yml`) = labelled data: its provision ids are re-checked against the current law on every run.
 
 ## Development rules
 

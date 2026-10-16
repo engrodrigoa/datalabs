@@ -69,6 +69,18 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    The lake is the system of record; the Postgres tables of lc04 are a serving projection of the current version,
    rebuildable from silver at any time.
 
+9. **The golden set is labelled data with a contract (`golden_set.yml`, `golden.py`).** The primary user is a
+   SEFAZ tax auditor checking a taxpayer that issues NF-e, so every content case has the auditor's phrasing
+   (`fiscal`, primary) and the legal one (`formal`): the gap between the two measures how much the retriever
+   depends on the law's own vocabulary. The cases cover every route of the router, not only similarity: citations
+   and revoked/vetoed provisions by SQL, amended provisions, the Art. 260 anomaly, abstention (previous wordings,
+   ICMS questions) and references to other laws (`cite_external`: retrieve the anchor in the LC 214, say the rule
+   lives elsewhere, never invent it). Labels are provision ids of one law version, so they are checked like data
+   (G1 schema, G2 version, G3 exists, G4 status, G5 amended, G6 retrievable within k chunks) by the
+   `golden_contract` task on every run: an amendment that touches a labelled provision fails the run with the
+   case named. A known failure is a `known_issue`, reported but not fatal, and strict: once it passes, the
+   contract fails until the marker is removed.
+
 **Measured (version `0cf36f4433ce`, 2026-10-14).**
 
 | | |
@@ -79,6 +91,15 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
 | chunks | 854 (450 whole articles, 351 groups, 39 single provisions, 14 windows); 124 articles split |
 | tokens | `multilingual-e5-small` tokenizer, `passage: ` prefix and special tokens included: p50 265, p95 498, max 512 (0 over the limit) |
 | estimate vs real | the 1.5 tokens/word estimate gave 863 chunks, max 511: close in total, but the chunk boundaries differ, so it is a development aid, never the gate |
+
+**Golden set v1 (2026-10-16, version `0cf36f4433ce`).** 46 cases: 22 content (21 with both phrasings),
+4 citation, 4 status, 2 amended, 1 anomaly, 1 out of scope, 2 no answer, 10 external references (6 `now`,
+2 `annexes`, 2 `future_project`). Routes: 35 vector, 9 SQL, 2 none. Vector cases need 1-3 chunks (17 need more
+than one), within k = 5. Labelling them found a parser bug: lc02 marks art. 517 as `vetado` because the LC 123
+text it quotes contains "b) (VETADO)", so the whole article (23k characters of amendments to the Simples
+Nacional) is missing from the chunks. The check "vetoed rows = `(VETADO)` markers in the text" (26 = 26) could not
+see it: one marker is inside the quote, so a genuine count of 25 plus the false positive still adds up to 26.
+Case `content-22` carries it as a `known_issue` until lc02 is fixed.
 
 **Consequences.** Next: lc04 loads the provisions and articles into Postgres (the router answers citations and
 revoked provisions by SQL) and embeds the chunks with the incremental sync of ADR 0007; lc05 adds a legal golden

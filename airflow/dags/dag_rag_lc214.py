@@ -1,8 +1,10 @@
 """
 dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legislation RAG (ADR 0010).
 
-  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -> health_checks_lc214
-     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big)   (SQL on audit)
+  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> health_checks_lc214
+     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   (SQL on audit)
+                                                                                 +-> golden_contract
+                                                                                     (labels vs the law)
 
 Storage: the lake only (landing/lc214 -> bronze/lc214 -> silver/lc214/<sha12>/, see lake.py).
 
@@ -24,6 +26,11 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
 Dataset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
     are new chunks. lc04 (load + embed) will be scheduled on it, like dag_rag_anp on datalabs://gold/anp.
+
+Golden contract (golden.py, golden_set.yml)
+    The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
+    current version (ids exist, status, chunk coverage): an amendment that revokes or renumbers a labelled
+    provision turns the run red here, with the case named, instead of silently lowering recall@k in lc05.
 
 Params (manual runs): `force` re-parses and re-chunks the current version; `pdf` uses a PDF already on the
 datasource volume (e.g. /mnt/datasource/lc214/inbox/lc214.pdf) when the Câmara site is down.
@@ -88,5 +95,7 @@ with DAG(
     # NONE_FAILED (not ALL_DONE): checks also run on a week with nothing new, but a failed step upstream
     # leaves this leaf upstream_failed, so the DAG run is red. With ALL_DONE a green leaf would hide it.
     data_health = health_checks("lc214", fail_on="never", trigger_rule=TriggerRule.NONE_FAILED)
+    golden = observed_script("golden_contract", "lc214", "rag/lc214/golden.py",
+                             trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
 
-    check_ai_runtime >> extract >> parse >> chunk >> data_health
+    check_ai_runtime >> extract >> parse >> chunk >> [data_health, golden]
