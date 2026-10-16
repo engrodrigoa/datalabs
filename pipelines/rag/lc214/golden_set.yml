@@ -11,11 +11,17 @@
 # contract and asks for a human review, like known_anomalies.yml does for the source.
 #
 # Fields
-#   type      content | citation | status | amended | anomaly | out_of_scope | no_answer | external_ref
-#   route     vector (similarity) | sql (exact lookup by id) | none (nothing to retrieve)
+#   type      content | citation | status | amended | anomaly | out_of_scope | no_answer | external_ref |
+#             combined | ambiguous | not_found
+#   route     the router's decision (router.py, ADR 0012), checked for every phrasing (R1):
+#             sql (a citation: exact lookup) | combined (citation + question: anchor + vectors) |
+#             vector (no citation of the LC 214) | clarify (ambiguous or nonexistent citation: ask, never guess)
 #   behavior  answer | report_status (revoked/vetoed is an answer) | abstain | cite_external (retrieve the
-#             reference in the LC 214 and say the rule lives in another law, never invent it)
-#   expected  provision ids that support the answer (the minimum, not every provision on the topic)
+#             reference in the LC 214 and say the rule lives in another law, never invent it) |
+#             ask_path (list the candidates) | report_missing (the provision does not exist)
+#   expected  provision ids that support the answer (the minimum, not every provision on the topic);
+#             ambiguous: the candidates the router must offer; no_answer / not_found: empty
+#   anchors   combined only: the cited provisions, always in the context whatever the vectors return
 #   mode      all -> coverage@k (every expected chunk in the top k) | any -> hit@k (one is enough)
 #   scope     now (measured) | annexes (needs the Annex tables, step 6) | future_project (another corpus)
 #   known_issue  the case is known to fail the contract for the reason given (strict: once it passes, remove it)
@@ -23,7 +29,7 @@
 # Each provision id lives in exactly one chunk (chunks.parquet `dispositivo_ids`), so a case maps to a set of
 # chunks; the contract reports how many each case needs and fails a mode=all case that needs more than k.
 
-version: 1
+version: 2
 law_version: "0cf36f4433ce"
 k: 5
 
@@ -389,7 +395,7 @@ cases:
   # ------------------------------------------------------------------ no answer: nothing in the LC 214, must abstain
   - id: no_answer-01
     type: no_answer
-    route: none
+    route: vector
     behavior: abstain
     questions:
       fiscal: "Qual é a multa por atraso na entrega da EFD ICMS/IPI?"
@@ -398,7 +404,7 @@ cases:
 
   - id: no_answer-02
     type: no_answer
-    route: none
+    route: vector
     behavior: abstain
     questions:
       fiscal: "Como calculo o DIFAL de ICMS numa venda interestadual para consumidor final?"
@@ -535,3 +541,74 @@ cases:
     assess: >-
       art. 517 quotes the LC 123 (23k characters): it is split into word windows, any of them retrieves it.
       Parser v1 marked it vetado because of a "(VETADO)" inside the quote (fixed in v2, invariant I5).
+
+  # ------------------------------------------------------------------ router: chat and legal citation forms (v2)
+  - id: citation-05
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "art 57 §3 IV a"
+      formal: "alínea \"a\" do inciso IV do § 3º do art. 57"
+    expected: [lc214-2025:art-57:par-3:inc-IV:ali-a]
+    mode: all
+    assess: "chat order (big to small) and legal order (small to big) resolve to the same provision"
+
+  - id: citation-06
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "art. 6º, II"
+      formal: "inciso II do caput do art. 6º"
+    expected: [lc214-2025:art-6:inc-II]
+    mode: all
+    assess: "an inciso cited right after the article is of the caput (art. 6º also has § 2º, II)"
+
+  - id: combined-01
+    type: combined
+    route: combined
+    behavior: answer
+    questions:
+      fiscal: "O art. 6º se aplica à transferência de mercadoria entre a matriz e a filial?"
+    anchors: [lc214-2025:art-6]
+    expected: [lc214-2025:art-6:inc-II]
+    mode: all
+    assess: "the cited article is always in the context; the vectors add what answers the question"
+
+  - id: combined-02
+    type: combined
+    route: combined
+    behavior: answer
+    questions:
+      fiscal: "Os arts. 47 e 48 permitem o crédito quando o fornecedor não pagou o imposto?"
+    anchors: [lc214-2025:art-47, lc214-2025:art-48]
+    expected: [lc214-2025:art-47, lc214-2025:art-48]
+    mode: all
+
+  - id: ambiguous-01
+    type: ambiguous
+    route: clarify
+    behavior: ask_path
+    questions:
+      fiscal: "O que diz a alínea a do art. 57?"
+    expected: [lc214-2025:art-57:inc-I:ali-a, lc214-2025:art-57:inc-II:ali-a, lc214-2025:art-57:par-3:inc-IV:ali-a]
+    assess: "three alíneas a in art. 57: ask which one, never pick"
+
+  - id: ambiguous-02
+    type: ambiguous
+    route: clarify
+    behavior: ask_path
+    questions:
+      fiscal: "Qual o texto do inciso III do art. 12?"
+    expected: [lc214-2025:art-12:par-1:inc-III, lc214-2025:art-12:par-2:inc-III, lc214-2025:art-12:par-4:inc-III]
+    assess: "art. 12 has no inciso III in the caput: three §§ have one"
+
+  - id: not_found-01
+    type: not_found
+    route: clarify
+    behavior: report_missing
+    questions:
+      fiscal: "O que diz o art. 600?"
+    expected: []
+    assess: "the law ends at art. 544: say it does not exist"
