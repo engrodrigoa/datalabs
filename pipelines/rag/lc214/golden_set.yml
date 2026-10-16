@@ -532,7 +532,6 @@ cases:
       fiscal: "Que alterações a LC 214 fez na LC 123 sobre o que compõe a receita bruta do Simples Nacional?"
     expected: [lc214-2025:art-517]
     mode: all
-    known_issue: >-
-      lc02 marks art. 517 as `vetado` because the LC 123 text it quotes contains "b) (VETADO)": the whole article
-      (23k characters of amendments to the Simples Nacional) is dropped from the chunks. Fix: a quoted veto inside
-      an article with altera_outra_lei must not set the article status.
+    assess: >-
+      art. 517 quotes the LC 123 (23k characters): it is split into word windows, any of them retrieves it.
+      Parser v1 marked it vetado because of a "(VETADO)" inside the quote (fixed in v2, invariant I5).

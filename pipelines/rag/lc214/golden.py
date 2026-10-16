@@ -25,7 +25,7 @@ import argparse
 import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import polars as pl
@@ -131,6 +131,31 @@ def validate_schema(golden: dict) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- G2-G6: against the data
+def chunk_index(chunks: pl.DataFrame) -> dict[str, set[str]]:
+    """provision id -> the chunks that carry it. Usually one; a provision too long for one chunk (art. 517 quotes
+    23k characters of the LC 123) is split into word windows, and retrieving any of them retrieves it."""
+    index = defaultdict(set)
+    for cid, ids in chunks.select("chunk_id", "dispositivo_ids").iter_rows():
+        for pid in ids:
+            index[pid].add(cid)
+    return index
+
+
+def chunks_needed(expected: list[str], index: dict[str, set[str]]) -> int:
+    """Fewest top-k slots that retrieve every expected provision: provisions sharing a chunk count once."""
+    groups: list[set[str]] = []
+    for pid in expected:
+        found = set(index.get(pid, ()))
+        if not found:
+            continue
+        overlapping = [g for g in groups if g & found]
+        for g in overlapping:
+            groups.remove(g)
+            found |= g
+        groups.append(found)
+    return len(groups)
+
+
 def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, current_sha: str) -> dict:
     """The full contract. Returns a report; `passed` is False on any violation outside a known_issue case."""
     k = golden.get("k", 5)
@@ -141,7 +166,7 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
 
     rows = {r["dispositivo_id"]: r for r in dispositivos.select("dispositivo_id", "status", "alterado_por")
             .iter_rows(named=True)}
-    chunk_of = {pid: cid for cid, ids in chunks.select("chunk_id", "dispositivo_ids").iter_rows() for pid in ids}
+    chunk_of = chunk_index(chunks)
 
     per_case, known, resolved = {}, [], []
     for c in golden.get("cases") or []:
@@ -163,15 +188,15 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
             if ctype == "amended" and not row["alterado_por"]:
                 bad("G5_amended", f"{pid} has no amendment note")
 
-        needed = sorted({chunk_of[p] for p in expected if p in chunk_of})
+        needed = chunks_needed(expected, chunk_of)
         if TYPES.get(ctype, ("",))[0] == "vector":
             for pid in expected:
                 if pid in rows and pid not in chunk_of:
                     bad("G6_retrievable", f"{pid} is in no chunk: a vector search can never return it")
-            if c.get("mode") == "all" and len(needed) > k:
-                bad("G6_retrievable", f"needs {len(needed)} chunks, more than k={k}: coverage@{k} cannot reach 1")
+            if c.get("mode") == "all" and needed > k:
+                bad("G6_retrievable", f"needs {needed} chunks, more than k={k}: coverage@{k} cannot reach 1")
         per_case[cid] = {"type": ctype, "route": c.get("route"), "scope": c.get("scope", "now"),
-                         "expected": len(expected), "chunks_needed": len(needed)}
+                         "expected": len(expected), "chunks_needed": needed}
 
         if c.get("known_issue"):
             if found:

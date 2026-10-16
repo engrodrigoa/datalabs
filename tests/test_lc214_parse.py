@@ -1,4 +1,5 @@
 """LC 214 parser: markers + layout signals, hierarchy, notes as metadata, source anomalies as a contract."""
+import polars as pl
 import pytest
 
 from pipelines.rag.lc214 import lc02_parse as lp
@@ -111,6 +112,46 @@ def test_notes_become_metadata_and_leave_the_text():
 def test_revoked_and_vetoed(line, status):
     d = _parse(f"{I}Art. 9º Caput:\n{I}I - um;\n{I}II - dois;\n{I}{line}")[-1]
     assert lp.finalize(d)["status"] == status
+
+
+@pytest.mark.parametrize("rotulo,full,status", [         # every label form found on the real text (parser v2)
+    ("Art. 334", "Art. 334. (VETADO).", "vetado"),
+    ("Art. 217", "Art. 217. (Revogado pela Lei Complementar nº 227, de 13/1/2026)", "revogado"),
+    ("§ 10", "§ 10. (VETADO na Lei Complementar nº 227, de 13/1/2026)", "vetado"),
+    ("b", "b) (Revogada pela Lei Complementar nº 227, de 13/1/2026)", "revogado"),
+    ("§ 3º", "§ 3º (VETADO). (Artigo acrescido pela Lei Complementar nº 227, de 13/1/2026)", "vetado"),
+    ("§ 3º", "§ 3º Incluem-se a locação. (Parágrafo acrescido pela Lei Complementar nº 227)", "vigente"),
+])
+def test_status_comes_from_the_marker_right_after_the_label(rotulo, full, status):
+    assert lp.status_of(rotulo, full) == status
+
+
+def test_a_veto_inside_quoted_text_does_not_veto_the_amending_article():
+    # art. 517 quotes the LC 123 and the quote contains "b) (VETADO);": parser v1 marked the whole article vetado
+    text = "\n".join([
+        f"{I}Art. 517. A Lei Complementar nº 123 passa a vigorar com as seguintes alterações:",
+        f'{I}     "Art. 13. ............ incidentes sobre:',
+        f"{I}     a) a importação de bens;",
+        f"{I}     b) (VETADO);",
+        f'{I}     c) a operação desacobertada de documento fiscal." (NR)',
+        f"{I}Art. 518. Outro artigo.",
+    ])
+    art = _parse(text)[0]
+    f = lp.finalize(art)
+    assert art.in_quote and f["status"] == "vigente" and "a importação de bens" in f["texto"]
+
+
+def test_status_and_body_check_each_other():
+    df = pl.DataFrame({
+        "dispositivo_id": ["a", "b", "c", "d"],
+        "rotulo": ["Art. 334", "Art. 517", "§ 5º", "Art. 1º"],
+        "texto": ["Art. 334. .", "Art. 517. A Lei Complementar nº 123 passa a vigorar...", "§ 5º", "Art. 1º Esta Lei."],
+        "status": ["vetado", "vetado", "vigente", "vigente"],
+    })
+    inv = lp.status_invariant(df)
+    # b: non-live with a body (dropped from the chunks); c: live with no body (a marker the status rule missed)
+    assert not inv["I5_status_matches_body"] and inv["status_body_mismatch"] == ["b", "c"]
+    assert lp.status_invariant(df.filter(pl.col("dispositivo_id").is_in(["a", "d"])))["I5_status_matches_body"]
 
 
 # --------------------------------------------------------------------------- source anomalies (contract)
