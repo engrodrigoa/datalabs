@@ -208,6 +208,32 @@ checks:
       ORDER BY started_at DESC LIMIT 1
     min: 4000
 
+  - name: lc214_serving_parity
+    pipeline: lc214
+    requires: ai
+    dataset: ai.lc214_dispositivo
+    type: reconciliation
+    # the serving table is a projection of the last parse (ADR 0011): same number of provisions, no more, no less.
+    # A gap means the load failed, was blocked by the mass-delete guard, or never ran after a re-parse.
+    left_label: last_parse_rows
+    query: >
+      SELECT rows_out FROM audit.pipeline_step_runs
+      WHERE pipeline = 'lc214' AND step = 'parse_dispositivos' AND status = 'success'
+      ORDER BY started_at DESC LIMIT 1
+    right_label: served_provisions
+    compare_query: SELECT COUNT(*) FROM ai.lc214_dispositivo
+    tolerance_pct: 0
+
+  - name: lc214_serving_single_version
+    pipeline: lc214
+    requires: ai
+    dataset: ai.lc214_dispositivo
+    type: threshold
+    # one transaction restamps every row: two law versions side by side means a load that did not finish its
+    # job, and the router would answer from a mix of two laws
+    query: SELECT COUNT(DISTINCT (source_sha256, parser_version)) FROM ai.lc214_dispositivo
+    max: 1
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs

@@ -1,8 +1,8 @@
 """
 dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legislation RAG (ADR 0010).
 
-  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> health_checks_lc214
-     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   (SQL on audit)
+  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres -> health_checks_lc214
+     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   (audit + serving)
                                                                                  +-> golden_contract
                                                                                      (labels vs the law)
 
@@ -26,6 +26,12 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
 Dataset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
     are new chunks. lc04 (load + embed) will be scheduled on it, like dag_rag_anp on datalabs://gold/anp.
+
+Serving load (lc04_load.py, ADR 0011)
+    Projects the current version into ai.lc214_dispositivo / ai.lc214_artigo by upsert in one transaction (readers
+    never wait, never see a half-loaded table) and reports what the amendment did: inserted, updated (text or
+    status changed), deleted (left the text), restamped (same content, new version or position). Exit 99 when the
+    tables already match. Health checks run after it: serving parity with the last parse, a single law version.
 
 Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
@@ -107,5 +113,8 @@ with DAG(
     data_health = health_checks("lc214", fail_on="never", trigger_rule=TriggerRule.NONE_FAILED)
     golden = observed_script("golden_contract", "lc214", "rag/lc214/golden.py",
                              trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
+    load = observed_script("load_postgres", "lc214", "rag/lc214/lc04_load.py",
+                           trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=10))
 
-    check_ai_runtime >> extract >> parse >> chunk >> [data_health, golden]
+    check_ai_runtime >> extract >> parse >> chunk >> [load, golden]
+    load >> data_health
