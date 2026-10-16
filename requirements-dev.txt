@@ -7,3 +7,5 @@ psycopg2-binary
 sqlalchemy>=2
 python-dotenv
 requests
+boto3
+moto[s3]>=5,<6     # S3 emulator for the lake tests (tests/test_lc214_lake.py)

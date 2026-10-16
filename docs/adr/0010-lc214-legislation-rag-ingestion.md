@@ -15,7 +15,7 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    is amended, so a pinned sha256 would break on legitimate changes. The contract checks what must stay true: the
    bytes are a PDF (checked before extraction: an HTML error page fails as `not_a_pdf`), at least 250 pages, the
    title and the last article are in the text. The sha256 makes the step idempotent: same file → exit 99; amended
-   law → stored next to the previous versions (`raw/`, `text/`, `manifest.json` written atomically).
+   law → stored next to the previous versions (decision 8 says where).
 2. **`pdftotext -layout` (poppler), because the layout is a signal.** The first line of a provision is indented
    (11-13 spaces) and wrapped lines start at column 0 (5,711 lines). A marker at column 0 is a wrapped reference
    (62 of them: "nos termos do\n§ 3º"), unless it is the next number of its sequence and the previous line closed a
@@ -51,6 +51,23 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    Postgres yet: the source watch ran in the last 8 days, and the last parse kept ≥ 4,000 provisions.
    Building the DAG exposed a bug: lc03 keyed "up to date" on the law version only, so a re-parse under the same
    sha would have left stale chunks (fixed, with a regression test).
+
+8. **Everything lives in the lake, in medallion layers (`lake.py`).** The first version wrote to a loose folder
+   under `datasource/` while ANP/RFB used object storage: the artifacts were invisible to the lake, tied to one
+   machine's volume, and "the history" was a directory listing. Now:
+
+   | layer | key | what |
+   |---|---|---|
+   | landing | `landing/lc214/raw/lc214_<sha12>.pdf`, `manifest.json`, `rejected/` | the file as published, every version |
+   | bronze | `bronze/lc214/text/lc214_<sha12>.txt` | `pdftotext -layout`: a lossless technical derivation |
+   | silver | `silver/lc214/<sha12>/{dispositivos,chunks,artigos}.parquet` + reports | structure, one prefix per version |
+
+   S3 has no rename, so atomicity comes from ordering: data objects first, the report (lc02, lc03) or the manifest
+   (lc01) LAST. A run killed in between leaves an orphan object nobody points to, never a "current" pointing to
+   missing data (tested). Processing still uses local disk (pdftotext reads a file), in a temporary directory that
+   is deleted. `LC214_LAKE=file:///dir` runs the same keys on a folder (tests, a laptop without the stack).
+   The lake is the system of record; the Postgres tables of lc04 are a serving projection of the current version,
+   rebuildable from silver at any time.
 
 **Measured (version `0cf36f4433ce`, 2026-10-14).**
 

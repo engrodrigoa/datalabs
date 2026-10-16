@@ -1,7 +1,7 @@
 """LC 214/2025 layout text (lc01) -> one row per provision ("dispositivo") with its hierarchy, status and notes.
 
-Step 2 of the legislation RAG. Input: the "current" version in DATASOURCE_DIR/lc214/manifest.json.
-Output: parsed/lc214_<sha12>_dispositivos.parquet + parsed/lc214_<sha12>_parse_report.json.
+Step 2 of the legislation RAG. Input: the "current" version of landing/lc214/manifest.json and its text in bronze.
+Output: silver/lc214/<sha12>/dispositivos.parquet + parse_report.json (written last: the commit point).
 
 How a PDF becomes structure
     A PDF has no structure, only text at positions. Articles, paragraphs and items are drafting conventions,
@@ -42,15 +42,14 @@ import yaml
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from pipelines.commons.env_loader import DATASOURCE_DIR  # noqa: E402
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
 from pipelines.observability import current_step  # noqa: E402
+from pipelines.rag.lc214.lake import Lake, LakeError, LakeMissing, k_manifest, k_silver, lake_from_env  # noqa: E402
 
 logger = get_logger("lc02_parse")
 
 PARSER_VERSION = "1"            # bump when the output changes on purpose (forces a re-parse)
 LAW_ID = "lc214-2025"
-LC214_DIR = os.getenv("LC214_DIR", os.path.join(DATASOURCE_DIR, "lc214"))
 MIN_COVERAGE = float(os.getenv("LC214_MIN_COVERAGE", "0.98"))
 ANOMALIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "known_anomalies.yml")
 EXIT_OK, EXIT_SKIPPED, EXIT_FAILED = 0, 99, 1
@@ -342,30 +341,26 @@ def to_frame(disps: list[Disp], sha: str) -> pl.DataFrame:
 
 
 # --------------------------------------------------------------------------- the step
-def outputs(lc_dir: str, sha: str) -> tuple[str, str]:
-    base = os.path.join(lc_dir, "parsed", f"lc214_{sha[:12]}")
-    return base + "_dispositivos.parquet", base + "_parse_report.json"
+def outputs(sha: str) -> tuple[str, str]:
+    return k_silver(sha, "dispositivos.parquet"), k_silver(sha, "parse_report.json")
 
 
-def run(lc_dir: str = LC214_DIR, anomalies_file: str = ANOMALIES_FILE, force: bool = False) -> int:
+def run(lake: Lake, anomalies_file: str = ANOMALIES_FILE, force: bool = False) -> int:
     step = current_step()
-    manifest_path = os.path.join(lc_dir, "manifest.json")
-    if not os.path.exists(manifest_path):
-        raise ParseError("source_missing", f"{manifest_path} not found: run lc01_extract first")
-    with open(manifest_path, encoding="utf-8") as f:
-        manifest = json.load(f)
+    try:
+        manifest = lake.get_json(k_manifest())
+    except LakeMissing:
+        raise ParseError("source_missing", f"{lake.url(k_manifest())} not found: run lc01_extract first") from None
     sha = manifest["current"]
     version = next(v for v in manifest["versions"] if v["sha256"] == sha)
-    parquet, report_path = outputs(lc_dir, sha)
-    if not force and os.path.exists(parquet) and os.path.exists(report_path):
-        with open(report_path, encoding="utf-8") as f:
-            if json.load(f).get("parser_version") == PARSER_VERSION:
-                log_event(logger, "parse_up_to_date", f"version {sha[:12]} already parsed (parser v{PARSER_VERSION})",
-                          sha256=sha)
-                return EXIT_SKIPPED
+    parquet, report_key = outputs(sha)
+    if not force and lake.exists(parquet) and lake.exists(report_key):
+        if lake.get_json(report_key).get("parser_version") == PARSER_VERSION:
+            log_event(logger, "parse_up_to_date", f"version {sha[:12]} already parsed (parser v{PARSER_VERSION})",
+                      sha256=sha)
+            return EXIT_SKIPPED
 
-    with open(os.path.join(lc_dir, version["text"]), encoding="utf-8") as f:
-        body = body_of(f.read())
+    body = body_of(lake.get(version["text"]).decode("utf-8"))
     with open(anomalies_file, encoding="utf-8") as f:
         known = yaml.safe_load(f) or {}
 
@@ -388,12 +383,8 @@ def run(lc_dir: str = LC214_DIR, anomalies_file: str = ANOMALIES_FILE, force: bo
         raise ParseError("parse_contract_failed", f"invariants failed: {json.dumps(inv, ensure_ascii=False)}",
                          invariants=inv)
 
-    os.makedirs(os.path.dirname(parquet), exist_ok=True)
-    df.write_parquet(parquet + ".tmp")
-    os.replace(parquet + ".tmp", parquet)
-    with open(report_path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-    os.replace(report_path + ".tmp", report_path)
+    lake.put_parquet(parquet, df)
+    lake.put_json(report_key, report)             # last: the report says the table is complete
 
     log_event(logger, "parse_done", f"{df.height} dispositivos from version {sha[:12]} "
               f"({report['by_type']}), coverage {inv['I4_coverage']:.1%}, {len(report['anomalies'])} known anomalies",
@@ -404,13 +395,16 @@ def run(lc_dir: str = LC214_DIR, anomalies_file: str = ANOMALIES_FILE, force: bo
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dir", default=LC214_DIR)
+    ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE) or file:///dir")
     ap.add_argument("--force", action="store_true", help="re-parse even if this version was already parsed")
     args = ap.parse_args(argv)
     try:
-        return run(args.dir, force=args.force)
+        return run(lake_from_env(args.lake), force=args.force)
     except ParseError as exc:
         log_event(logger, exc.event, str(exc), level=40, **exc.fields)
+        return EXIT_FAILED
+    except LakeError as exc:
+        log_event(logger, exc.event, str(exc), level=40)
         return EXIT_FAILED
 
 

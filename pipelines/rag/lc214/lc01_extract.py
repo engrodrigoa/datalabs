@@ -18,11 +18,12 @@ Why `pdftotext -layout` (poppler)
     The parser (lc02) relies on the layout: a new provision starts indented, a wrapped line starts at
     column 0. That signal was measured on this extractor; another library would change it.
 
-Layout under DATASOURCE_DIR/lc214/
-    raw/lc214_<sha12>.pdf    every version ever accepted
-    text/lc214_<sha12>.txt   layout text, one form feed (\\f) per page
-    manifest.json            versions + "current" (written atomically)
-    rejected/                files that failed the contract
+Where it goes (lake.py has the full layout)
+    landing/lc214/raw/lc214_<sha12>.pdf      every version ever accepted
+    bronze/lc214/text/lc214_<sha12>.txt      layout text, one form feed (\\f) per page
+    landing/lc214/manifest.json              versions + "current": written LAST, it is the commit point
+    landing/lc214/rejected/                  files that failed the contract
+    Download and extraction run in a temporary directory that is deleted at the end: nothing stays on local disk.
 
 Exit codes: 0 new version | 99 unchanged | 1 failed (contract, download or extraction).
 """
@@ -30,26 +31,25 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from pipelines.commons.env_loader import DATASOURCE_DIR  # noqa: E402
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
 from pipelines.observability import current_step  # noqa: E402
+from pipelines.rag.lc214.lake import Lake, LakeError, k_manifest, k_raw, k_rejected, k_text, lake_from_env  # noqa: E402
 
 logger = get_logger("lc01_extract")
 
 DEFAULT_URL = ("https://www2.camara.leg.br/legin/fed/leicom/2025/"
                "leicomplementar-214-16-janeiro-2025-796905-normaatualizada-pl.pdf")
 SOURCE_URL = os.getenv("LC214_PDF_URL", DEFAULT_URL)
-OUT_DIR = os.getenv("LC214_DIR", os.path.join(DATASOURCE_DIR, "lc214"))
 MIN_PAGES = int(os.getenv("LC214_MIN_PAGES", "250"))
 MARKERS = ("LEI COMPLEMENTAR Nº 214", "Art. 544")
 HTTP_RETRIES = int(os.getenv("LC214_HTTP_RETRIES", "4"))
@@ -93,21 +93,8 @@ def count_pages(text: str) -> int:
     return text.count("\f")
 
 
-def load_manifest(out_dir: str) -> dict:
-    path = os.path.join(out_dir, "manifest.json")
-    if not os.path.exists(path):
-        return {"current": None, "versions": []}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_manifest(out_dir: str, manifest: dict) -> None:
-    """Write-then-rename: a run killed half-way never leaves a truncated manifest behind."""
-    path = os.path.join(out_dir, "manifest.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+def empty_manifest() -> dict:
+    return {"current": None, "previous": None, "versions": []}
 
 
 # --------------------------------------------------------------------------- side effects (injectable)
@@ -149,72 +136,65 @@ def download(url: str, dest: str, session=None, retries: int = HTTP_RETRIES, sle
 
 
 # --------------------------------------------------------------------------- the step
-def run(source: str, out_dir: str = OUT_DIR, *, fetch=download, extract=extract_layout) -> int:
+def run(source: str, lake: Lake, *, fetch=download, extract=extract_layout) -> int:
     """`source` is a URL or a local file (e.g. the PDF you already downloaded by hand)."""
-    for sub in ("raw", "text", "rejected"):
-        os.makedirs(os.path.join(out_dir, sub), exist_ok=True)
-    incoming = os.path.join(out_dir, "_incoming.pdf")
     step = current_step()
+    with tempfile.TemporaryDirectory(prefix="lc214_") as work:
+        incoming = os.path.join(work, "incoming.pdf")
+        if os.path.isfile(source):
+            shutil.copyfile(source, incoming)
+            origin = os.path.abspath(source)
+        else:
+            fetch(source, incoming)
+            origin = source
 
-    if os.path.isfile(source):
-        shutil.copyfile(source, incoming)
-        origin = os.path.abspath(source)
-    else:
-        fetch(source, incoming)
-        origin = source
+        sha = sha256_file(incoming)
+        manifest = lake.get_json(k_manifest(), default=empty_manifest())
+        current = manifest.get("current")
+        if current == sha and lake.exists(k_text(sha)):
+            log_event(logger, "source_unchanged", f"LC 214 unchanged (sha {sha[:12]}): nothing to do", sha256=sha)
+            step.add(files_total=1, rows_out=0)
+            return EXIT_SKIPPED
 
-    sha = sha256_file(incoming)
-    manifest = load_manifest(out_dir)
-    current = manifest.get("current")
-    if current == sha and os.path.exists(os.path.join(out_dir, "text", f"lc214_{sha[:12]}.txt")):
-        os.remove(incoming)
-        log_event(logger, "source_unchanged", f"LC 214 unchanged (sha {sha[:12]}): nothing to do", sha256=sha)
-        step.add(files_total=1, rows_out=0)
-        return EXIT_SKIPPED
+        def reject(problems: list[str], pages: int = 0) -> int:
+            lake.put_file(k_rejected(sha), incoming, "application/pdf")
+            log_event(logger, "source_contract_failed", f"LC 214 rejected: {'; '.join(problems)}", level=40,
+                      sha256=sha, pages=pages, problems=problems, kept_at=lake.url(k_rejected(sha)))
+            return EXIT_FAILED
 
-    txt_tmp = os.path.join(out_dir, "_incoming.txt")
-    rejected = os.path.join(out_dir, "rejected", f"lc214_{sha[:12]}.pdf")
+        # cheap check first: an HTML error page must fail as "not_a_pdf", not as an extractor crash
+        with open(incoming, "rb") as f:
+            head = f.read(8)
+        if not head.startswith(b"%PDF"):
+            return reject(["not_a_pdf"])
+        txt = os.path.join(work, "incoming.txt")
+        try:
+            extract(incoming, txt)
+        except subprocess.CalledProcessError as exc:
+            return reject([f"extraction_failed: pdftotext exit {exc.returncode}"])
+        with open(txt, encoding="utf-8") as f:
+            text = f.read()
+        pages = count_pages(text)
 
-    def reject(problems: list[str], pages: int = 0) -> int:
-        os.replace(incoming, rejected)
-        if os.path.exists(txt_tmp):
-            os.remove(txt_tmp)
-        log_event(logger, "source_contract_failed", f"LC 214 rejected: {'; '.join(problems)}", level=40,
-                  sha256=sha, pages=pages, problems=problems, kept_at=rejected)
-        return EXIT_FAILED
+        problems = contract_violations(head, pages, text)
+        if problems:
+            return reject(problems, pages)
 
-    # cheap check first: an HTML error page must fail as "not_a_pdf", not as an extractor crash
-    with open(incoming, "rb") as f:
-        head = f.read(8)
-    if not head.startswith(b"%PDF"):
-        return reject(["not_a_pdf"])
-    try:
-        extract(incoming, txt_tmp)
-    except subprocess.CalledProcessError as exc:
-        return reject([f"extraction_failed: pdftotext exit {exc.returncode}"])
-    with open(txt_tmp, encoding="utf-8") as f:
-        text = f.read()
-    pages = count_pages(text)
-
-    problems = contract_violations(head, pages, text)
-    if problems:
-        return reject(problems, pages)
-
-    pdf_path = os.path.join(out_dir, "raw", f"lc214_{sha[:12]}.pdf")
-    txt_path = os.path.join(out_dir, "text", f"lc214_{sha[:12]}.txt")
-    os.replace(incoming, pdf_path)
-    os.replace(txt_tmp, txt_path)
+        # data first, manifest last: a run killed in between leaves an orphan object, never a dangling "current"
+        lake.put_file(k_raw(sha), incoming, "application/pdf")
+        lake.put_file(k_text(sha), txt, "text/plain; charset=utf-8")
+        size = os.path.getsize(incoming)
 
     manifest["versions"] = [v for v in manifest.get("versions", []) if v["sha256"] != sha] + [{
-        "sha256": sha, "pages": pages, "bytes": os.path.getsize(pdf_path), "source": origin,
+        "sha256": sha, "pages": pages, "bytes": size, "source": origin,
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "pdf": os.path.relpath(pdf_path, out_dir), "text": os.path.relpath(txt_path, out_dir),
+        "pdf": k_raw(sha), "text": k_text(sha),
     }]
     manifest["previous"], manifest["current"] = current, sha
-    save_manifest(out_dir, manifest)
+    lake.put_json(k_manifest(), manifest)
 
     event = "source_version_new" if current is None else "source_version_changed"
-    log_event(logger, event, f"LC 214 version {sha[:12]} accepted ({pages} pages)"
+    log_event(logger, event, f"LC 214 version {sha[:12]} accepted ({pages} pages) -> {lake.url(k_raw(sha))}"
               + (f", replaces {current[:12]}" if current else ""),
               sha256=sha, previous_sha256=current, pages=pages, versions=len(manifest["versions"]))
     step.add(files_total=1, rows_out=pages)
@@ -225,11 +205,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pdf", help="use a local PDF instead of downloading (same contract applies)")
     ap.add_argument("--url", default=SOURCE_URL)
-    ap.add_argument("--out", default=OUT_DIR)
+    ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE) or file:///dir")
     args = ap.parse_args(argv)
     try:
-        return run(args.pdf or args.url, args.out)
-    except SourceError as exc:
+        return run(args.pdf or args.url, lake_from_env(args.lake))
+    except (SourceError, LakeError) as exc:
         log_event(logger, exc.event, str(exc), level=40)
         return EXIT_FAILED
     except subprocess.CalledProcessError as exc:

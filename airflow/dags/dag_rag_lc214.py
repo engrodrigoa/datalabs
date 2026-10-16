@@ -4,6 +4,8 @@ dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legisla
   check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -> health_checks_lc214
      (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big)   (SQL on audit)
 
+Storage: the lake only (landing/lc214 -> bronze/lc214 -> silver/lc214/<sha12>/, see lake.py).
+
 Weekly source watch: the Câmara re-publishes the "norma atualizada" PDF whenever the law is amended.
 Most weeks nothing changed and the whole run is cheap: every step decides for itself, from its own
 inputs and code version, whether there is work to do, and exits 99 (SKIPPED) when there is none.

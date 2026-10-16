@@ -1,9 +1,9 @@
 """LC 214/2025 provisions (lc02) -> chunks to embed (small) + articles to answer with (big).
 
-Step 3 of the legislation RAG. Output, next to the parsed table:
-    parsed/lc214_<sha12>_chunks.parquet    what gets embedded (lc04)
-    parsed/lc214_<sha12>_artigos.parquet   what the answer shows: the whole article (small-to-big)
-    parsed/lc214_<sha12>_chunks_report.json
+Step 3 of the legislation RAG. Output, next to the parsed table in silver/lc214/<sha12>/:
+    chunks.parquet         what gets embedded (lc04)
+    artigos.parquet        what the answer shows: the whole article (small-to-big)
+    chunks_report.json     written last: the commit point
 
 Why small-to-big
     The article is the unit of citation, so the answer shows the whole article. But the embedding model reads
@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import math
 import os
 import statistics
@@ -41,14 +40,13 @@ import polars as pl
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from pipelines.commons.ai.embeddings import MODEL_NAME, PASSAGE_PREFIX  # noqa: E402
-from pipelines.commons.env_loader import DATASOURCE_DIR  # noqa: E402
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
 from pipelines.observability import current_step  # noqa: E402
+from pipelines.rag.lc214.lake import Lake, LakeError, k_manifest, k_silver, lake_from_env  # noqa: E402
 
 logger = get_logger("lc03_chunks")
 
 CHUNKER_VERSION = "1"          # bump when the chunk text changes on purpose (new ids, re-embed in lc04)
-LC214_DIR = os.getenv("LC214_DIR", os.path.join(DATASOURCE_DIR, "lc214"))
 MAX_TOKENS = int(os.getenv("LC214_MAX_TOKENS", "512"))           # e5 max_seq_length, special tokens included
 TOKENS_PER_WORD = float(os.getenv("LC214_TOKENS_PER_WORD", "1.5"))
 CAPUT_PREFIX_WORDS = 40
@@ -197,10 +195,9 @@ def chunk_id(source_id: str, text: str) -> str:
 
 
 # --------------------------------------------------------------------------- the step
-def outputs(lc_dir: str, sha: str) -> dict:
-    base = os.path.join(lc_dir, "parsed", f"lc214_{sha[:12]}")
-    return {"dispositivos": base + "_dispositivos.parquet", "chunks": base + "_chunks.parquet",
-            "artigos": base + "_artigos.parquet", "report": base + "_chunks_report.json"}
+def outputs(sha: str) -> dict:
+    return {"dispositivos": k_silver(sha, "dispositivos.parquet"), "chunks": k_silver(sha, "chunks.parquet"),
+            "artigos": k_silver(sha, "artigos.parquet"), "report": k_silver(sha, "chunks_report.json")}
 
 
 def build(df: pl.DataFrame, count, method: str, max_tokens: int = MAX_TOKENS) -> tuple[pl.DataFrame, pl.DataFrame, dict]:
@@ -249,22 +246,20 @@ def build(df: pl.DataFrame, count, method: str, max_tokens: int = MAX_TOKENS) ->
     return chunks, artigos, report
 
 
-def run(lc_dir: str = LC214_DIR, force: bool = False, method: str = os.getenv("LC214_TOKENS", "auto")) -> int:
+def run(lake: Lake, force: bool = False, method: str = os.getenv("LC214_TOKENS", "auto")) -> int:
     step = current_step()
-    with open(os.path.join(lc_dir, "manifest.json"), encoding="utf-8") as f:
-        sha = json.load(f)["current"]
-    out = outputs(lc_dir, sha)
-    if not os.path.exists(out["dispositivos"]):
-        raise ChunkError("input_missing", f"{out['dispositivos']} not found: run lc02_parse first")
+    sha = lake.get_json(k_manifest())["current"]
+    out = outputs(sha)
+    if not lake.exists(out["dispositivos"]):
+        raise ChunkError("input_missing", f"{lake.url(out['dispositivos'])} not found: run lc02_parse first")
 
-    dispositivos = pl.read_parquet(out["dispositivos"])
+    dispositivos = lake.get_parquet(out["dispositivos"])
     # The input file is keyed by the law version only: a parser bump rewrites it under the same name, so the
     # parser version is part of "same input" (without it, a re-parse would leave stale chunks behind).
     parser_version = dispositivos["parser_version"][0] if "parser_version" in dispositivos.columns else None
     count, used = load_counter(method)
-    if not force and os.path.exists(out["report"]) and os.path.exists(out["chunks"]):
-        with open(out["report"], encoding="utf-8") as f:
-            prev = json.load(f)
+    if not force and lake.exists(out["report"]) and lake.exists(out["chunks"]):
+        prev = lake.get_json(out["report"])
         if (prev.get("chunker_version") == CHUNKER_VERSION and prev.get("token_method") == used
                 and prev.get("parser_version") == parser_version):
             log_event(logger, "chunks_up_to_date", f"version {sha[:12]} already chunked ({used})", sha256=sha)
@@ -279,12 +274,9 @@ def run(lc_dir: str = LC214_DIR, force: bool = False, method: str = os.getenv("L
         raise ChunkError("chunk_coverage_failed", f"only {report['live_provisions_covered']:.2%} of the live "
                          "provisions landed in a chunk", coverage=report["live_provisions_covered"])
 
-    for name, frame in (("chunks", chunks), ("artigos", artigos)):
-        frame.write_parquet(out[name] + ".tmp")
-        os.replace(out[name] + ".tmp", out[name])
-    with open(out["report"] + ".tmp", "w", encoding="utf-8") as f:
-        json.dump({"source_sha256": sha, **report}, f, ensure_ascii=False, indent=2)
-    os.replace(out["report"] + ".tmp", out["report"])
+    lake.put_parquet(out["chunks"], chunks)
+    lake.put_parquet(out["artigos"], artigos)
+    lake.put_json(out["report"], {"source_sha256": sha, **report})      # last: the commit point
 
     log_event(logger, "chunks_done", f"{report['chunks']} chunks from {report['artigos']} articles "
               f"({report['by_kind']}), tokens p50={report['tokens']['p50']} p95={report['tokens']['p95']} "
@@ -297,14 +289,17 @@ def run(lc_dir: str = LC214_DIR, force: bool = False, method: str = os.getenv("L
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dir", default=LC214_DIR)
+    ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE) or file:///dir")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--tokens", choices=["auto", "tokenizer", "estimate"], default=os.getenv("LC214_TOKENS", "auto"))
     args = ap.parse_args(argv)
     try:
-        return run(args.dir, force=args.force, method=args.tokens)
+        return run(lake_from_env(args.lake), force=args.force, method=args.tokens)
     except ChunkError as exc:
         log_event(logger, exc.event, str(exc), level=40, **exc.fields)
+        return EXIT_FAILED
+    except LakeError as exc:
+        log_event(logger, exc.event, str(exc), level=40)
         return EXIT_FAILED
 
 

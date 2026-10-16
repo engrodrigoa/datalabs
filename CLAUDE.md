@@ -76,7 +76,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   source defects only via `pipelines/rag/lc214/known_anomalies.yml` (anything else fails the run); small-to-big
   chunks under the 512-token limit (lc03). Revoked/vetoed provisions are rows, never vectors. `dag_rag_lc214`: each
   step exits 99 when its own input and code version are unchanged, and the next steps run anyway (`NONE_FAILED`),
-  so a `PARSER_VERSION`/`CHUNKER_VERSION` bump applies without a new PDF; the AI gate is a ShortCircuit.
+  so a `PARSER_VERSION`/`CHUNKER_VERSION` bump applies without a new PDF; the AI gate is a ShortCircuit. Storage:
+  the lake only (`pipelines/rag/lc214/lake.py`): `landing/lc214` (PDF versions + manifest), `bronze/lc214/text`,
+  `silver/lc214/<sha12>/`; reports/manifest written last (commit point); `LC214_LAKE=file:///dir` for tests.
 
 ## Development rules
 

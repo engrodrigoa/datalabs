@@ -1,9 +1,8 @@
 """LC 214 chunking: small-to-big, nothing over the token limit, every live provision covered, stable ids."""
-import json
-
 import polars as pl
 
 from pipelines.rag.lc214 import lc03_chunks as lc
+from pipelines.rag.lc214.lake import LocalLake, k_manifest
 
 
 def words(text):                      # deterministic token counter: 1 word = 1 token
@@ -72,24 +71,27 @@ def test_estimate_is_labelled_as_such():
     assert method == "estimate" and count("um dois tres") > 3
 
 
+SHA = "x" * 64
+
+
+def _lake_with_parse(tmp_path, rows):
+    lake = LocalLake(str(tmp_path / "lake"))
+    lake.put_json(k_manifest(), {"current": SHA})
+    lake.put_parquet(lc.outputs(SHA)["dispositivos"], pl.DataFrame(rows))
+    return lake
+
+
 def test_run_skips_when_up_to_date(tmp_path):
-    lc_dir = tmp_path / "lc214"
-    (lc_dir / "parsed").mkdir(parents=True)
-    (lc_dir / "manifest.json").write_text(json.dumps({"current": "x" * 64}), encoding="utf-8")
-    pl.DataFrame(_article()).write_parquet(lc.outputs(str(lc_dir), "x" * 64)["dispositivos"])
-    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
-    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_SKIPPED
+    lake = _lake_with_parse(tmp_path, _article())
+    assert lc.run(lake, method="estimate") == lc.EXIT_OK
+    assert lake.get_parquet(lc.outputs(SHA)["chunks"]).height >= 1
+    assert lc.run(lake, method="estimate") == lc.EXIT_SKIPPED
 
 
 def test_a_reparse_under_the_same_law_version_is_chunked_again(tmp_path):
-    """lc02 rewrites the same file when PARSER_VERSION is bumped: lc03 must not skip it as up to date."""
-    lc_dir = tmp_path / "lc214"
-    (lc_dir / "parsed").mkdir(parents=True)
-    (lc_dir / "manifest.json").write_text(json.dumps({"current": "x" * 64}), encoding="utf-8")
-    path = lc.outputs(str(lc_dir), "x" * 64)["dispositivos"]
-    pl.DataFrame(_article()).write_parquet(path)
-    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
-    pl.DataFrame(_article()).with_columns(parser_version=pl.lit("2")).write_parquet(path)
-    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
-    report = json.loads(open(lc.outputs(str(lc_dir), "x" * 64)["report"], encoding="utf-8").read())
-    assert report["parser_version"] == "2"
+    """lc02 rewrites the same object when PARSER_VERSION is bumped: lc03 must not skip it as up to date."""
+    lake = _lake_with_parse(tmp_path, _article())
+    assert lc.run(lake, method="estimate") == lc.EXIT_OK
+    lake.put_parquet(lc.outputs(SHA)["dispositivos"], pl.DataFrame(_article()).with_columns(parser_version=pl.lit("2")))
+    assert lc.run(lake, method="estimate") == lc.EXIT_OK
+    assert lake.get_json(lc.outputs(SHA)["report"])["parser_version"] == "2"
