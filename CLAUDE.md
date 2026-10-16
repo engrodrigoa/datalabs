@@ -41,7 +41,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0011), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0012), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -86,6 +86,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `row_hash` over content only (not version stamp, not `ordem`/`pagina`), so the step reports inserted/updated/
   deleted/restamped per amendment. Guards: `silver_inconsistent`, `mass_delete_blocked` (>5%). Checks:
   `lc214_serving_parity`, `lc214_serving_single_version`.
+- **0012 LC 214 router:** `router.py` routes before retrieval: `sql` (citation only / its text, status, previous
+  wording), `combined` (citation + question: the cited provision is an anchor, vectors complete), `vector` (no
+  LC 214 citation; another law is `foreign`, never an anchor), `clarify` (ambiguous or missing: ask, never guess).
+  Citations in chat and legal order, lists, caput convention only when it leaves one candidate. Deterministic, so
+  the golden contract checks it exactly: R1 route, R2 anchors/options, R3 the law's 799 self-citations (≥ 99%).
 
 ## Development rules
 

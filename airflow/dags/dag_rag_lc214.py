@@ -37,6 +37,8 @@ Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
     current version (ids exist, status, chunk coverage): an amendment that revokes or renumbers a labelled
     provision turns the run red here, with the case named, instead of silently lowering recall@k in lc05.
+    It also checks the router (ADR 0012), which is deterministic: every phrasing must take its case's route
+    with the right anchors, and the law's own citations of itself must resolve (>= 99%).
 
 Params (manual runs)
     force  re-parse and re-chunk the current version (e.g. to apply a parser fix on demand).

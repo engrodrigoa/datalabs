@@ -13,6 +13,14 @@ evaluation uses them (lc05) and whenever the law changes:
     G5 amended       an `amended` case points at provisions that carry an amendment note
     G6 retrievable   a vector case's ids land in chunks, and a mode=all case needs at most k chunks
 
+and the router (router.py, ADR 0012), which is deterministic, so any miss is a bug, not a score:
+
+    R1 route         every phrasing of a case takes the case's route (sql | combined | vector | clarify)
+    R2 anchors       sql: the anchors are the expected ids; combined: the case's `anchors`; clarify: the options
+                     are the expected ids (ambiguous) or the citation is reported missing (not_found)
+    R3 self-refs     the citations the law makes to itself resolve (>= LC214_MIN_SELF_REF): a parser regression
+                     shows up on 1,335 real citations, not only on the handful in the set
+
 A case with `known_issue` documents a failure we know about: its violations are reported, not fatal. Strict: when
 it stops failing, the contract fails until the marker is removed (the same rule as an xfail(strict=True)).
 
@@ -36,28 +44,36 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
 from pipelines.observability import current_step  # noqa: E402
 from pipelines.rag.lc214.lake import Lake, LakeError, k_manifest, k_silver, lake_from_env  # noqa: E402
+from pipelines.rag.lc214.router import Index, route, self_references  # noqa: E402
 
 logger = get_logger("lc214_golden")
 
 GOLDEN_PATH = Path(__file__).with_name("golden_set.yml")
 EXIT_OK, EXIT_FAILED = 0, 1
+MIN_SELF_REF = float(os.getenv("LC214_MIN_SELF_REF", "0.99"))
 
-# type -> (route, allowed behaviors)
+# type -> (route the router must take, allowed behaviors). The route is the router's decision; what happens after
+# it (abstain when nothing is similar enough) is the behavior: a no_answer question still goes to the vectors.
 TYPES = {
     "content": ("vector", {"answer"}),
     "amended": ("vector", {"answer"}),
     "anomaly": ("vector", {"answer"}),
     "external_ref": ("vector", {"cite_external"}),
+    "no_answer": ("vector", {"abstain"}),
     "citation": ("sql", {"answer"}),
     "status": ("sql", {"report_status"}),
     "out_of_scope": ("sql", {"abstain"}),
-    "no_answer": ("none", {"abstain"}),
+    "combined": ("combined", {"answer"}),
+    "ambiguous": ("clarify", {"ask_path"}),
+    "not_found": ("clarify", {"report_missing"}),
 }
+EMPTY_EXPECTED = {"no_answer", "not_found"}
 STATUSES = {"revogado", "vetado"}
 MODES = {"all", "any"}
 SCOPES = {"now", "annexes", "future_project"}
 CASE_ID = re.compile(r"^[a-z_]+-\d{2}$")
-PROVISION_ID = re.compile(r"^lc214-2025:art-\d+(-[A-Z])?(:(par-(\d+|unico)|inc-[IVXLC]+|ali-[a-z])(#\d+)?)*$")
+PROVISION_ID = re.compile(r"^lc214-2025:art-\d+(-[A-Z])?(:(par-(\d+(-[A-Z])?|unico)|inc-[IVXLC]+(-[A-Z])?|ali-[a-z])"
+                          r"(#\d+)?)*$")
 
 
 def load_golden(path: Path | str = GOLDEN_PATH) -> dict:
@@ -108,14 +124,20 @@ def validate_schema(golden: dict) -> list[dict]:
         for pid in expected:
             if not PROVISION_ID.fullmatch(str(pid)):
                 bad(cid, "G1_expected_id", f"{pid!r} is not a provision id")
-        if ctype == "no_answer":
+        if ctype in EMPTY_EXPECTED:
             if expected:
-                bad(cid, "G1_expected", "a no_answer case has nothing to retrieve")
+                bad(cid, "G1_expected", f"a {ctype} case has nothing to retrieve")
         else:
             if not expected:
                 bad(cid, "G1_expected", "expected ids are required")
-            if c.get("mode") not in MODES:
+            if route != "clarify" and c.get("mode") not in MODES:
                 bad(cid, "G1_mode", f"mode must be one of {sorted(MODES)}")
+        anchors = c.get("anchors")
+        if ctype == "combined":
+            if not anchors or not all(PROVISION_ID.fullmatch(str(a)) for a in anchors):
+                bad(cid, "G1_anchors", "a combined case lists the cited provisions in `anchors`")
+        elif anchors is not None:
+            bad(cid, "G1_anchors", "only combined cases have `anchors` (sql anchors are the expected ids)")
         if ctype in ("status", "out_of_scope") and c.get("expected_status") not in STATUSES:
             bad(cid, "G1_expected_status", f"expected_status must be one of {sorted(STATUSES)}")
         if ctype not in ("status", "out_of_scope") and "expected_status" in c:
@@ -156,6 +178,33 @@ def chunks_needed(expected: list[str], index: dict[str, set[str]]) -> int:
     return len(groups)
 
 
+def routing_violations(case: dict, index: Index) -> list[dict]:
+    """R1/R2 for every phrasing of a case: the router is deterministic, so the expectation is exact."""
+    out, ctype = [], case.get("type")
+    if ctype not in TYPES:
+        return out
+    want_route = TYPES[ctype][0]
+    expected = sorted(case.get("expected") or [])
+    for name, question in (case.get("questions") or {}).items():
+        plan = route(str(question), index)
+
+        def bad(rule, detail, _name=name):
+            out.append({"case": case.get("id"), "rule": rule, "detail": f"{_name}: {detail}"})
+
+        if plan.route != want_route:
+            bad("R1_route", f"routed to {plan.route} ({plan.reason()}), expected {want_route}")
+            continue
+        if want_route == "sql" and sorted(plan.anchors) != expected:
+            bad("R2_anchors", f"anchors {plan.anchors}, expected {expected}")
+        elif want_route == "combined" and sorted(plan.anchors) != sorted(case.get("anchors") or []):
+            bad("R2_anchors", f"anchors {plan.anchors}, expected {case.get('anchors')}")
+        elif ctype == "ambiguous" and sorted(i for ids in plan.options.values() for i in ids) != expected:
+            bad("R2_options", f"options {plan.options}, expected {expected}")
+        elif ctype == "not_found" and not plan.missing:
+            bad("R2_missing", f"expected a missing citation, got {plan.intent}")
+    return out
+
+
 def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, current_sha: str) -> dict:
     """The full contract. Returns a report; `passed` is False on any violation outside a known_issue case."""
     k = golden.get("k", 5)
@@ -167,6 +216,7 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
     rows = {r["dispositivo_id"]: r for r in dispositivos.select("dispositivo_id", "status", "alterado_por")
             .iter_rows(named=True)}
     chunk_of = chunk_index(chunks)
+    index = Index(dispositivos["dispositivo_id"].to_list())
 
     per_case, known, resolved = {}, [], []
     for c in golden.get("cases") or []:
@@ -177,8 +227,9 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
             _found.append({"case": _cid, "rule": rule, "detail": detail})
 
         expected = [p for p in (c.get("expected") or []) if isinstance(p, str)]
+        anchors = [p for p in (c.get("anchors") or []) if isinstance(p, str)]
         want_status = c.get("expected_status", "vigente")
-        for pid in expected:
+        for pid in dict.fromkeys(expected + anchors):
             row = rows.get(pid)
             if row is None:
                 bad("G3_exists", f"{pid} is not in dispositivos")
@@ -189,14 +240,18 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
                 bad("G5_amended", f"{pid} has no amendment note")
 
         needed = chunks_needed(expected, chunk_of)
-        if TYPES.get(ctype, ("",))[0] == "vector":
+        if TYPES.get(ctype, ("",))[0] in ("vector", "combined"):
             for pid in expected:
                 if pid in rows and pid not in chunk_of:
                     bad("G6_retrievable", f"{pid} is in no chunk: a vector search can never return it")
             if c.get("mode") == "all" and needed > k:
                 bad("G6_retrievable", f"needs {needed} chunks, more than k={k}: coverage@{k} cannot reach 1")
+        routed = routing_violations(c, index)
+        found.extend(routed)
         per_case[cid] = {"type": ctype, "route": c.get("route"), "scope": c.get("scope", "now"),
-                         "expected": len(expected), "chunks_needed": needed}
+                         "expected": len(expected), "chunks_needed": needed,
+                         "phrasings": len(c.get("questions") or {}), "routed_ok": len(c.get("questions") or {})
+                         - len({v["detail"].split(":")[0] for v in routed})}
 
         if c.get("known_issue"):
             if found:
@@ -208,7 +263,15 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
         else:
             violations.extend(found)
 
-    vector = [v["chunks_needed"] for v in per_case.values() if v["route"] == "vector" and v["expected"]]
+    refs = self_references(dispositivos.select("dispositivo_id", "tipo", "texto", "altera_outra_lei").to_dicts(),
+                           index)
+    if refs["rate"] < MIN_SELF_REF:
+        violations.append({"case": "*", "rule": "R3_self_refs", "detail": f"the router resolves {refs['rate']:.2%} "
+                           f"of the law's {refs['own']} citations of itself, below {MIN_SELF_REF:.0%}: "
+                           f"first misses {[m['citation'] + ' in ' + m['in'] for m in refs['misses'][:5]]}"})
+    phrasings = sum(v["phrasings"] for v in per_case.values())
+    routed_ok = sum(v["routed_ok"] for v in per_case.values())
+    vector = [v["chunks_needed"] for v in per_case.values() if v["route"] in ("vector", "combined") and v["expected"]]
     return {
         "passed": not violations,
         "law_version": golden.get("law_version"),
@@ -219,6 +282,9 @@ def check(golden: dict, dispositivos: pl.DataFrame, chunks: pl.DataFrame, curren
         "by_route": dict(Counter(v["route"] for v in per_case.values())),
         "by_scope": dict(Counter(v["scope"] for v in per_case.values())),
         "chunks_needed": {"max": max(vector, default=0), "multi_chunk_cases": sum(n > 1 for n in vector)},
+        "routing": {"phrasings": phrasings, "ok": routed_ok, "accuracy": round(routed_ok / phrasings, 4) if phrasings
+                    else 1.0},
+        "self_refs": {k: v for k, v in refs.items() if k != "misses"} | {"misses": refs["misses"][:20]},
         "violations": violations,
         "known_issues": known,
         "known_issues_resolved": resolved,
@@ -232,19 +298,23 @@ def run(lake: Lake, path: Path | str = GOLDEN_PATH) -> int:
     dispositivos = lake.get_parquet(k_silver(sha, "dispositivos.parquet"))
     chunks = lake.get_parquet(k_silver(sha, "chunks.parquet"))
     report = check(load_golden(path), dispositivos, chunks, sha)
-    current_step().add(rows_in=report["cases"])
+    current_step().add(rows_in=report["cases"], routing_accuracy=report["routing"]["accuracy"],
+                       self_ref_rate=report["self_refs"]["rate"])
 
     for v in report["known_issues"]:
         log_event(logger, "golden_known_issue", f"{v['case']} {v['rule']}: {v['detail']}", case=v["case"])
     for v in report["violations"]:
         log_event(logger, "golden_contract_violation", f"{v['case']} {v['rule']}: {v['detail']}", level=40,
                   case=v["case"], rule=v["rule"])
+    r, sr = report["routing"], report["self_refs"]
     summary = (f"{report['cases']} cases {report['by_type']}, routes {report['by_route']}, "
-               f"chunks needed max={report['chunks_needed']['max']}, "
+               f"routing {r['ok']}/{r['phrasings']} phrasings, self-references {sr['resolved']}/{sr['own']} "
+               f"({sr['rate']:.2%}), chunks needed max={report['chunks_needed']['max']}, "
                f"{len(report['violations'])} violation(s), {len(report['known_issues'])} known issue(s)")
     if report["passed"]:
         log_event(logger, "golden_contract_passed", summary, cases=report["cases"], law_version=sha[:12],
-                  known_issues=len(report["known_issues"]))
+                  known_issues=len(report["known_issues"]), routing_accuracy=r["accuracy"],
+                  self_ref_rate=sr["rate"], self_ref_misses=sr["own"] - sr["resolved"])
         return EXIT_OK
     log_event(logger, "golden_contract_failed", summary, level=40, cases=report["cases"], law_version=sha[:12],
               violations=len(report["violations"]))

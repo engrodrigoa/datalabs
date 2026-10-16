@@ -12,10 +12,15 @@ P = "lc214-2025:art-"
 
 
 def _dispositivos():
-    rows = [("1", "vigente", []), ("1:par-1", "vigente", []), ("2", "vigente", ["LC 227/2026"]),
-            ("3:par-4", "revogado", ["LC 227/2026"]), ("4", "vigente", []), ("5", "vigente", [])]
+    rows = [("1", "vigente", [], "Art. 1º Um, nos termos do § 1º deste artigo."), ("1:par-1", "vigente", [], "§ 1º Um."),
+            ("2", "vigente", ["LC 227/2026"], "Art. 2º Dois, observado o § 1º do art. 1º."),
+            ("3:par-4", "revogado", ["LC 227/2026"], "§ 4º"), ("4", "vigente", [], "Art. 4º Quatro."),
+            ("5", "vigente", [], "Art. 5º Cinco.")]
     return pl.DataFrame({"dispositivo_id": [P + r[0] for r in rows], "status": [r[1] for r in rows],
-                         "alterado_por": [r[2] for r in rows]}, schema_overrides={"alterado_por": pl.List(pl.Utf8)})
+                         "alterado_por": [r[2] for r in rows],
+                         "tipo": ["par" if ":par" in r[0] else "art" for r in rows], "texto": [r[3] for r in rows],
+                         "altera_outra_lei": [False] * len(rows)},
+                        schema_overrides={"alterado_por": pl.List(pl.Utf8)})
 
 
 def _chunks():
@@ -24,9 +29,10 @@ def _chunks():
                          "dispositivo_ids": [[P + "1", P + "1:par-1"], [P + "2"], [P + "4"], [P + "5"]]})
 
 
-def _case(cid="content-01", ctype="content", route="vector", behavior="answer", expected=(P + "1",), **kw):
+def _case(cid="content-01", ctype="content", route="vector", behavior="answer", expected=(P + "1",),
+          q="pergunta do fiscal sem citação?", **kw):
     return {"id": cid, "type": ctype, "route": route, "behavior": behavior,
-            "questions": {"fiscal": "pergunta do fiscal?"}, "expected": list(expected), "mode": "all", **kw}
+            "questions": {"fiscal": q}, "expected": list(expected), "mode": "all", **kw}
 
 
 def _golden(*cases, k=5):
@@ -46,10 +52,12 @@ def test_the_committed_golden_set_is_structurally_valid():
 def test_a_valid_set_passes_and_reports_its_shape():
     report = g.check(_golden(_case(expected=(P + "1", P + "1:par-1")),
                              _case("status-01", "status", "sql", "report_status", (P + "3:par-4",),
-                                   expected_status="revogado")),
+                                   q="O § 4º do art. 3 ainda está vigente?", expected_status="revogado")),
                      _dispositivos(), _chunks(), SHA)
     assert report["passed"], report["violations"]
     assert report["by_route"] == {"vector": 1, "sql": 1}
+    assert report["routing"] == {"phrasings": 2, "ok": 2, "accuracy": 1.0}
+    assert report["self_refs"]["own"] == 1 and report["self_refs"]["rate"] == 1.0      # "§ 1º do art. 1º"
     assert report["per_case"]["content-01"]["chunks_needed"] == 1      # both ids live in the same chunk
 
 
@@ -86,6 +94,18 @@ def test_a_provision_split_into_windows_needs_one_slot_not_one_per_window():
     assert report["passed"] and report["per_case"]["content-01"]["chunks_needed"] == 2
 
 
+def test_the_router_decision_is_part_of_the_contract():
+    wrong_route = _case("citation-01", "citation", "sql", expected=(P + "2",), q="incide IBS na importação?")
+    wrong_anchor = _case("citation-02", "citation", "sql", expected=(P + "2",), q="O que diz o art. 4º?")
+    combined = _case("combined-01", "combined", "combined", expected=(P + "1:par-1",), anchors=[P + "1"],
+                     q="O art. 1º se aplica às exportações de serviços?")
+    ambiguous = _case("ambiguous-01", "ambiguous", "clarify", "ask_path", expected=(P + "1:par-1",),
+                      q="o que diz o § 1º do art. 1º?")                       # resolves: not ambiguous at all
+    rules = _rules(g.check(_golden(wrong_route, wrong_anchor, combined, ambiguous), _dispositivos(), _chunks(), SHA))
+    assert ("citation-01", "R1_route") in rules and ("citation-02", "R2_anchors") in rules
+    assert ("ambiguous-01", "R1_route") in rules and not [r for r in rules if r[0] == "combined-01"]
+
+
 def test_labels_from_another_law_version_fail_the_whole_set():
     report = g.check(_golden(_case()), _dispositivos(), _chunks(), "f" * 64)
     assert ("*", "G2_version") in _rules(report)
@@ -102,7 +122,7 @@ def test_a_known_issue_is_reported_not_fatal_and_strict_once_fixed():
 
 
 def test_schema_rejects_inconsistent_cases():
-    no_answer_with_ids = _case("no_answer-01", "no_answer", "none", "abstain")
+    no_answer_with_ids = _case("no_answer-01", "no_answer", "vector", "abstain")
     wrong_route = _case("citation-01", "citation", "vector")
     external_without_source = _case("external-01", "external_ref", behavior="cite_external", scope="now")
     rules = {(v["case"], v["rule"]) for v in g.validate_schema(
