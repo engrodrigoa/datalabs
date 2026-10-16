@@ -107,7 +107,7 @@ the v1 table flags exactly art. 517 and nothing else. Re-applying the v2 rule to
 estimate predicted 11; the lab run with the tokenizer measured 13, and the golden contract passed with 0 known issues). The lesson for checks: a count
 reconciliation cannot see a swap; a rule that ties two independent derivations of the same row can.
 
-**Consequences.** Next: lc04 loads the provisions and articles into Postgres (the router answers citations and
+**Consequences.** Next: lc04 loads the provisions and articles into Postgres ([ADR 0011](0011-lc214-serving-load.md)) (the router answers citations and
 revoked provisions by SQL) and embeds the chunks with the incremental sync of ADR 0007; lc05 adds a legal golden
 set with recall@k / MRR to the evaluation gate. A new law version re-runs the chain from lc01; a parser or chunker
 change bumps `PARSER_VERSION` / `CHUNKER_VERSION` and the next run (or a manual run with `force`) applies it. The Annexes (39 pages of tables with NCM codes) are out of scope

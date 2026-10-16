@@ -32,7 +32,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc03 + golden contract → dataset
+  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a + golden contract → dataset
   `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
@@ -41,7 +41,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0010), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0011), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -81,6 +81,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   the lake only (`pipelines/rag/lc214/lake.py`): `landing/lc214` (PDF versions + manifest), `bronze/lc214/text`,
   `silver/lc214/<sha12>/`; reports/manifest written last (commit point); `LC214_LAKE=file:///dir` for tests.
   Golden set (`golden_set.yml`) = labelled data: its provision ids are re-checked against the current law on every run.
+- **0011 LC 214 serving load:** `lc04_load` projects the current silver into `ai.lc214_dispositivo` /
+  `ai.lc214_artigo` by upsert + orphan delete in one transaction (readers never blocked, unlike TRUNCATE).
+  `row_hash` over content only (not version stamp, not `ordem`/`pagina`), so the step reports inserted/updated/
+  deleted/restamped per amendment. Guards: `silver_inconsistent`, `mass_delete_blocked` (>5%). Checks:
+  `lc214_serving_parity`, `lc214_serving_single_version`.
 
 ## Development rules
 
@@ -109,7 +114,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 16 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 20 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty
