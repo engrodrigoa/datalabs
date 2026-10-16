@@ -219,6 +219,22 @@ def test_run_writes_table_and_skips_when_up_to_date(tmp_path):
     assert lp.run(lake, str(reg)) == lp.EXIT_SKIPPED
 
 
+def test_parse_done_event_says_what_a_reviewer_checks(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(lp, "log_event", lambda _logger, event, msg=None, **kw: events.append((event, msg, kw)))
+    lake = LocalLake(str(tmp_path / "lake"))
+    sha = "abc" * 4
+    lake.put(k_text(sha), f"{I}Art. 1º Um:\n{I}I - a;\n{I}II - (VETADO);\n{I}Art. 2º Dois.\f".encode("utf-8"))
+    lake.put_json(k_manifest(), {"current": sha, "versions": [{"sha256": sha, "text": k_text(sha)}]})
+    reg = tmp_path / "known.yml"
+    reg.write_text("{}", encoding="utf-8")
+    assert lp.run(lake, str(reg)) == lp.EXIT_OK
+    _, msg, fields = next(e for e in events if e[0] == "parse_done")
+    assert fields["parser_version"] == lp.PARSER_VERSION
+    assert fields["status_vigente"] == 3 and fields["status_vetado"] == 1
+    assert "I5 ok" in msg and "'vetado': 1" in msg
+
+
 def test_without_a_manifest_the_step_says_what_to_run(tmp_path):
     with pytest.raises(lp.ParseError) as e:
         lp.run(LocalLake(str(tmp_path)), "unused.yml")

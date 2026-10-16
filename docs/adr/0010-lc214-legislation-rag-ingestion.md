@@ -83,15 +83,15 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    case named. A known failure is a `known_issue`, reported but not fatal, and strict: once it passes, the
    contract fails until the marker is removed.
 
-**Measured (version `0cf36f4433ce`, 2026-10-14).**
+**Measured (version `0cf36f4433ce`; parser v2 and chunks re-run in the lab on 2026-10-16).**
 
 | | |
 |---|---|
 | provisions | 4,223: 580 articles, 1,228 §, 1,792 incisos, 623 alíneas; coverage 98.25% |
 | status | 4,165 in force, 33 revoked, 25 vetoed (parser v2; v1 counted 26: see the golden set below) |
 | notes | 371 provisions amended by LC 227/2026; 41 articles quote another law |
-| chunks | 854 (450 whole articles, 351 groups, 39 single provisions, 14 windows); 124 articles split |
-| tokens | `multilingual-e5-small` tokenizer, `passage: ` prefix and special tokens included: p50 265, p95 498, max 512 (0 over the limit) |
+| chunks | 867 (450 whole articles, 351 groups, 39 single provisions, 27 windows); 125 articles split. Parser v1 gave 854 / 14 windows / 124: the 13 extra windows are art. 517 |
+| tokens | `multilingual-e5-small` tokenizer, `passage: ` prefix and special tokens included: p50 267, p95 497, max 512 (0 over the limit) |
 | estimate vs real | the 1.5 tokens/word estimate gave 863 chunks, max 511: close in total, but the chunk boundaries differ, so it is a development aid, never the gate |
 
 **Golden set v1 (2026-10-16, version `0cf36f4433ce`).** 46 cases: 22 content (21 with both phrasings),
@@ -103,8 +103,8 @@ Nacional) is missing from the chunks. The check "vetoed rows = `(VETADO)` marker
 see it: one marker is inside the quote, so a genuine count of 25 plus the false positive still adds up to 26.
 Fixed in parser v2 (`status_of`: the marker must follow the provision's own label) and guarded by I5, which on
 the v1 table flags exactly art. 517 and nothing else. Re-applying the v2 rule to the 4,223 provisions of version
-`0cf36f4433ce` changes one status (art. 517: vetado → vigente); the article becomes word windows (11 with the
-token estimate; the tokenizer run gives the real count in `chunks_report.json`). The lesson for checks: a count
+`0cf36f4433ce` changes one status (art. 517: vetado → vigente); the article becomes 13 word windows (the token
+estimate predicted 11; the lab run with the tokenizer measured 13, and the golden contract passed with 0 known issues). The lesson for checks: a count
 reconciliation cannot see a swap; a rule that ties two independent derivations of the same row can.
 
 **Consequences.** Next: lc04 loads the provisions and articles into Postgres (the router answers citations and

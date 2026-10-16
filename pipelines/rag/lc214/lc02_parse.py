@@ -426,9 +426,13 @@ def run(lake: Lake, anomalies_file: str = ANOMALIES_FILE, force: bool = False) -
     lake.put_parquet(parquet, df)
     lake.put_json(report_key, report)             # last: the report says the table is complete
 
-    log_event(logger, "parse_done", f"{df.height} dispositivos from version {sha[:12]} "
-              f"({report['by_type']}), coverage {inv['I4_coverage']:.1%}, {len(report['anomalies'])} known anomalies",
-              sha256=sha, rows=df.height, coverage=inv["I4_coverage"], anomalies=len(report["anomalies"]))
+    # the event carries what a reviewer checks first (status counts, every invariant), so nobody has to open the
+    # report in the lake to confirm a parser change: parser v2 was verified by reading parse_report.json
+    log_event(logger, "parse_done", f"{df.height} dispositivos from version {sha[:12]} (parser v{PARSER_VERSION}) "
+              f"({report['by_type']}), status {report['by_status']}, coverage {inv['I4_coverage']:.1%}, "
+              f"I5 {'ok' if inv['I5_status_matches_body'] else 'FAILED'}, {len(report['anomalies'])} known anomalies",
+              sha256=sha, rows=df.height, parser_version=PARSER_VERSION, coverage=inv["I4_coverage"],
+              anomalies=len(report["anomalies"]), **{f"status_{k}": v for k, v in report["by_status"].items()})
     step.add(rows_out=df.height)
     return EXIT_OK
 
