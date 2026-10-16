@@ -32,8 +32,14 @@ Golden contract (golden.py, golden_set.yml)
     current version (ids exist, status, chunk coverage): an amendment that revokes or renumbers a labelled
     provision turns the run red here, with the case named, instead of silently lowering recall@k in lc05.
 
-Params (manual runs): `force` re-parses and re-chunks the current version; `pdf` uses a PDF already on the
-datasource volume (e.g. /mnt/datasource/lc214/inbox/lc214.pdf) when the Câmara site is down.
+Params (manual runs)
+    force  re-parse and re-chunk the current version (e.g. to apply a parser fix on demand).
+    pdf    OPTIONAL, normally empty: lc01 then downloads LC214_PDF_URL (the Câmara "norma atualizada") and the
+           sha256 decides whether it is a new version. Fill it only when the Câmara site is down, with the path
+           of a PDF you copied to the host folder ./datasource (mounted in the container at /mnt/datasource),
+           e.g. host ./datasource/lc214/inbox/lc214.pdf -> /mnt/datasource/lc214/inbox/lc214.pdf.
+           It is NOT a lake key: landing/lc214 is lc01's output, not an input. Not a URL either (that is the
+           LC214_PDF_URL setting). The source contract applies the same way to a local file.
 """
 import importlib.util
 import os
@@ -75,7 +81,11 @@ with DAG(
     tags=["rag", "ai", "lc214", "legislation", "observability"],
     params={
         "force": Param(False, type="boolean", description="Re-parse and re-chunk the current version"),
-        "pdf": Param("", type="string", description="Local PDF path in the container (empty = download)"),
+        # ["null", "string"]: the trigger form sends an empty field as null; with type "string" alone Airflow marks
+        # the field required (*) and rejects a run that leaves it empty - the normal case
+        "pdf": Param(None, type=["null", "string"],
+                     description="Optional. Empty = download from LC214_PDF_URL. Only when the Câmara site is down: "
+                                 "/mnt/datasource/... path of a PDF copied to ./datasource (not a lake key, not a URL)"),
     },
     **OBS_DAG_CALLBACKS,
 ) as dag:
