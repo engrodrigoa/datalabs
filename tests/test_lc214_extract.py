@@ -1,10 +1,10 @@
 """LC 214 source step: structural contract, version detection by sha256, atomic manifest, retries."""
-import json
 import os
 
 import pytest
 
 from pipelines.rag.lc214 import lc01_extract as lc
+from pipelines.rag.lc214.lake import LocalLake, k_manifest, k_raw, k_rejected, k_text
 
 GOOD_TEXT = "LEI COMPLEMENTAR Nº 214, DE 16 DE JANEIRO DE 2025\n" + "\f" * 259 + "Art. 544. Esta Lei...\f"
 
@@ -39,56 +39,82 @@ def test_page_count_comes_from_form_feeds():
 
 
 # --------------------------------------------------------------------------- versions
+def _lake(tmp_path):
+    return LocalLake(str(tmp_path / "lake"))
+
+
+def _manifest(lake):
+    return lake.get_json(k_manifest(), default=lc.empty_manifest())
+
+
 def test_same_file_twice_is_skipped(tmp_path):
-    out, src = str(tmp_path / "out"), _pdf(tmp_path)
-    assert lc.run(src, out, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_OK
-    assert lc.run(src, out, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_SKIPPED
-    manifest = lc.load_manifest(out)
-    assert len(manifest["versions"]) == 1
-    assert not os.path.exists(os.path.join(out, "_incoming.pdf"))   # no leftovers
+    lake, src = _lake(tmp_path), _pdf(tmp_path)
+    assert lc.run(src, lake, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_OK
+    assert lc.run(src, lake, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_SKIPPED
+    assert len(_manifest(lake)["versions"]) == 1
 
 
 def test_amended_law_is_kept_next_to_the_previous_version(tmp_path):
-    out = str(tmp_path / "out")
-    lc.run(_pdf(tmp_path, "v1.pdf", b"v1"), out, extract=_fake_extract(GOOD_TEXT))
-    first = lc.load_manifest(out)["current"]
-    assert lc.run(_pdf(tmp_path, "v2.pdf", b"v2"), out, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_OK
-    manifest = lc.load_manifest(out)
+    lake = _lake(tmp_path)
+    lc.run(_pdf(tmp_path, "v1.pdf", b"v1"), lake, extract=_fake_extract(GOOD_TEXT))
+    first = _manifest(lake)["current"]
+    assert lc.run(_pdf(tmp_path, "v2.pdf", b"v2"), lake, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_OK
+    manifest = _manifest(lake)
     assert manifest["previous"] == first and manifest["current"] != first
     assert len(manifest["versions"]) == 2
-    assert len(os.listdir(os.path.join(out, "raw"))) == 2            # history preserved, nothing overwritten
+    assert lake.exists(k_raw(first)) and lake.exists(k_raw(manifest["current"]))   # history kept
+
+
+def test_landing_and_bronze_get_the_pdf_and_its_text(tmp_path):
+    lake = _lake(tmp_path)
+    lc.run(_pdf(tmp_path), lake, extract=_fake_extract(GOOD_TEXT))
+    v = _manifest(lake)["versions"][0]
+    assert v["pdf"] == k_raw(v["sha256"]) and v["pdf"].startswith("landing/lc214/raw/")
+    assert v["text"] == k_text(v["sha256"]) and v["text"].startswith("bronze/lc214/text/")
+    assert lake.get(v["text"]).decode("utf-8") == GOOD_TEXT
+    assert lake.get(v["pdf"]).startswith(b"%PDF")
 
 
 def test_rejected_file_never_touches_the_manifest(tmp_path):
-    out = str(tmp_path / "out")
-    lc.run(_pdf(tmp_path, "good.pdf", b"good"), out, extract=_fake_extract(GOOD_TEXT))
-    before = lc.load_manifest(out)
+    lake = _lake(tmp_path)
+    lc.run(_pdf(tmp_path, "good.pdf", b"good"), lake, extract=_fake_extract(GOOD_TEXT))
+    before = _manifest(lake)
     truncated = _fake_extract("LEI COMPLEMENTAR Nº 214\f\f")           # download cut half-way
-    assert lc.run(_pdf(tmp_path, "bad.pdf", b"bad"), out, extract=truncated) == lc.EXIT_FAILED
-    assert lc.load_manifest(out) == before
-    assert len(os.listdir(os.path.join(out, "rejected"))) == 1        # kept for inspection
+    bad = _pdf(tmp_path, "bad.pdf", b"bad")
+    assert lc.run(bad, lake, extract=truncated) == lc.EXIT_FAILED
+    assert _manifest(lake) == before
+    assert lake.exists(k_rejected(lc.sha256_file(bad)))                 # kept for inspection
 
 
 def test_html_error_page_is_rejected_before_extraction(tmp_path):
     """Found on the real run: pdftotext crashed on an HTML page before the contract was checked."""
-    out = str(tmp_path / "out")
+    lake = _lake(tmp_path)
     page = tmp_path / "erro.pdf"
     page.write_bytes(b"<!DOCTYPE html><html>404</html>")
 
     def must_not_run(pdf, txt):
         raise AssertionError("extractor called on a file that is not a PDF")
 
-    assert lc.run(str(page), out, extract=must_not_run) == lc.EXIT_FAILED
-    assert not os.path.exists(os.path.join(out, "_incoming.pdf"))
-    assert lc.load_manifest(out) == {"current": None, "versions": []}
+    assert lc.run(str(page), lake, extract=must_not_run) == lc.EXIT_FAILED
+    assert not lake.exists(k_manifest())
 
 
-def test_manifest_is_valid_json_with_relative_paths(tmp_path):
-    out = str(tmp_path / "out")
-    lc.run(_pdf(tmp_path), out, extract=_fake_extract(GOOD_TEXT))
-    with open(os.path.join(out, "manifest.json"), encoding="utf-8") as f:
-        v = json.load(f)["versions"][0]
-    assert v["pdf"].startswith("raw/") and v["text"].startswith("text/")   # survives moving the folder
+def test_a_run_killed_before_the_manifest_leaves_no_dangling_current(tmp_path):
+    """The manifest is the commit point: written after the data, so 'current' always points to real objects."""
+    class DiesOnManifest(LocalLake):
+        def put(self, key, data, content_type="application/octet-stream"):
+            if key == k_manifest():
+                raise KeyboardInterrupt("killed")
+            super().put(key, data, content_type)
+
+    lake = DiesOnManifest(str(tmp_path / "lake"))
+    src = _pdf(tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        lc.run(src, lake, extract=_fake_extract(GOOD_TEXT))
+    assert not lake.exists(k_manifest())                                # nothing was committed
+    healthy = LocalLake(lake.root)                                      # the next run completes the version
+    assert lc.run(src, healthy, extract=_fake_extract(GOOD_TEXT)) == lc.EXIT_OK
+    assert _manifest(healthy)["current"] == lc.sha256_file(src)
 
 
 # --------------------------------------------------------------------------- download

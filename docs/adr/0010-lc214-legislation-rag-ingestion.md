@@ -1,6 +1,7 @@
 # ADR 0010 — Legislation RAG (LC 214/2025): source contract, structural parser, small-to-big chunks
 
-**Status:** accepted (steps 1-3: `pipelines/rag/lc214/lc01..lc03`); retrieval and evaluation are the next steps.
+**Status:** accepted (steps 1-3: `pipelines/rag/lc214/lc01..lc03`, orchestrated by `dag_rag_lc214`); retrieval and
+evaluation are the next steps.
 
 **Context.** ADR 0005 said RAG is the right tool for unstructured text, and the ANP store is tabular. The
 first unstructured corpus is the LC 214/2025 (IBS/CBS/IS), from the "norma atualizada" PDF the Câmara publishes
@@ -14,7 +15,7 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    is amended, so a pinned sha256 would break on legitimate changes. The contract checks what must stay true: the
    bytes are a PDF (checked before extraction: an HTML error page fails as `not_a_pdf`), at least 250 pages, the
    title and the last article are in the text. The sha256 makes the step idempotent: same file → exit 99; amended
-   law → stored next to the previous versions (`raw/`, `text/`, `manifest.json` written atomically).
+   law → stored next to the previous versions (decision 8 says where).
 2. **`pdftotext -layout` (poppler), because the layout is a signal.** The first line of a provision is indented
    (11-13 spaces) and wrapped lines start at column 0 (5,711 lines). A marker at column 0 is a wrapped reference
    (62 of them: "nos termos do\n§ 3º"), unless it is the next number of its sequence and the previous line closed a
@@ -38,6 +39,35 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
    each item, word windows as a last resort), every piece with a header (Título, Capítulo, Art.) and the start of
    the caput, packed while they fit. The answer shows the whole article (`artigos.parquet`). With the model's
    tokenizer a chunk over the limit fails the run; without it, counts are estimates and say so (`token_method`).
+7. **Orchestration: every step decides for itself (`dag_rag_lc214`).** A weekly source watch (Mon 06:40). Each step
+   compares its own input and code version with what it last wrote and exits 99 when there is nothing to do: lc01
+   the sha256, lc02 sha + `PARSER_VERSION`, lc03 sha + parser version of its input + `CHUNKER_VERSION` + token
+   method. Steps after lc01 use `trigger_rule=NONE_FAILED`, so "skipped" means "up to date", not "stop": a parser
+   bump with the same PDF still re-parses and re-chunks (with the default ALL_SUCCESS it would wait for the next
+   amendment of the law). A failure still stops the chain and turns the run red. The AI-image gate is a
+   `ShortCircuitOperator` that overrides those rules: lc03 runs only with the real tokenizer (`--tokens tokenizer`),
+   because an estimate cannot prove that no chunk is truncated. `datalabs://silver/lc214` is emitted only when
+   lc03 succeeds (new chunks), to schedule lc04. Two health checks read the step audit, since the law is not in
+   Postgres yet: the source watch ran in the last 8 days, and the last parse kept ≥ 4,000 provisions.
+   Building the DAG exposed a bug: lc03 keyed "up to date" on the law version only, so a re-parse under the same
+   sha would have left stale chunks (fixed, with a regression test).
+
+8. **Everything lives in the lake, in medallion layers (`lake.py`).** The first version wrote to a loose folder
+   under `datasource/` while ANP/RFB used object storage: the artifacts were invisible to the lake, tied to one
+   machine's volume, and "the history" was a directory listing. Now:
+
+   | layer | key | what |
+   |---|---|---|
+   | landing | `landing/lc214/raw/lc214_<sha12>.pdf`, `manifest.json`, `rejected/` | the file as published, every version |
+   | bronze | `bronze/lc214/text/lc214_<sha12>.txt` | `pdftotext -layout`: a lossless technical derivation |
+   | silver | `silver/lc214/<sha12>/{dispositivos,chunks,artigos}.parquet` + reports | structure, one prefix per version |
+
+   S3 has no rename, so atomicity comes from ordering: data objects first, the report (lc02, lc03) or the manifest
+   (lc01) LAST. A run killed in between leaves an orphan object nobody points to, never a "current" pointing to
+   missing data (tested). Processing still uses local disk (pdftotext reads a file), in a temporary directory that
+   is deleted. `LC214_LAKE=file:///dir` runs the same keys on a folder (tests, a laptop without the stack).
+   The lake is the system of record; the Postgres tables of lc04 are a serving projection of the current version,
+   rebuildable from silver at any time.
 
 **Measured (version `0cf36f4433ce`, 2026-10-14).**
 
@@ -46,11 +76,12 @@ consolidation also mixes the law with notes ("Parágrafo acrescido pela LC 227/2
 | provisions | 4,223: 580 articles, 1,228 §, 1,792 incisos, 623 alíneas; coverage 98.25% |
 | status | 4,164 in force, 33 revoked, 26 vetoed (= the 26 `(VETADO)` markers counted on the raw text) |
 | notes | 371 provisions amended by LC 227/2026; 41 articles quote another law |
-| chunks | 863 (452 whole articles, 360 groups, 40 single provisions, 11 windows); 122 articles split |
-| tokens | estimate (1.5/word): p50 253, p95 495, max 511 — to be re-measured with the real tokenizer (`--tokens tokenizer`) |
+| chunks | 854 (450 whole articles, 351 groups, 39 single provisions, 14 windows); 124 articles split |
+| tokens | `multilingual-e5-small` tokenizer, `passage: ` prefix and special tokens included: p50 265, p95 498, max 512 (0 over the limit) |
+| estimate vs real | the 1.5 tokens/word estimate gave 863 chunks, max 511: close in total, but the chunk boundaries differ, so it is a development aid, never the gate |
 
 **Consequences.** Next: lc04 loads the provisions and articles into Postgres (the router answers citations and
 revoked provisions by SQL) and embeds the chunks with the incremental sync of ADR 0007; lc05 adds a legal golden
 set with recall@k / MRR to the evaluation gate. A new law version re-runs the chain from lc01; a parser or chunker
-change bumps `PARSER_VERSION` / `CHUNKER_VERSION`. The Annexes (39 pages of tables with NCM codes) are out of scope
+change bumps `PARSER_VERSION` / `CHUNKER_VERSION` and the next run (or a manual run with `force`) applies it. The Annexes (39 pages of tables with NCM codes) are out of scope
 here: they need a table extractor and prefix lookups, not text chunks.

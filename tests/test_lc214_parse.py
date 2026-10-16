@@ -1,10 +1,8 @@
 """LC 214 parser: markers + layout signals, hierarchy, notes as metadata, source anomalies as a contract."""
-import json
-import os
-
 import pytest
 
 from pipelines.rag.lc214 import lc02_parse as lp
+from pipelines.rag.lc214.lake import LocalLake, k_manifest, k_text
 
 I = " " * 12   # indentation of the first line of a provision in `pdftotext -layout`
 
@@ -168,15 +166,19 @@ def test_body_stops_at_signatures():
 
 
 def test_run_writes_table_and_skips_when_up_to_date(tmp_path):
-    lc = tmp_path / "lc214"
-    (lc / "text").mkdir(parents=True)
-    (lc / "text" / "lc214_abc.txt").write_text(f"{I}Art. 1º Um:\n{I}I - a;\n{I}II - b.\n{I}Art. 2º Dois.\f",
-                                               encoding="utf-8")
-    (lc / "manifest.json").write_text(json.dumps({"current": "abc" * 4, "versions": [
-        {"sha256": "abc" * 4, "text": "text/lc214_abc.txt"}]}), encoding="utf-8")
+    lake = LocalLake(str(tmp_path / "lake"))
+    sha = "abc" * 4
+    lake.put(k_text(sha), f"{I}Art. 1º Um:\n{I}I - a;\n{I}II - b.\n{I}Art. 2º Dois.\f".encode("utf-8"))
+    lake.put_json(k_manifest(), {"current": sha, "versions": [{"sha256": sha, "text": k_text(sha)}]})
     reg = tmp_path / "known.yml"
     reg.write_text("{}", encoding="utf-8")
-    assert lp.run(str(lc), str(reg)) == lp.EXIT_OK
-    parquet, report = lp.outputs(str(lc), "abc" * 4)
-    assert os.path.exists(parquet) and json.load(open(report))["invariants"]["passed"]
-    assert lp.run(str(lc), str(reg)) == lp.EXIT_SKIPPED
+    assert lp.run(lake, str(reg)) == lp.EXIT_OK
+    parquet, report = lp.outputs(sha)
+    assert lake.get_parquet(parquet).height == 4 and lake.get_json(report)["invariants"]["passed"]
+    assert lp.run(lake, str(reg)) == lp.EXIT_SKIPPED
+
+
+def test_without_a_manifest_the_step_says_what_to_run(tmp_path):
+    with pytest.raises(lp.ParseError) as e:
+        lp.run(LocalLake(str(tmp_path)), "unused.yml")
+    assert e.value.event == "source_missing"

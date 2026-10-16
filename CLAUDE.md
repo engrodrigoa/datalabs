@@ -32,7 +32,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
+  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc03 → dataset `datalabs://silver/lc214`),
+  `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
@@ -73,7 +74,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **0010 Legislation RAG (LC 214):** structural source contract + sha256 versions (lc01); `pdftotext -layout`, the
   indentation is a parser signal; one row per provision with ids from the printed labels, notes as columns (lc02);
   source defects only via `pipelines/rag/lc214/known_anomalies.yml` (anything else fails the run); small-to-big
-  chunks under the 512-token limit (lc03). Revoked/vetoed provisions are rows, never vectors.
+  chunks under the 512-token limit (lc03). Revoked/vetoed provisions are rows, never vectors. `dag_rag_lc214`: each
+  step exits 99 when its own input and code version are unchanged, and the next steps run anyway (`NONE_FAILED`),
+  so a `PARSER_VERSION`/`CHUNKER_VERSION` bump applies without a new PDF; the AI gate is a ShortCircuit. Storage:
+  the lake only (`pipelines/rag/lc214/lake.py`): `landing/lc214` (PDF versions + manifest), `bronze/lc214/text`,
+  `silver/lc214/<sha12>/`; reports/manifest written last (commit point); `LC214_LAKE=file:///dir` for tests.
 
 ## Development rules
 
