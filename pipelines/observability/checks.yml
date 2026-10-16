@@ -179,6 +179,35 @@ checks:
     query: SELECT acuracia_valor * 100 FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1
     min: 90
 
+  # ------------------------------------------------------------------ LC 214/2025 (legislation RAG, ADR 0010)
+  # The law lives in Parquet until lc04 loads it: these checks read the step audit, which every run writes.
+  - name: lc214_source_watch_freshness
+    pipeline: lc214
+    requires: ai
+    dataset: audit.pipeline_step_runs
+    type: freshness
+    severity: warn
+    # success = new version, skipped = checked and unchanged: both prove the source is still being watched
+    query: >
+      SELECT MAX(started_at) FROM audit.pipeline_step_runs
+      WHERE pipeline = 'lc214' AND step = 'extract_source' AND status IN ('success', 'skipped')
+    warn_after_hours: 192     # weekly DAG: 8 days
+    error_after_hours: 360    # two missed weeks (severity warn caps it: alert, not red)
+
+  - name: lc214_parse_volume
+    pipeline: lc214
+    requires: ai
+    dataset: audit.pipeline_step_runs
+    type: threshold
+    severity: warn
+    # 4,223 provisions today: an amendment adds or revokes a few dozen, not hundreds. A big drop means the PDF
+    # layout changed and the parser lost structure in a way the invariants I1-I4 did not catch.
+    query: >
+      SELECT rows_out FROM audit.pipeline_step_runs
+      WHERE pipeline = 'lc214' AND step = 'parse_dispositivos' AND status = 'success'
+      ORDER BY started_at DESC LIMIT 1
+    min: 4000
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs

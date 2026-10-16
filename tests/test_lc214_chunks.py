@@ -15,7 +15,7 @@ def _row(did, tipo, texto, parent=None, rotulo=None, status="vigente", ordem=0):
             "rotulo": rotulo or texto.split(" ")[0], "status": status, "ordem": ordem,
             "art": did.split(":")[1].removeprefix("art-"), "titulo": "I", "titulo_nome": "DAS NORMAS GERAIS",
             "capitulo": None, "capitulo_nome": None, "secao": None, "secao_nome": None, "pagina": 1,
-            "alterado_por": [], "altera_outra_lei": False, "source_sha256": "x" * 64}
+            "alterado_por": [], "altera_outra_lei": False, "source_sha256": "x" * 64, "parser_version": "1"}
 
 
 A = "lc214-2025:art-3"
@@ -79,3 +79,17 @@ def test_run_skips_when_up_to_date(tmp_path):
     pl.DataFrame(_article()).write_parquet(lc.outputs(str(lc_dir), "x" * 64)["dispositivos"])
     assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
     assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_SKIPPED
+
+
+def test_a_reparse_under_the_same_law_version_is_chunked_again(tmp_path):
+    """lc02 rewrites the same file when PARSER_VERSION is bumped: lc03 must not skip it as up to date."""
+    lc_dir = tmp_path / "lc214"
+    (lc_dir / "parsed").mkdir(parents=True)
+    (lc_dir / "manifest.json").write_text(json.dumps({"current": "x" * 64}), encoding="utf-8")
+    path = lc.outputs(str(lc_dir), "x" * 64)["dispositivos"]
+    pl.DataFrame(_article()).write_parquet(path)
+    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
+    pl.DataFrame(_article()).with_columns(parser_version=pl.lit("2")).write_parquet(path)
+    assert lc.run(str(lc_dir), method="estimate") == lc.EXIT_OK
+    report = json.loads(open(lc.outputs(str(lc_dir), "x" * 64)["report"], encoding="utf-8").read())
+    assert report["parser_version"] == "2"

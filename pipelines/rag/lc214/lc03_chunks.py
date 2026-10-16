@@ -22,7 +22,7 @@ Token counts
     fails the run. Without it (host venv, CI) counts are an estimate (words x LC214_TOKENS_PER_WORD), recorded
     as `token_method: estimate` in the report: good to develop with, not a measurement.
 
-Exit codes: 0 written | 99 up to date (same input, chunker version and token method) | 1 failed.
+Exit codes: 0 written | 99 up to date (same law version, parser, chunker and token method) | 1 failed.
 """
 from __future__ import annotations
 
@@ -257,15 +257,21 @@ def run(lc_dir: str = LC214_DIR, force: bool = False, method: str = os.getenv("L
     if not os.path.exists(out["dispositivos"]):
         raise ChunkError("input_missing", f"{out['dispositivos']} not found: run lc02_parse first")
 
+    dispositivos = pl.read_parquet(out["dispositivos"])
+    # The input file is keyed by the law version only: a parser bump rewrites it under the same name, so the
+    # parser version is part of "same input" (without it, a re-parse would leave stale chunks behind).
+    parser_version = dispositivos["parser_version"][0] if "parser_version" in dispositivos.columns else None
     count, used = load_counter(method)
     if not force and os.path.exists(out["report"]) and os.path.exists(out["chunks"]):
         with open(out["report"], encoding="utf-8") as f:
             prev = json.load(f)
-        if prev.get("chunker_version") == CHUNKER_VERSION and prev.get("token_method") == used:
+        if (prev.get("chunker_version") == CHUNKER_VERSION and prev.get("token_method") == used
+                and prev.get("parser_version") == parser_version):
             log_event(logger, "chunks_up_to_date", f"version {sha[:12]} already chunked ({used})", sha256=sha)
             return EXIT_SKIPPED
 
-    chunks, artigos, report = build(pl.read_parquet(out["dispositivos"]), count, used)
+    chunks, artigos, report = build(dispositivos, count, used)
+    report["parser_version"] = parser_version
     if report["over_limit"] and used == "tokenizer":
         raise ChunkError("chunk_over_limit", f"{report['over_limit']} chunk(s) above {MAX_TOKENS} tokens: the model "
                          "would truncate them silently", over_limit=report["over_limit"])
