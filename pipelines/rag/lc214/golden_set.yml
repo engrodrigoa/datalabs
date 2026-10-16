@@ -1,0 +1,538 @@
+# Golden set of the LC 214 legislation RAG: what the router and the retriever must get right.
+#
+# Primary user: a SEFAZ tax auditor (analista/auditor fiscal) checking how a taxpayer that issues NF-e applies the
+# law. Each content case carries two phrasings of the SAME information need:
+#   fiscal  - how the auditor asks (operation, document, field): the primary phrasing
+#   formal  - the legal wording, close to the text of the law: it measures the vocabulary gap (fiscal vs formal)
+#
+# Labels are provision ids of dispositivos.parquet (lc02) and were checked against the law version below. The
+# contract (pipelines/rag/lc214/golden.py, run by `python -m pipelines.rag.lc214.golden`) re-checks them against
+# the current version: a new version of the law that renumbers, revokes or amends a labelled provision fails the
+# contract and asks for a human review, like known_anomalies.yml does for the source.
+#
+# Fields
+#   type      content | citation | status | amended | anomaly | out_of_scope | no_answer | external_ref
+#   route     vector (similarity) | sql (exact lookup by id) | none (nothing to retrieve)
+#   behavior  answer | report_status (revoked/vetoed is an answer) | abstain | cite_external (retrieve the
+#             reference in the LC 214 and say the rule lives in another law, never invent it)
+#   expected  provision ids that support the answer (the minimum, not every provision on the topic)
+#   mode      all -> coverage@k (every expected chunk in the top k) | any -> hit@k (one is enough)
+#   scope     now (measured) | annexes (needs the Annex tables, step 6) | future_project (another corpus)
+#   known_issue  the case is known to fail the contract for the reason given (strict: once it passes, remove it)
+#
+# Each provision id lives in exactly one chunk (chunks.parquet `dispositivo_ids`), so a case maps to a set of
+# chunks; the contract reports how many each case needs and fails a mode=all case that needs more than k.
+
+version: 1
+law_version: "0cf36f4433ce"
+k: 5
+
+cases:
+  # ------------------------------------------------------------------ content: open questions, vector route
+  - id: content-01
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Remessa gratuita, sem pagamento, fica fora do IBS e da CBS? Ou a lei prevê casos em que incide mesmo sem contraprestação?"
+      formal: "Quais operações com bens e serviços estão sujeitas ao IBS e à CBS, e como a lei trata operações não onerosas?"
+    expected: [lc214-2025:art-4, lc214-2025:art-4:par-1, lc214-2025:art-5]
+    mode: all
+    assess: "regra geral (onerosas) e tributação das não onerosas só nas hipóteses expressas"
+
+  - id: content-02
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Na NF-e, quando um terceiro paga em nome do cliente (por conta e ordem), quem é o adquirente e quem é o destinatário?"
+      formal: "Qual é a diferença entre fornecedor, adquirente e destinatário, especialmente quando uma pessoa paga por conta e ordem de outra?"
+    expected: [lc214-2025:art-3:inc-III, lc214-2025:art-3:inc-IV:ali-b, lc214-2025:art-3:inc-V]
+    mode: all
+    assess: "papéis distintos que podem pertencer a pessoas diferentes"
+
+  - id: content-03
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "O contribuinte transferiu mercadoria da matriz para a filial sem destacar IBS e CBS. Está correto? Ele ainda precisa emitir NF-e?"
+      formal: "Quais operações de transferência entre estabelecimentos do mesmo contribuinte não sofrem incidência de IBS e CBS, e qual obrigação documental permanece?"
+    expected: [lc214-2025:art-6:inc-II]
+    mode: all
+    assess: "não incidência não dispensa o documento fiscal eletrônico"
+
+  - id: content-04
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A empresa vendeu produto ao diretor por um preço bem abaixo do de mercado. Incide IBS e CBS? Sobre qual valor?"
+      formal: "Em quais situações o fornecimento gratuito ou abaixo do valor de mercado pode ser tributado, especialmente em benefícios a sócios, administradores e empregados?"
+    expected: [lc214-2025:art-5:inc-I, lc214-2025:art-5:par-9]
+    mode: all
+    assess: "hipóteses das alíneas a e b do inciso I e tributação pelo valor de mercado"
+
+  - id: content-05
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A empresa doou mercadoria do estoque a uma instituição, com NF-e de doação sem destaque. Na compra dessa mercadoria ela tinha tomado crédito. O que deve acontecer?"
+      formal: "Quando uma doação de bem ou serviço fica fora da incidência do IBS e da CBS e o que muda quando o doador se apropriou de créditos?"
+    expected: [lc214-2025:art-6:inc-VIII, lc214-2025:art-6:par-2]
+    mode: all
+    assess: "tributar pelo valor de mercado ou, por opção, anular os créditos"
+
+  - id: content-06
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A NF-e traz venda de equipamento e a instalação dele cobradas num valor único. Pode tributar tudo junto ou tem que separar os itens?"
+      formal: "Quando uma operação que reúne diferentes bens e serviços deve discriminar separadamente cada fornecimento e quando pode ser tratada como fornecimento único?"
+    expected: [lc214-2025:art-7, lc214-2025:art-7:inc-II, lc214-2025:art-7:par-3]
+    mode: all
+    assess: "tratamento distinto obriga a separar; principal + acessórios vira fornecimento único"
+
+  - id: content-07
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Num contrato de fornecimento mensal com pagamento antecipado, em que momento nasce o débito de IBS e CBS?"
+      formal: "Em contratos de execução continuada ou fracionada, quando ocorre o fato gerador do IBS e da CBS, e como a lei trata pagamentos antecipados?"
+    expected: [lc214-2025:art-10:par-3, lc214-2025:art-10:par-4]
+    mode: all
+    assess: "a primeira entre exigibilidade e pagamento (LC 227); antecipações e ajuste na data do fornecimento"
+
+  - id: content-08
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Para conferir o destino do IBS em NF-e e CT-e: qual é o local da operação na venda entregue em outro município, no transporte de passageiros, no frete de carga e no serviço feito em imóvel?"
+      formal: "Como determinar o local da operação para venda de mercadoria entregue em outro município, transporte de passageiros, transporte de carga e serviços relacionados a imóveis?"
+    expected: [lc214-2025:art-11:inc-I, lc214-2025:art-11:inc-II, lc214-2025:art-11:inc-VI, lc214-2025:art-11:inc-VII]
+    mode: all
+    assess: "um critério territorial por tipo de operação"
+
+  - id: content-09
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Venda pelo e-commerce entregue por transportadora contratada pelo vendedor: qual é o destino do IBS? E se o endereço do cliente não estiver no cadastro?"
+      formal: "Em uma venda pela internet, como a lei determina o destino de uma mercadoria e o domicílio do adquirente ou destinatário para fins tributários?"
+    expected: [lc214-2025:art-11:par-1:inc-I, lc214-2025:art-11:par-3]
+    mode: all
+    assess: "destino conforme quem responde pelo transporte; domicílio por cadastro ou critérios combinados"
+
+  - id: content-10
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Conferindo a base de cálculo do IBS e da CBS na NF-e: frete, juros, desconto e IPI entram ou saem da base?"
+      formal: "Quais valores integram a base de cálculo do IBS e da CBS e quais são expressamente excluídos, incluindo frete, juros, descontos incondicionais e tributos?"
+    expected: [lc214-2025:art-12:par-1, lc214-2025:art-12:par-2, lc214-2025:art-12:par-3]
+    mode: all
+    assess: "desconto condicionado entra, incondicional (no documento) sai"
+
+  - id: content-11
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A NF-e declara um valor muito abaixo do mercado e o contribuinte não apresentou os documentos pedidos. Como a fiscalização pode arbitrar a base?"
+      formal: "Em quais situações a base de cálculo deve ser determinada pelo valor de mercado e como a administração tributária pode arbitrar esse valor?"
+    expected: [lc214-2025:art-12:par-4, lc214-2025:art-13]
+    mode: all
+    assess: "hipóteses de valor de mercado e critérios de arbitramento"
+
+  - id: content-12
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Como confiro se a alíquota de IBS destacada numa NF-e para cliente de Anápolis está certa? E se o município não tiver lei com alíquota própria?"
+      formal: "Como se compõe a alíquota do IBS de uma operação destinada a determinado município e o que acontece quando o ente não estabelece alíquota própria?"
+    expected: [lc214-2025:art-15, lc214-2025:art-14:par-3]
+    mode: all
+    assess: "soma estado + município de destino; na falta de lei, a alíquota de referência"
+
+  - id: content-13
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Uma igreja e uma prefeitura compram mercadoria e pedem NF-e sem IBS e CBS alegando imunidade. A imunidade vale para as compras delas?"
+      formal: "Quais fornecimentos são imunes ao IBS e à CBS e quais limitações se aplicam às entidades públicas, religiosas, educacionais e assistenciais?"
+    expected: [lc214-2025:art-9, lc214-2025:art-9:par-4]
+    mode: all
+    assess: "a imunidade alcança os fornecimentos da entidade, não as aquisições (§ 4º)"
+
+  - id: content-14
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Quem é contribuinte de IBS e CBS: pessoa física que vende com frequência sem CNPJ, o importador e quem arremata bem em leilão judicial?"
+      formal: "Quem é considerado contribuinte do IBS e da CBS em atividades econômicas habituais, profissionais, importações e aquisições em leilões judiciais?"
+    expected: [lc214-2025:art-21:inc-I, lc214-2025:art-21:inc-II, lc214-2025:art-21:inc-III]
+    mode: all
+    assess: "habitualidade/volume, adquirente em leilão, importador"
+
+  - id: content-15
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Um marketplace intermedeia vendas de lojistas goianos. Quando ele responde pelo IBS e pela CBS e que informações tem que prestar?"
+      formal: "Quando uma plataforma digital pode ser responsável pelo recolhimento do IBS e da CBS de operações intermediadas e quais obrigações de informação e documentação deve cumprir?"
+    expected: [lc214-2025:art-22, lc214-2025:art-22:par-1, lc214-2025:art-22:par-5]
+    mode: all
+    assess: "intermediação + controle de elemento essencial; dever de informar"
+
+  - id: content-16
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A transportadora que leva mercadoria sem NF-e, ou entrega em endereço diferente do da nota, responde pelo imposto? E o fornecedor do software emissor?"
+      formal: "Em quais situações um transportador, adquirente ou fornecedor de software pode responder solidariamente pelo IBS e pela CBS?"
+    expected: [lc214-2025:art-24:inc-II, lc214-2025:art-24:inc-IV]
+    mode: all
+    assess: "responsabilidade ligada à irregularidade documental ou ao software de registro"
+
+  - id: content-17
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "O cliente do regime regular tomou crédito de IBS e CBS de uma NF-e cujo fornecedor não pagou o imposto. Esse crédito vale?"
+      formal: "Quais condições gerais permitem ao contribuinte do regime regular apropriar créditos de IBS e CBS e como a extinção do débito do fornecedor interfere nesse direito?"
+    expected: [lc214-2025:art-47, lc214-2025:art-47:par-1, lc214-2025:art-48]
+    mode: all
+    assess: "crédito depende da extinção do débito e de documento idôneo; dispensa no split payment"
+
+  - id: content-18
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "O contribuinte tomou crédito na compra de bebidas alcoólicas e no combustível do carro usado pelos sócios. Pode?"
+      formal: "Quais bens e serviços a lei classifica como de uso ou consumo pessoal e como essa classificação afeta a apropriação de créditos?"
+    expected: [lc214-2025:art-57:inc-I, lc214-2025:art-57:par-1, lc214-2025:art-57:par-5]
+    mode: all
+    assess: "lista de uso e consumo pessoal e vedação do crédito"
+
+  - id: content-19
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Saldo credor de IBS acumulado: em que ordem ele é usado, quando expira e se passa para a incorporadora numa incorporação?"
+      formal: "Qual é a ordem de utilização dos créditos de IBS e CBS, qual é o prazo para utilizá-los e em que situações eles podem ser transferidos?"
+    expected: [lc214-2025:art-53, lc214-2025:art-54, lc214-2025:art-55:par-unico]
+    mode: all
+    assess: "ordem de compensação, prazo de 5 anos, sucessão em fusão/cisão/incorporação"
+
+  - id: content-20
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Escola particular vende uniforme e material junto com a mensalidade. A redução de 60% vale para tudo?"
+      formal: "Quais grupos de bens e serviços podem receber redução de 60% das alíquotas de IBS e CBS, e por que essa redução não deve ser aplicada automaticamente a qualquer item de uma atividade beneficiada?"
+    expected: [lc214-2025:art-128, lc214-2025:art-129:par-unico]
+    mode: all
+    assess: "a redução vale para o serviço listado, não para outras operações do estabelecimento"
+
+  - id: content-21
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Em 2026, que alíquota de IBS deve aparecer destacada nas NF-e? E em 2027?"
+      formal: "Quais alíquotas de IBS se aplicam aos fatos geradores de 2026 e de 2027 durante a transição?"
+    expected: [lc214-2025:art-343, lc214-2025:art-344]
+    mode: all
+    assess: "0,1% estadual em 2026; 0,05% estadual + 0,05% municipal em 2027-2028"
+
+  # ------------------------------------------------------------------ citation: the id is in the question, sql route
+  - id: citation-01
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "O que diz o art. 54?"
+    expected: [lc214-2025:art-54]
+    mode: all
+
+  - id: citation-02
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "Me mostra o art. 12, § 2º, inciso III."
+    expected: [lc214-2025:art-12:par-2:inc-III]
+    mode: all
+
+  - id: citation-03
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "Qual é o texto do parágrafo único do art. 13?"
+    expected: [lc214-2025:art-13:par-unico]
+    mode: all
+    assess: "'parágrafo único' tem id próprio (par-unico), não par-1"
+
+  - id: citation-04
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "O que estabelece o art. 7º-A sobre a ordem de aplicação de benefícios?"
+    expected: [lc214-2025:art-7-A]
+    mode: all
+    assess: "artigo com letra (inserido pela LC 227): o router tem que reconhecer '7º-A'"
+
+  # ------------------------------------------------------------------ status: revoked / vetoed is an answer, by lookup
+  - id: status-01
+    type: status
+    route: sql
+    behavior: report_status
+    questions:
+      fiscal: "O contribuinte fundamentou o crédito no art. 57, § 4º. Esse dispositivo está vigente?"
+    expected: [lc214-2025:art-57:par-4]
+    expected_status: revogado
+    mode: all
+    assess: "responder 'revogado pela LC 227/2026', nunca 'não encontrei'"
+
+  - id: status-02
+    type: status
+    route: sql
+    behavior: report_status
+    questions:
+      fiscal: "O que diz o § 8º do art. 11?"
+    expected: [lc214-2025:art-11:par-8]
+    expected_status: revogado
+    mode: all
+
+  - id: status-03
+    type: status
+    route: sql
+    behavior: report_status
+    questions:
+      fiscal: "O art. 217 ainda está em vigor?"
+    expected: [lc214-2025:art-217]
+    expected_status: revogado
+    mode: all
+    assess: "artigo inteiro revogado"
+
+  - id: status-04
+    type: status
+    route: sql
+    behavior: report_status
+    questions:
+      fiscal: "O que diz o art. 334 sobre o domicílio tributário eletrônico?"
+    expected: [lc214-2025:art-334]
+    expected_status: vetado
+    mode: all
+
+  # ------------------------------------------------------------------ amended: the answer must use the text in force
+  - id: amended-01
+    type: amended
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "A empresa fornece vale-refeição e vale-alimentação aos empregados. Ela pode tomar crédito de IBS e CBS nessa aquisição?"
+    expected: [lc214-2025:art-57:par-3:inc-IV:ali-h]
+    mode: all
+    assess: "redação dada pela LC 227/2026; crédito igual ao débito do fornecedor"
+
+  - id: amended-02
+    type: amended
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "O contribuinte vendeu uma máquina do ativo imobilizado e não destacou IBS e CBS. Incide?"
+    expected: [lc214-2025:art-4:par-4]
+    mode: all
+    assess: "incide inclusive sobre ativo não circulante (redação da LC 227)"
+
+  # ------------------------------------------------------------------ anomaly: a source defect resolved by a registry rule
+  - id: anomaly-01
+    type: anomaly
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Na locação residencial feita por contribuinte do regime regular, qual é o redutor social da base de cálculo?"
+    expected: [lc214-2025:art-260]
+    mode: all
+    assess: "Art. 260 impresso duas vezes no PDF; vale a versão anotada (annotated_wins, verified: false)"
+
+  # ------------------------------------------------------------------ out of scope: previous wordings were never collected
+  - id: out_of_scope-01
+    type: out_of_scope
+    route: sql
+    behavior: abstain
+    questions:
+      fiscal: "Qual era a redação do § 8º do art. 11 antes de ser revogado pela LC 227?"
+    expected: [lc214-2025:art-11:par-8]
+    expected_status: revogado
+    mode: all
+    assess: "informar que foi revogado e que redações anteriores não estão na base (ADR 0010)"
+
+  # ------------------------------------------------------------------ no answer: nothing in the LC 214, must abstain
+  - id: no_answer-01
+    type: no_answer
+    route: none
+    behavior: abstain
+    questions:
+      fiscal: "Qual é a multa por atraso na entrega da EFD ICMS/IPI?"
+    expected: []
+    assess: "ICMS e EFD não são tratados na LC 214: não inventar"
+
+  - id: no_answer-02
+    type: no_answer
+    route: none
+    behavior: abstain
+    questions:
+      fiscal: "Como calculo o DIFAL de ICMS numa venda interestadual para consumidor final?"
+    expected: []
+
+  # ------------------------------------------------------------------ external references: retrieve the anchor, cite the other law
+  - id: external-01
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Uma instituição de educação sem fins lucrativos alega imunidade. Que requisitos ela precisa cumprir?"
+      formal: "Quais requisitos do art. 14 do Código Tributário Nacional uma instituição de educação ou assistência social sem fins lucrativos deve cumprir para se beneficiar da imunidade mencionada na LC 214?"
+    expected: [lc214-2025:art-9:par-3]
+    mode: all
+    external_source: "Lei nº 5.172/1966 (CTN), art. 14"
+    scope: now
+
+  - id: external-02
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Para enquadrar duas empresas como coligadas (partes relacionadas), o que caracteriza influência significativa?"
+      formal: "Quais critérios da Lei nº 6.404/1976 caracterizam influência significativa para a definição de entidades coligadas referida na LC 214?"
+    expected: [lc214-2025:art-5:par-6]
+    mode: all
+    external_source: "Lei nº 6.404/1976, art. 243"
+    scope: now
+
+  - id: external-03
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Uma empresa do Simples Nacional quer recolher IBS e CBS pelo regime regular. Pode? Como faz a opção?"
+      formal: "Quais são as regras de opção, apuração e recolhimento aplicáveis a uma empresa do Simples Nacional que avalia recolher IBS e CBS pelo regime regular?"
+    expected: [lc214-2025:art-41:par-3, lc214-2025:art-41:par-4]
+    mode: all
+    external_source: "Lei Complementar nº 123/2006, com alterações vigentes"
+    scope: now
+
+  - id: external-04
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Uma escola presta um serviço com determinado código NBS. Ele tem direito à redução de 60%?"
+      formal: "Qual código da NBS corresponde ao serviço prestado e esse código está incluído no Anexo II ou III da LC 214 para redução de alíquota?"
+    expected: [lc214-2025:art-129, lc214-2025:art-130]
+    mode: all
+    external_source: "Anexos II e III da LC 214 + tabela NBS"
+    scope: annexes
+
+  - id: external-05
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Um alimento com determinado NCM tem redução de 60% de IBS e CBS?"
+      formal: "Como a classificação NCM/SH de um produto determina se ele está nos anexos de redução de alíquota da LC 214?"
+    expected: [lc214-2025:art-135]
+    mode: all
+    external_source: "Anexo VII da LC 214 + NCM/SH (TIPI)"
+    scope: annexes
+
+  - id: external-06
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Uma representação digital usada como investimento é ativo virtual para fins do regime de serviços de ativos virtuais?"
+    expected: [lc214-2025:art-229:par-1]
+    mode: all
+    external_source: "Lei nº 14.478/2022 e legislação de valores mobiliários"
+    scope: now
+
+  - id: external-07
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "O cliente faliu e não pagou as NF-e. O fornecedor pode recuperar o IBS e a CBS que pagou nessas vendas?"
+      formal: "Quais procedimentos e efeitos da falência precisam ser verificados para avaliar se o fornecedor pode se creditar de débitos de IBS e CBS relativos a operações não pagas?"
+    expected: [lc214-2025:art-47:par-11]
+    mode: all
+    external_source: "Lei nº 11.101/2005"
+    scope: now
+    assess: "as três condições do § 11 estão na LC 214; o encerramento da falência, na Lei 11.101"
+
+  - id: external-08
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Como funciona a transição do ICMS para o IBS e quem fixa as alíquotas nesse período?"
+    expected: [lc214-2025:art-342, lc214-2025:art-345]
+    mode: all
+    external_source: "Constituição Federal e EC nº 132/2023"
+    scope: future_project
+
+  - id: external-09
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "Quais campos e leiaute da NF-e devo conferir para o destaque de IBS e CBS?"
+    expected: [lc214-2025:art-60]
+    mode: all
+    external_source: "Notas técnicas da NF-e (NT 2025.002) e atos do Comitê Gestor"
+    scope: future_project
+    assess: "a LC 214 obriga o documento eletrônico; leiaute e campos estão em norma infralegal"
+
+  - id: external-10
+    type: external_ref
+    route: vector
+    behavior: cite_external
+    questions:
+      fiscal: "No procedimento de habilitação para compensação de benefícios onerosos, que regras de processo administrativo se aplicam?"
+    expected: [lc214-2025:art-386:par-unico]
+    mode: all
+    external_source: "Lei nº 9.784/1999"
+    scope: now
+
+  # ------------------------------------------------------------------ found by building this set
+  - id: content-22
+    type: content
+    route: vector
+    behavior: answer
+    questions:
+      fiscal: "Que alterações a LC 214 fez na LC 123 sobre o que compõe a receita bruta do Simples Nacional?"
+    expected: [lc214-2025:art-517]
+    mode: all
+    known_issue: >-
+      lc02 marks art. 517 as `vetado` because the LC 123 text it quotes contains "b) (VETADO)": the whole article
+      (23k characters of amendments to the Simples Nacional) is dropped from the chunks. Fix: a quoted veto inside
+      an article with altera_outra_lei must not set the article status.

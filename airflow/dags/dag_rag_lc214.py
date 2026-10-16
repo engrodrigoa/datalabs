@@ -1,8 +1,10 @@
 """
 dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legislation RAG (ADR 0010).
 
-  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -> health_checks_lc214
-     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big)   (SQL on audit)
+  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> health_checks_lc214
+     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   (SQL on audit)
+                                                                                 +-> golden_contract
+                                                                                     (labels vs the law)
 
 Storage: the lake only (landing/lc214 -> bronze/lc214 -> silver/lc214/<sha12>/, see lake.py).
 
@@ -25,8 +27,19 @@ Dataset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
     are new chunks. lc04 (load + embed) will be scheduled on it, like dag_rag_anp on datalabs://gold/anp.
 
-Params (manual runs): `force` re-parses and re-chunks the current version; `pdf` uses a PDF already on the
-datasource volume (e.g. /mnt/datasource/lc214/inbox/lc214.pdf) when the Câmara site is down.
+Golden contract (golden.py, golden_set.yml)
+    The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
+    current version (ids exist, status, chunk coverage): an amendment that revokes or renumbers a labelled
+    provision turns the run red here, with the case named, instead of silently lowering recall@k in lc05.
+
+Params (manual runs)
+    force  re-parse and re-chunk the current version (e.g. to apply a parser fix on demand).
+    pdf    OPTIONAL, normally empty: lc01 then downloads LC214_PDF_URL (the Câmara "norma atualizada") and the
+           sha256 decides whether it is a new version. Fill it only when the Câmara site is down, with the path
+           of a PDF you copied to the host folder ./datasource (mounted in the container at /mnt/datasource),
+           e.g. host ./datasource/lc214/inbox/lc214.pdf -> /mnt/datasource/lc214/inbox/lc214.pdf.
+           It is NOT a lake key: landing/lc214 is lc01's output, not an input. Not a URL either (that is the
+           LC214_PDF_URL setting). The source contract applies the same way to a local file.
 """
 import importlib.util
 import os
@@ -68,7 +81,11 @@ with DAG(
     tags=["rag", "ai", "lc214", "legislation", "observability"],
     params={
         "force": Param(False, type="boolean", description="Re-parse and re-chunk the current version"),
-        "pdf": Param("", type="string", description="Local PDF path in the container (empty = download)"),
+        # ["null", "string"]: the trigger form sends an empty field as null; with type "string" alone Airflow marks
+        # the field required (*) and rejects a run that leaves it empty - the normal case
+        "pdf": Param(None, type=["null", "string"],
+                     description="Optional. Empty = download from LC214_PDF_URL. Only when the Câmara site is down: "
+                                 "/mnt/datasource/... path of a PDF copied to ./datasource (not a lake key, not a URL)"),
     },
     **OBS_DAG_CALLBACKS,
 ) as dag:
@@ -88,5 +105,7 @@ with DAG(
     # NONE_FAILED (not ALL_DONE): checks also run on a week with nothing new, but a failed step upstream
     # leaves this leaf upstream_failed, so the DAG run is red. With ALL_DONE a green leaf would hide it.
     data_health = health_checks("lc214", fail_on="never", trigger_rule=TriggerRule.NONE_FAILED)
+    golden = observed_script("golden_contract", "lc214", "rag/lc214/golden.py",
+                             trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
 
-    check_ai_runtime >> extract >> parse >> chunk >> data_health
+    check_ai_runtime >> extract >> parse >> chunk >> [data_health, golden]
