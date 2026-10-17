@@ -1,7 +1,7 @@
 # ADR 0011 — LC 214 serving tables: upsert by content hash, a projection of the lake
 
 **Status:** accepted (step 4a: `pipelines/rag/lc214/lc04_load.py`, task `load_postgres` in `dag_rag_lc214`);
-the router (4b) and the embeddings (4c) are the next steps.
+the router (4b) is [ADR 0012](0012-lc214-question-router.md), the embeddings (4c) [ADR 0013](0013-lc214-vector-search-and-context.md).
 
 **Context.** ADR 0010 made the lake the system of record and Postgres a serving projection of the current law
 version. The router answers citations ("o que diz o art. 54?") and revoked/vetoed provisions by SQL, so the

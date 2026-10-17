@@ -1,8 +1,10 @@
 """
 dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legislation RAG (ADR 0010).
 
-  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres -> health_checks_lc214
-     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   (audit + serving)
+  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres --+-> health_checks_lc214
+     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   |   (audit, serving,
+                                                                                 +-> embed_chunks ---+    vectors)
+                                                                                 |   lc04c (pgvector)
                                                                                  +-> golden_contract
                                                                                      (labels vs the law)
 
@@ -25,13 +27,21 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
 
 Dataset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
-    are new chunks. lc04 (load + embed) will be scheduled on it, like dag_rag_anp on datalabs://gold/anp.
+    are new chunks. The load and the embedding run in this DAG, right after it; the evaluation (lc05) can be
+    scheduled on the dataset, like dag_rag_anp on datalabs://gold/anp.
 
 Serving load (lc04_load.py, ADR 0011)
     Projects the current version into ai.lc214_dispositivo / ai.lc214_artigo by upsert in one transaction (readers
     never wait, never see a half-loaded table) and reports what the amendment did: inserted, updated (text or
     status changed), deleted (left the text), restamped (same content, new version or position). Exit 99 when the
     tables already match. Health checks run after it: serving parity with the last parse, a single law version.
+
+Vector store (lc04_embed.py, ADR 0013)
+    Projects chunks.parquet into ai.lc214_chunk by set difference on the chunk_id (ADR 0007): only chunks whose
+    text is new are embedded (867 on a first run, a handful after an amendment), stale ones are deleted, chunks whose
+    text did not change are restamped without re-embedding. Exit 99 when in sync (the model is not loaded). Refuses
+    chunks sized by estimate and a store that would shrink by more than 5%. The query side (router -> exact cosine
+    search -> context under the LLM budget) is retriever.py, used by the evaluation (lc05) and the CLI.
 
 Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
@@ -81,7 +91,7 @@ with DAG(
     dag_id="dag_rag_lc214",
     doc_md=__doc__,
     default_args={"owner": "datalab", "retries": 0, **OBS_DEFAULT_ARGS},
-    description="LC 214/2025: versioned PDF -> dispositivos -> chunks (legislation RAG)",
+    description="LC 214/2025: versioned PDF -> dispositivos -> chunks -> Postgres + pgvector (legislation RAG)",
     schedule="40 6 * * 1",  # Mondays 06:40 (America/Sao_Paulo); DAGs start paused
     start_date=datetime(2026, 1, 1),
     catchup=False,
@@ -117,6 +127,9 @@ with DAG(
                              trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
     load = observed_script("load_postgres", "lc214", "rag/lc214/lc04_load.py",
                            trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=10))
+    # first run: model load + 867 chunks on CPU (~13 chunks/s measured for the ANP store, ADR 0007): a few minutes
+    embed = observed_script("embed_chunks", "lc214", "rag/lc214/lc04_embed.py",
+                            trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=20))
 
-    check_ai_runtime >> extract >> parse >> chunk >> [load, golden]
-    load >> data_health
+    check_ai_runtime >> extract >> parse >> chunk >> [load, embed, golden]
+    [load, embed] >> data_health

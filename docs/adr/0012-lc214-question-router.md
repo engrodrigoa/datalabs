@@ -1,7 +1,7 @@
 # ADR 0012 — LC 214 question router: citations by SQL, questions by vectors, both when both
 
 **Status:** accepted (step 4b: `pipelines/rag/lc214/router.py`, checked by `golden_contract`); the vector search
-and the generation are step 4c.
+is step 4c ([ADR 0013](0013-lc214-vector-search-and-context.md)), the generation comes after the evaluation (lc05).
 
 **Context.** ADR 0005 routes the ANP questions: identifiers to SQL, open questions to vectors. Legislation has the
 same split with a twist: the identifier is a legal citation ("art. 12, § 2º, III") and people write it in two

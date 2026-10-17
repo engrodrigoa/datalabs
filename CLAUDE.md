@@ -32,7 +32,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a + golden contract → dataset
+  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → dataset
   `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
@@ -41,7 +41,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0012), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0013), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -91,6 +91,14 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   LC 214 citation; another law is `foreign`, never an anchor), `clarify` (ambiguous or missing: ask, never guess).
   Citations in chat and legal order, lists, caput convention only when it leaves one candidate. Deterministic, so
   the golden contract checks it exactly: R1 route, R2 anchors/options, R3 the law's 799 self-citations (≥ 99%).
+- **0013 LC 214 vector search:** `lc04_embed` syncs `ai.lc214_chunk` by set difference on the chunk_id (same id =
+  same text = same vector: a new version or parser only restamps), DELETE + INSERT in one transaction (no TRUNCATE),
+  guards `chunks_estimated` and `store_shrink` (net loss > 5%; churn allowed). Exact cosine search, no HNSW (867
+  vectors: 1-3 ms; an ANN index would add its misses to the lc05 baseline). `retriever.py`: anchors first, then hits
+  by rank, one block per article, whole up to `LC214_ANCHOR_MAX_TOKENS` (1,500 ≈ 880 words, 98% of the articles)
+  else in layers (caput, cited subtree, ranked chunks, labels left out); greedy budget in LLM tokens, ESTIMATED as
+  words × 1.7 until the generation step calibrates it with `prompt_eval_count`. Checks: `lc214_vector_parity`,
+  `lc214_vector_same_law`.
 
 ## Development rules
 
@@ -119,7 +127,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 20 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 22 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty

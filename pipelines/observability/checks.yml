@@ -234,6 +234,36 @@ checks:
     query: SELECT COUNT(DISTINCT (source_sha256, parser_version)) FROM ai.lc214_dispositivo
     max: 1
 
+  - name: lc214_vector_parity
+    pipeline: lc214
+    requires: ai
+    dataset: ai.lc214_chunk
+    type: reconciliation
+    # the vector store is a projection of the last chunking (ADR 0013): every chunk embedded, no orphan left.
+    # A gap means embed_chunks failed, was blocked by the shrink guard, or never ran after a re-chunk.
+    left_label: last_chunks_rows
+    query: >
+      SELECT rows_out FROM audit.pipeline_step_runs
+      WHERE pipeline = 'lc214' AND step = 'build_chunks' AND status = 'success'
+      ORDER BY started_at DESC LIMIT 1
+    right_label: embedded_chunks
+    compare_query: SELECT COUNT(*) FROM ai.lc214_chunk
+    tolerance_pct: 0
+
+  - name: lc214_vector_same_law
+    pipeline: lc214
+    requires: ai
+    dataset: ai.lc214_chunk
+    type: threshold
+    # the retriever joins vectors (ai.lc214_chunk) to the provisions it shows (ai.lc214_dispositivo): both must come
+    # from ONE law version and parser, and the vectors from one model and one chunker (else distances mix rulers)
+    query: >
+      SELECT GREATEST(
+        (SELECT COUNT(*) FROM (SELECT source_sha256, parser_version FROM ai.lc214_chunk
+                               UNION SELECT source_sha256, parser_version FROM ai.lc214_dispositivo) v),
+        (SELECT COUNT(DISTINCT (embedding_model, chunker_version)) FROM ai.lc214_chunk))
+    max: 1
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs
