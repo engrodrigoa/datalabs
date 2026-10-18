@@ -1,7 +1,8 @@
 # ADR 0013 — LC 214 vector search: exact cosine over an incremental store, context under an LLM budget
 
 **Status:** accepted (step 4c: `pipelines/rag/lc214/lc04_embed.py`, task `embed_chunks` in `dag_rag_lc214`, and
-`pipelines/rag/lc214/retriever.py`); the evaluation gate (lc05) and the generation are the next steps.
+`pipelines/rag/lc214/retriever.py`); the evaluation gate is [ADR 0014](0014-lc214-retrieval-evaluation-gate.md), the
+generation is next.
 
 **Context.** The router (ADR 0012) sends open questions to `vector` and citation + question to `combined`, but
 nothing answered them yet. Three things were missing: the 867 chunks of lc03 as vectors, a search over them, and the
@@ -45,7 +46,9 @@ one (e5, limit 512).
    and the vectors from one model and one chunker). `lc214_vector_same_law` verified on Postgres: 0 on empty tables,
    2 (> max 1) with vectors of one law version and provisions of another.
 
-**Measured (2026-10-17).** The ceiling comes from the real articles (`ai.lc214_artigo`, 575 live):
+**Measured (2026-10-17).** First embedding in the lab: 867 chunks in ~3 min (4.7 chunks/s on CPU, slower than the
+ANP store's ~13/s: a legal chunk is up to 512 tokens, an ANP chunk is one sentence); the second run exited 99 without loading the
+model; `health_checks_lc214` 6/6. The ceiling comes from the real articles (`ai.lc214_artigo`, 575 live):
 
 | words per article | p50 | p90 | p95 | p99 | max | > 1,000 |
 |---|---|---|---|---|---|---|
@@ -53,7 +56,7 @@ one (e5, limit 512).
 
 1,500 LLM tokens ≈ 880 words: ~98% of the live articles go whole. The 10 largest are all above 880 words and go in
 layers (art. 517, which quotes the LC 123; art. 542, a revoking article; arts. 26, 174, 341-G, 516, 11, 22, 349 and
-5); how many more sit between 880 and 948 words was not counted. A worst-case anchor takes 30% of
+5); counted in the lab on 2026-10-17: 11 live articles above 880 words, so 564 of 575 (98.1%) go whole. A worst-case anchor takes 30% of
 the budget; five median articles (~270 tokens each) take ~1,350.
 
 **Consequences.** `retrieve()` returns the global top-k (what lc05 scores: hit@k, coverage@k, MRR on the chunks'

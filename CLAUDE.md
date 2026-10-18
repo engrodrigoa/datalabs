@@ -32,8 +32,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → dataset
-  `datalabs://silver/lc214`),
+  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
+  gate; dataset `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
@@ -41,7 +41,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0013), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0014), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -99,6 +99,12 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   else in layers (caput, cited subtree, ranked chunks, labels left out); greedy budget in LLM tokens, ESTIMATED as
   words × 1.7 until the generation step calibrates it with `prompt_eval_count`. Checks: `lc214_vector_parity`,
   `lc214_vector_same_law`.
+- **0014 LC 214 retrieval gate:** `lc05_eval` runs the golden set through `retrieve()`; success@k / hit@k / recall@k /
+  MRR on the top-k chunks (route vector), context_recall on the blocks (vector + combined), per phrasing group
+  (fiscal 31, formal 25) + the paired fiscal × formal gap. Thresholds = `eval_baseline.yml` (committed, written by
+  `--write-baseline`) minus `LC214_EVAL_TOLERANCE_CASES` (1 case ≈ 3-4 pp); improvements are logged, never fail;
+  no baseline = failure. Report per phrasing in the lake (`silver/lc214/<sha12>/eval/`). Every retrieval change is
+  an experiment of one variable against this baseline.
 
 ## Development rules
 
@@ -206,7 +212,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Grafana `$uf` variable error on the ANP dashboard; `force_transform` param on `dag_dbt_anp`.
 - Airflow logs on a Docker volume + Grafana Alloy (Promtail CPU on the bind mount).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
-- RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold, recall@k / MRR in the eval gate.
+- RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold. LC 214: fiscal phrasings miss the
+  law's vocabulary (content-03: "matriz/filial" vs "estabelecimentos do mesmo contribuinte"), measured by lc05.
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
 - Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
   Same day: RFB, ANP and NF-e ran end to end on a clean clone (RFB dev_mode: download 21 min, `dag_rfb_dw_dbt` 5m18s,

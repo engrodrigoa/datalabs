@@ -1,11 +1,11 @@
 """
 dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legislation RAG (ADR 0010).
 
-  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres --+-> health_checks_lc214
-     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   |   (audit, serving,
-                                                                                 +-> embed_chunks ---+    vectors)
-                                                                                 |   lc04c (pgvector)
-                                                                                 +-> golden_contract
+  check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres --+-> health_checks_lc214 -+
+     (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   |   (audit, serving,     |
+                                                                                 +-> embed_chunks ---+    vectors)            +-> evaluate_retrieval
+                                                                                 |   lc04c (pgvector)                         |   lc05 (gate vs
+                                                                                 +-> golden_contract -------------------------+    the baseline)
                                                                                      (labels vs the law)
 
 Storage: the lake only (landing/lc214 -> bronze/lc214 -> silver/lc214/<sha12>/, see lake.py).
@@ -42,6 +42,12 @@ Vector store (lc04_embed.py, ADR 0013)
     text did not change are restamped without re-embedding. Exit 99 when in sync (the model is not loaded). Refuses
     chunks sized by estimate and a store that would shrink by more than 5%. The query side (router -> exact cosine
     search -> context under the LLM budget) is retriever.py, used by the evaluation (lc05) and the CLI.
+
+Retrieval gate (lc05_eval.py, ADR 0014)
+    Runs every phrasing of the golden set through the real retriever and fails the run when success@k, MRR or
+    context recall (fiscal and formal phrasings) drop below eval_baseline.yml minus one case of tolerance. Runs
+    every week, even with nothing new (it is a check, ~1 min): a model or code change shows up here. It needs the
+    labels to hold (golden_contract) and the store to be loaded, so it runs last.
 
 Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
@@ -131,5 +137,9 @@ with DAG(
     embed = observed_script("embed_chunks", "lc214", "rag/lc214/lc04_embed.py",
                             trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=20))
 
+    evaluate = observed_script("evaluate_retrieval", "lc214", "rag/lc214/lc05_eval.py",
+                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=15))
+
     check_ai_runtime >> extract >> parse >> chunk >> [load, embed, golden]
     [load, embed] >> data_health
+    [data_health, golden] >> evaluate
