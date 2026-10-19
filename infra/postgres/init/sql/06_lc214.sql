@@ -54,3 +54,28 @@ CREATE TABLE IF NOT EXISTS ai.lc214_artigo (
     parser_version    text NOT NULL,
     loaded_at         timestamptz NOT NULL DEFAULT now()
 );
+
+-- The vector store of the LC 214 (step 4c, ADR 0013): one row per chunk of the current version (chunks.parquet, lc03),
+-- synced by set difference on the deterministic chunk_id (ADR 0007), loaded by pipelines/rag/lc214/lc04_embed.py.
+-- A chunk_id is md5(chunker version | text): same id = same text = same vector, so a new law version or parser that
+-- leaves a chunk's text alone only restamps it (no re-embedding). Searched by EXACT cosine distance: no ANN index at
+-- this size (867 chunks), so the retrieval measured in lc05 carries no approximation error.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS ai.lc214_chunk (
+    chunk_id          text PRIMARY KEY,                 -- lc214-2025:art-6:c1:<md5[:16]>
+    art_id            text NOT NULL,                    -- the article the chunk belongs to (small-to-big)
+    parte             integer NOT NULL,                 -- 1..n inside the article
+    kind              text NOT NULL CHECK (kind IN ('artigo', 'grupo', 'dispositivo', 'janela')),
+    texto             text NOT NULL,                    -- what was embedded (without the "passage: " prefix)
+    dispositivo_ids   jsonb NOT NULL,                   -- provisions the chunk carries: what lc05 scores
+    n_tokens          integer NOT NULL,                 -- EMBEDDING tokens (e5, limit 512), not LLM tokens
+    alterado_por      jsonb NOT NULL DEFAULT '[]',
+    embedding         vector(384) NOT NULL,             -- resized by lc04_embed when the model changes
+    embedding_model   text NOT NULL,
+    source_sha256     text NOT NULL,
+    parser_version    text NOT NULL,
+    chunker_version   text NOT NULL,
+    loaded_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_lc214_chunk_art ON ai.lc214_chunk (art_id, parte);
