@@ -95,7 +95,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   same text = same vector: a new version or parser only restamps), DELETE + INSERT in one transaction (no TRUNCATE),
   guards `chunks_estimated` and `store_shrink` (net loss > 5%; churn allowed). Exact cosine search, no HNSW (867
   vectors: 1-3 ms; an ANN index would add its misses to the lc05 baseline). `retriever.py`: anchors first, then hits
-  by rank, one block per article, whole up to `LC214_ANCHOR_MAX_TOKENS` (1,500 ≈ 880 words, 98% of the articles)
+  by rank, one block per article, whole up to `LC214_ANCHOR_MAX_TOKENS` (2,000 ≈ 1,170 words, chosen by lc05)
   else in layers (caput, cited subtree, ranked chunks, labels left out); greedy budget in LLM tokens, ESTIMATED as
   words × 1.7 until the generation step calibrates it with `prompt_eval_count`. Checks: `lc214_vector_parity`,
   `lc214_vector_same_law`.

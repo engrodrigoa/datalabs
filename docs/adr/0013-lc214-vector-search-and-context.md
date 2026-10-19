@@ -31,7 +31,7 @@ one (e5, limit 512).
    corpus) or when the scan shows in the latency, and measure the index's recall against the exact search then.
 5. **Option C, the same rule for anchors and hits.** One block per article, in this order: the cited provisions
    (`combined`, never dropped), then the articles of the top-k hits by rank. An article goes **whole** when it fits
-   `LC214_ANCHOR_MAX_TOKENS` (1,500); a bigger one goes **in layers**: header, caput, the cited provision's subtree,
+   `LC214_ANCHOR_MAX_TOKENS` (2,000, see below); a bigger one goes **in layers**: header, caput, the cited provision's subtree,
    then the article's own chunks ranked by similarity to the question while they fit, then the labels of what was
    left out ("não incluídos: § 4º; § 6º"). A window of a huge provision (art. 517) is shown as the window, never the
    whole provision. Revoked/vetoed provisions show their note, like the SQL answer.
@@ -58,6 +58,24 @@ model; `health_checks_lc214` 6/6. The ceiling comes from the real articles (`ai.
 layers (art. 517, which quotes the LC 123; art. 542, a revoking article; arts. 26, 174, 341-G, 516, 11, 22, 349 and
 5); counted in the lab on 2026-10-17: 11 live articles above 880 words, so 564 of 575 (98.1%) go whole. A worst-case anchor takes 30% of
 the budget; five median articles (~270 tokens each) take ~1,350.
+
+**The ceiling, chosen by measurement (2026-10-18, ADR 0014).** 1,500 was a first guess from the word distribution. The
+lc05 baseline showed what it cost: two cases where the right article was retrieved but the expected provision was
+left out of its layered block (art. 5º, 948 words; art. 22, 1,041 words). The ceiling acts after the search, so only
+context_recall can move, and only context_recall did:
+
+| ceiling | fiscal context_recall | formal context_recall | external-02 fiscal (art. 5º) | content-15 (art. 22) |
+|---|---|---|---|---|
+| 1,500 | 0.601 | 0.740 | 0/1 | 1/3 |
+| 1,800 | 0.631 | 0.740 | 1/1 | 1/3 |
+| 2,000 | **0.651** | **0.767** | 1/1 | 3/3 |
+| 2,600 | 0.651 | 0.767 | 1/1 | 3/3 |
+
+success@k, hit@k, recall@k and MRR stayed identical to the 4th decimal in every run, and no case lost context to the
+budget (contexts use ~1.3-2.3k of ~5.3k tokens). The default is **2,000**, the smallest ceiling that keeps the whole
+gain: more context than the measured cases need only gives `llama3.2:1b` more to read past (lost in the middle), a
+cost the retrieval metrics cannot see and the generation step will measure. At 2,000 (~1,170 words), only the largest
+articles go in layers (517, 542, 26, 174, 341-G by the word estimate).
 
 **Consequences.** `retrieve()` returns the global top-k (what lc05 scores: hit@k, coverage@k, MRR on the chunks'
 `dispositivo_ids`) and, separately, the blocks the LLM reads with the provision ids each one shows (what faithfulness

@@ -46,7 +46,7 @@ Vector store (lc04_embed.py, ADR 0013)
 Retrieval gate (lc05_eval.py, ADR 0014)
     Runs every phrasing of the golden set through the real retriever and fails the run when success@k, MRR or
     context recall (fiscal and formal phrasings) drop below eval_baseline.yml minus one case of tolerance. Runs
-    every week, even with nothing new (it is a check, ~1 min): a model or code change shows up here. It needs the
+    every week, even with nothing new (it is a check, ~15 s): a model or code change shows up here. It needs the
     labels to hold (golden_contract) and the store to be loaded, so it runs last.
 
 Golden contract (golden.py, golden_set.yml)

@@ -7,7 +7,7 @@
 
 Small-to-big with a ceiling ("option C")
     A chunk is what is searched; the ARTICLE is what is cited. Each article in the context is shown whole when it
-    fits LC214_ANCHOR_MAX_TOKENS (1,500 LLM tokens ~ 880 words: measured, 98% of the 575 live articles), else in
+    fits LC214_ANCHOR_MAX_TOKENS (2,000 LLM tokens ~ 1,170 words: chosen by lc05, ADR 0013), else in
     layers: its caput, the cited provision (combined route), its chunks ranked by similarity to the question while
     they fit, and the labels of what was left out, so the answer can say "see also § 4º".
 
@@ -45,7 +45,7 @@ NUM_CTX = int(os.getenv("LC214_NUM_CTX", "8192"))
 ANSWER_TOKENS = int(os.getenv("LC214_ANSWER_TOKENS", "1024"))
 PROMPT_TOKENS = int(os.getenv("LC214_PROMPT_TOKENS", "500"))
 BUDGET_MARGIN = float(os.getenv("LC214_BUDGET_MARGIN", "0.2"))
-ANCHOR_MAX_TOKENS = int(os.getenv("LC214_ANCHOR_MAX_TOKENS", "1500"))
+ANCHOR_MAX_TOKENS = int(os.getenv("LC214_ANCHOR_MAX_TOKENS", "2000"))
 LLM_TOKENS_PER_WORD = float(os.getenv("LC214_LLM_TOKENS_PER_WORD", "1.7"))
 MIN_BLOCK_TOKENS = 120              # below this an article block would be its header and little else
 ARTICLE_CHUNKS = 64                 # chunks ranked inside one article (art. 517 has 13 windows; most have 1)

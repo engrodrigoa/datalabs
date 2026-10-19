@@ -123,14 +123,23 @@ def test_a_small_article_is_shown_whole():
     assert b.mode == "whole" and b.dispositivo_ids == [P + "1", P + "1:par-1"]
 
 
-def test_a_big_article_is_shown_in_layers_under_its_ceiling():
+def test_a_big_article_is_shown_in_layers_under_its_ceiling(monkeypatch):
+    monkeypatch.setattr(rt, "ANCHOR_MAX_TOKENS", 1500)        # the layering under test, not the production default
     r, _ = _retrieve("remessa para filial tem incidência?")
     b = r.blocks[1]
-    assert b.mode == "layered" and b.tokens <= rt.ANCHOR_MAX_TOKENS
+    assert b.mode == "layered" and b.tokens <= 1500
     # caput, then the article's chunks by similarity (§5, §2, §1, §3) while they fit, shown in reading order
     assert b.dispositivo_ids == [P + "2", P + "2:par-1", P + "2:par-2", P + "2:par-3", P + "2:par-5"]
     assert "[não incluídos neste contexto: § 4º; § 6º]" in b.text and b.omitted == 2
     assert "§ 7º" not in b.text.split("[não incluídos")[1]    # a revoked provision is not "left out"
+
+
+def test_a_higher_ceiling_shows_the_same_article_whole(monkeypatch):
+    monkeypatch.setattr(rt, "ANCHOR_MAX_TOKENS", 2600)
+    r, _ = _retrieve("remessa para filial tem incidência?")
+    b = r.blocks[1]
+    assert b.art_id == P + "2" and b.mode == "whole" and b.omitted == 0
+    assert [h.rank for h in r.hits] == [1, 2, 3, 4, 5]        # the ceiling acts after the search: same top k
 
 
 def test_a_window_of_a_huge_provision_is_shown_not_the_provision():

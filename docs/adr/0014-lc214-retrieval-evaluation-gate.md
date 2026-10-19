@@ -46,8 +46,8 @@ corpus yet.
    - **A metric definition change** (`EVAL_VERSION`) refuses the old baseline.
 5. **Labels first.** The evaluation refuses a golden set labelled against another law version (`eval_labels_stale`),
    and in the DAG it runs after `golden_contract`: a wrong label would punish the right answer.
-6. **No exit 99.** The evaluation runs every week even when nothing changed (~60 queries + model load, about a
-   minute). It is a check: an embedding model or retriever change with the same law shows up here.
+6. **No exit 99.** The evaluation runs every week even when nothing changed (66 phrasings + model load: 14.6 s
+   measured in the DAG). It is a check: an embedding model or retriever change with the same law shows up here.
 7. **Where the results go.** The full report (every phrasing: first rank, provisions found, top-k articles, top-1
    distance, context size) goes to the lake at `silver/lc214/<sha12>/eval/<timestamp>.json`. The metrics go to the
    step's `metrics` in `audit.pipeline_step_runs` (trend for Grafana).
