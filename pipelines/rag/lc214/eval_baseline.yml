@@ -2,7 +2,7 @@
 # Written by `python -m pipelines.rag.lc214.lc05_eval --write-baseline`. Review it like a label change:
 # a lower baseline accepts a worse retriever. The gate fails a run below baseline - LC214_EVAL_TOLERANCE_CASES / n.
 eval_version: '1'
-measured_at: '2026-10-18T18:22:42Z'
+measured_at: '2026-10-19T02:09:52Z'
 fingerprint:
   law_version: 0cf36f4433ce
   parser_version: '2'
@@ -11,7 +11,7 @@ fingerprint:
   golden_sha: 850427aedc25
   k: 5
   retriever:
-    anchor_max_tokens: 1500
+    anchor_max_tokens: 2000
     llm_tokens_per_word: 1.7
     num_ctx: 8192
     budget_margin: 0.2
@@ -23,7 +23,7 @@ metrics:
     hit_at_k: 0.5806
     recall_at_k: 0.4839
     mrr: 0.4543
-    context_recall: 0.601
+    context_recall: 0.6515
   formal:
     n: 25
     n_context: 25
@@ -31,7 +31,7 @@ metrics:
     hit_at_k: 0.84
     recall_at_k: 0.6333
     mrr: 0.7533
-    context_recall: 0.74
+    context_recall: 0.7667
 paired:
   cases: 25
   fiscal_success_at_k: 0.32
