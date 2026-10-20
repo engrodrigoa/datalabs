@@ -131,6 +131,12 @@ def test_schema_rejects_inconsistent_cases():
             ("external-01", "G1_external_source")} <= rules
 
 
+def test_schema_checks_the_dev_flag():
+    rules = {(v["case"], v["rule"]) for v in g.validate_schema(_golden({**_case(), "dev": "yes"}))}
+    assert ("content-01", "G1_dev") in rules
+    assert not g.validate_schema(_golden({**_case(), "dev": True}))
+
+
 def test_run_reads_the_current_version_from_the_lake(tmp_path):
     lake = LocalLake(str(tmp_path))
     lake.put_json(k_manifest(), {"current": SHA, "versions": []})

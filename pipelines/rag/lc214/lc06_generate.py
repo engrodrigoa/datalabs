@@ -43,6 +43,7 @@ Run in the lab (needs Postgres, the embedding model and the Ollama of profile `a
     python -m pipelines.rag.lc214.lc06_generate "o art. 6º se aplica a transferência entre filiais?"
     python -m pipelines.rag.lc214.lc06_generate --golden                  the golden set (DAG task generate_answers)
     python -m pipelines.rag.lc214.lc06_generate --golden --case content-03 --case no_answer-01   a subset, no report
+    python -m pipelines.rag.lc214.lc06_generate --golden --dev            the dev subset (prompt experiments)
 Exit codes: 0 generated | 99 report up to date, or no Ollama (optional layer) | 1 failure.
 """
 from __future__ import annotations
@@ -231,6 +232,8 @@ class Answer:
     context_ids: list[str] = field(default_factory=list)     # what the context showed (what may be cited)
     context_tokens: int = 0                                  # the retriever's estimate
     reply_answerable: bool | None = None                     # the model's own flag (barrier 2)
+    reply_answer: str | None = None                          # the model's own text, kept when it is not shown:
+                                                             # a refusal says what the model found missing
     json_valid: bool | None = None
     done_reason: str | None = None
     prompt_words: int = 0
@@ -238,6 +241,9 @@ class Answer:
     prompt_eval_count: int | None = None
     eval_count: int | None = None
     latency_s: float | None = None
+    load_s: float | None = None                              # Ollama's split of the latency (ns -> s): where the
+    prompt_eval_s: float | None = None                       # time goes; on CPU the prompt dominates
+    eval_s: float | None = None
 
     @property
     def valid_ids(self) -> list[str]:
@@ -250,6 +256,11 @@ class Answer:
     @property
     def tokens_per_word(self) -> float | None:
         return round(self.prompt_eval_count / self.prompt_words, 3) if self.prompt_eval_count and self.prompt_words \
+            else None
+
+    @property
+    def prompt_eval_rate(self) -> float | None:
+        return round(self.prompt_eval_count / self.prompt_eval_s, 1) if self.prompt_eval_count and self.prompt_eval_s \
             else None
 
     def public(self) -> dict:
@@ -278,6 +289,10 @@ def _structure(store: rt.Store, anchors: list[str]) -> str:
                 if row["dispositivo_id"] == a or row["dispositivo_id"].startswith(a + ":")]
         parts.append(render_structure(rows))
     return "\n\n".join(parts)
+
+
+def _seconds(ns) -> float | None:
+    return round(ns / 1e9, 2) if isinstance(ns, (int, float)) else None
 
 
 def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]], llm: LLM,
@@ -309,13 +324,15 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     a.llm_called = True
     a.done_reason = resp.get("done_reason")
     a.prompt_eval_count, a.eval_count = resp.get("prompt_eval_count"), resp.get("eval_count")
+    a.load_s, a.prompt_eval_s, a.eval_s = (_seconds(resp.get(f)) for f in ("load_duration", "prompt_eval_duration",
+                                                                           "eval_duration"))
 
     reply = parse_reply(resp.get("response", ""))
     a.json_valid = reply is not None
     if reply is None:
         a.refusal = "truncated" if a.done_reason == "length" else "invalid_json"
         return a
-    a.reply_answerable = reply["answerable"]
+    a.reply_answerable, a.reply_answer = reply["answerable"], reply["answer"]
     shown = set(a.context_ids)
     a.citations = [check_citation(c, index, shown) for c in reply["citations"]]
     if not reply["answerable"]:                                # barrier 2: the model says the context is not enough
@@ -360,13 +377,20 @@ def generated(case: dict) -> bool:
     return case.get("route") in ("vector", "combined") and case.get("scope", "now") == "now"
 
 
+def dev_cases(golden: dict) -> set[str]:
+    """The cases marked `dev: true`: a fixed subset (~11 phrasings, a few minutes) to iterate a prompt experiment on;
+    the full run (~80 min on CPU) confirms only the variant that wins."""
+    return {c["id"] for c in golden.get("cases") or [] if c.get("dev") and generated(c)}
+
+
 def outcome(case: dict, phrasing: str, a: Answer) -> Outcome:
     expected = list(case.get("expected") or [])
     shown, cited = set(a.context_ids), a.valid_ids if a.answerable else []
     return Outcome(case["id"], case["type"], case.get("behavior", "answer"), phrasing, expected,
                    case.get("behavior") == "abstain", [p for p in expected if p in shown],
                    [p for p in expected if any(same_branch(p, c) for c in cited)],
-                   asdict(a) | {"valid_ids": a.valid_ids, "violations": len(a.violations)})
+                   asdict(a) | {"valid_ids": a.valid_ids, "violations": len(a.violations),
+                                "prompt_eval_rate": a.prompt_eval_rate})
 
 
 def run_golden(golden: dict, store: rt.Store, encode, llm: LLM, cases: set[str] | None = None,
@@ -429,7 +453,17 @@ def calibration(outcomes: list[Outcome]) -> dict:
             "measured_min": round(min(usable), 3) if usable else None,
             "measured_max": round(max(usable), 3) if usable else None,
             "max_prompt_eval_count": max((o.answer["prompt_eval_count"] or 0 for o in outcomes), default=0),
-            "num_ctx": rt.NUM_CTX}
+            "num_ctx": rt.NUM_CTX,
+            "prompt_eval_rate_median": _median(o.answer["prompt_eval_rate"] for o in outcomes),
+            "eval_rate_median": _median(o.answer["eval_count"] / o.answer["eval_s"] for o in outcomes
+                                        if o.answer["eval_count"] and o.answer["eval_s"]),
+            "prompt_share_of_latency": _median(o.answer["prompt_eval_s"] / o.answer["latency_s"] for o in outcomes
+                                               if o.answer["prompt_eval_s"] and o.answer["latency_s"])}
+
+
+def _median(values) -> float | None:
+    values = [v for v in values if v is not None]
+    return round(statistics.median(values), 2) if values else None
 
 
 def answers_digest(outcomes: list[Outcome]) -> str:
@@ -459,7 +493,8 @@ def summary_line(rep: dict) -> str:
              for g, m in rep["metrics"].items()]
     c = rep["calibration"]
     parts.append(f"tokens/word {c['measured_median']} measured vs {c['estimate_tokens_per_word']} estimated"
-                 + (f" ({c['cache_suspect']} cache-suspect)" if c["cache_suspect"] else ""))
+                 + (f" ({c['cache_suspect']} cache-suspect)" if c["cache_suspect"] else "")
+                 + f"; prompt {c['prompt_eval_rate_median']} tok/s, answer {c['eval_rate_median']} tok/s")
     return " | ".join(parts) + f" | digest {rep['answers_digest']}"
 
 
@@ -479,9 +514,13 @@ def fingerprint(cur, llm: LLM, golden_path: Path, k: int) -> tuple[dict, str]:
 
 # --------------------------------------------------------------------------- the step
 def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases: set[str] | None = None,
-        force: bool = False) -> int:
+        force: bool = False, dev: bool = False) -> int:
     step = current_step()
     golden = load_golden(golden_path)
+    if dev:
+        cases = (cases or set()) | dev_cases(golden)
+        if not cases:
+            raise GenError("lc214_gen_no_dev_cases", "no case is marked `dev: true` in the golden set")
     k = golden.get("k", 5)
     fp, key = fingerprint(cur, llm, golden_path, k)
     if golden.get("law_version") != fp["law_version"]:
@@ -532,6 +571,7 @@ def main(argv=None) -> int:
     ap.add_argument("question", nargs="?", help="one question (prints the JSON answer); omit with --golden")
     ap.add_argument("--golden", action="store_true", help="answer every generated phrasing of the golden set")
     ap.add_argument("--case", action="append", default=[], help="with --golden: only this case (repeatable, no report)")
+    ap.add_argument("--dev", action="store_true", help="with --golden: only the cases marked dev: true (no report)")
     ap.add_argument("--force", action="store_true", help="generate even when the report for this fingerprint exists")
     ap.add_argument("--context", action="store_true", help="single question: also print the context sent")
     ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE), file:///dir, or 'none' (no report)")
@@ -552,7 +592,7 @@ def main(argv=None) -> int:
                 encode = (lambda q: encode_query(model, q))
                 if args.golden:
                     lake = None if args.lake == "none" else lake_from_env(args.lake)
-                    return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force)
+                    return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force, args.dev)
                 a = answer(args.question, rt.PgStore(cur), encode, llm)
                 if args.context:
                     print(rt.retrieve(args.question, rt.PgStore(cur), encode).context() + "\n")
@@ -560,9 +600,11 @@ def main(argv=None) -> int:
             conn.close()
         print(json.dumps(a.public(), ensure_ascii=False, indent=2))
         print(f"route={a.route} refusal={a.refusal} blocks={a.blocks} citations="
-              f"{[(c['text'], c['status']) for c in a.citations]} latency={a.latency_s}s "
-              f"prompt_eval_count={a.prompt_eval_count} (estimate {a.prompt_tokens_estimate}) "
-              f"done_reason={a.done_reason}", file=sys.stderr)
+              f"{[(c['text'], c['status']) for c in a.citations]}\n"
+              f"latency={a.latency_s}s (load {a.load_s}s, prompt {a.prompt_eval_s}s at {a.prompt_eval_rate} tok/s, "
+              f"answer {a.eval_s}s) prompt_eval_count={a.prompt_eval_count} (estimate {a.prompt_tokens_estimate}) "
+              f"done_reason={a.done_reason}" + (f"\nmodel said: {a.reply_answer}" if a.reply_answer and not a.answerable
+                                                else ""), file=sys.stderr)
         return EXIT_OK
     except LLMUnavailable as exc:
         log_event(logger, exc.event, str(exc), level=30)

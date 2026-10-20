@@ -35,7 +35,7 @@ compare against.
    golden set has 6 `cite_external` cases that must answer ("the rule is in art. 14 of the CTN, as art. X of the
    LC 214 says"). The prompt gets a note naming the other law and is told not to invent its content.
 5. **Repeatable, so a re-run is a no-op.** `temperature 0`, `seed` (`LC214_GEN_SEED`), and `num_ctx` explicit:
-   Ollama's default of 2048 would silently cut a context budgeted for 8192. The golden run writes
+   Ollama's default of 2048 would silently cut the budgeted context. The golden run writes
    `silver/lc214/<sha12>/answers/<fingerprint>.json` and exits 99 when that report already exists. The fingerprint
    covers the law, chunks and embedding model (lc05's fingerprint), the golden set, the LLM model AND its digest
    (a re-pulled tag is another model), the prompt version (hash of system prompt, template, schema) and the
@@ -56,9 +56,41 @@ compare against.
    any retrieval change.
 8. **A read-only session in autocommit.** The run holds a cursor for up to an hour. In a transaction, that would be an
    `idle in transaction` session next to lc04a's upsert.
-9. **CI tests the code, the lab measures the model.** CI has no LLM. The unit tests replay Ollama bodies
+9. **Latency: speed is bought with hardware, not with context (measured 2026-10-19).** On CPU the prompt is ~90%
+   of the time: one question with a 3,144-token prompt took 130 s, and a 5,498-token one took 204 s (~25 tok/s of
+   prompt, 12 tok/s of answer). Sixty phrasings at `num_ctx` 8192 meant ~2 h. A smaller context is cheaper only if
+   lc05 says what it costs. It is a retrieval change, so it was swept as one variable against the baseline (lc05
+   runs in ~15 s, the LLM never ran):
+
+   | `num_ctx` | context budget | fiscal / formal context_recall | lost (cases) | context tokens, 60 phrasings |
+   |---|---|---|---|---|
+   | 8192 | 5,310 | 0.651 / 0.767 | — | 168k (~129 min) |
+   | **6144** | 3,672 | 0.651 / 0.767 | 0 | 157k (~122 min) |
+   | 4096 | 2,033 | 0.556 / 0.767 | fiscal −3 | 110k (~92 min) |
+   | 3072 | 1,214 | 0.495 / 0.667 | fiscal −5, formal −2.5 | 69k (~66 min) |
+
+   A second sweep, of the whole-article ceiling under the smaller budgets (2,000 → 1,200 → 800 → 600), refuted the
+   idea that more, smaller blocks would win the recall back. It got worse at every step (4096: fiscal 0.556 → 0.424),
+   because the answer usually sits in the hit's own article (the hit is art. 3's caput, the answer its incisos):
+   small-to-big works by showing the article whole. The ceiling stays at 2,000.
+   The criterion was fixed before the choice, in the gate's unit (cases), not in a relative percentage: a speed
+   trade may cost at most **2 fiscal cases and 1 formal case** (the fiscal phrasing is the primary user's and already
+   the weakest). Only 6144 passes: it is the default now, for ~5% less time and less KV cache, at the same recall.
+   The real gain came from the machine: WSL was capped at 4 of the 8 logical cores (`.wslconfig processors=4`). With
+   8, the same prompt took 88 s instead of 130 s (×1.48: hyper-threading, not ×2) and gave the **same answer and
+   citations**. A full run is ~80 min (task timeout 150), only when the fingerprint changes. Prompt experiments
+   iterate on a fixed **dev subset** (`dev: true` in the golden set, ~11 phrasings: answer, the vocabulary miss, a
+   false refusal, abstain, cite_external, combined; `--golden --dev`, a few minutes), and the full run confirms only
+   the winner. Each answer records Ollama's split of its latency (load, prompt, answer).
+10. **CI tests the code, the lab measures the model.** CI has no LLM. The unit tests replay Ollama bodies
    (`tests/fixtures/lc214_ollama_replies.json`) through the real parsing, citation check, barriers and metrics. A
    model regression can only show up in the lab, in this step (and in 6b's gate).
+
+**First observations (two CLI questions, 2026-10-19).** The unanswerable one (EFD fine) was refused by the model,
+as it should be. The other ("quem é o adquirente", by conta e ordem) was refused although art. 3, III-V was in
+the context (5th block) and the model cited two valid provisions: a false refusal, the failure this step exists to
+count. Without context, the same model says IBS is "Intestino Irritável": the case for grounding in one
+line. The real ratio is ~1.79 LLM tokens per word (+5% over the 1.7 estimate, inside the 20% margin).
 
 **Consequences.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta".
 Every refusal names its barrier. The first numbers will be low (1B model), and that is accepted: the gate of

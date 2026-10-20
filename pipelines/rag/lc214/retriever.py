@@ -18,12 +18,14 @@ Order and budget
 
 Two tokenizers, two rulers
     `n_tokens` of a chunk counts EMBEDDING tokens (e5, limit 512, lc03). The budget here counts LLM tokens
-    (llama3.2:1b, num_ctx 8192), which this step does not have: they are ESTIMATED as words x
+    (llama3.2:1b, num_ctx 6144), which this step does not have: they are ESTIMATED as words x
     LC214_LLM_TOKENS_PER_WORD (1.7, conservative for legal Portuguese). The generation step measures the real ratio
     with Ollama's prompt_eval_count and corrects the default; the margin (LC214_BUDGET_MARGIN) absorbs the error.
 
     budget = (num_ctx - answer reserve - fixed prompt - question) x (1 - margin)
-           = (8192 - 1024 - 500 - ~30) x 0.8 ~ 5,300 tokens of context
+           = (6144 - 1024 - 500 - ~30) x 0.8 ~ 3,670 tokens of context
+    6144, not 8192 (ADR 0015): the same context_recall on the golden set (no context needed more than ~3,640
+    tokens), and on CPU the generation time grows with the prompt.
 
 CLI (lab): python -m pipelines.rag.lc214.retriever "o art. 6º se aplica a transferência entre filiais?" [--context]
 """
@@ -41,7 +43,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 from pipelines.rag.lc214.router import Index, Plan, route  # noqa: E402
 
 TOP_K = int(os.getenv("LC214_TOP_K", "5"))
-NUM_CTX = int(os.getenv("LC214_NUM_CTX", "8192"))
+NUM_CTX = int(os.getenv("LC214_NUM_CTX", "6144"))
 ANSWER_TOKENS = int(os.getenv("LC214_ANSWER_TOKENS", "1024"))
 PROMPT_TOKENS = int(os.getenv("LC214_PROMPT_TOKENS", "500"))
 BUDGET_MARGIN = float(os.getenv("LC214_BUDGET_MARGIN", "0.2"))

@@ -315,3 +315,41 @@ def test_the_prompt_version_changes_with_the_prompt(monkeypatch):
     before = gen.prompt_version()
     monkeypatch.setattr(gen, "SYSTEM", gen.SYSTEM + " ")
     assert gen.prompt_version() != before
+
+
+# --------------------------------------------------------------------------- patch 1.1: timings, the model's text, dev
+def test_ollamas_split_of_the_latency_is_kept():
+    a, _ = _answer()                                    # grounded: prompt 6.2 s, answer 2.8 s
+    assert (a.prompt_eval_s, a.eval_s) == (6.2, 2.8) and a.prompt_eval_rate == round(410 / 6.2, 1)
+
+
+def test_a_refusal_keeps_what_the_model_said_without_showing_it():
+    a, _ = _answer(reply="model_refuses")
+    assert a.reply_answer.startswith("O contexto não trata") and a.public()["answer"] == gen.REFUSAL
+
+
+def test_the_dev_subset_is_what_the_golden_set_marks(step_env):
+    lake, golden_path = step_env
+    marked = {**GOLDEN, "cases": [{**c, "dev": True} if c["id"] == "no_answer-01" else c for c in GOLDEN["cases"]]}
+    assert gen.dev_cases(marked) == {"no_answer-01"}
+    golden_path.write_text(json.dumps(marked), encoding="utf-8")
+    llm = FakeLLM()
+    assert gen.run(None, encode, llm, lake, golden_path, dev=True) == gen.EXIT_OK and len(llm.calls) == 1
+    assert not lake.exists(k_silver("0cf36f4433ce" + "0" * 52, "answers/fp0000000001.json"))    # a subset: no report
+
+
+def test_dev_without_marked_cases_says_so(step_env):
+    lake, golden_path = step_env
+    with pytest.raises(gen.GenError) as exc:
+        gen.run(None, encode, FakeLLM(), lake, golden_path, dev=True)
+    assert exc.value.event == "lc214_gen_no_dev_cases"
+
+
+def test_the_committed_golden_set_has_a_dev_subset_of_every_behavior():
+    from pipelines.rag.lc214.golden import load_golden
+
+    golden = load_golden()
+    dev = [c for c in golden["cases"] if c["id"] in gen.dev_cases(golden)]
+    assert {c["behavior"] for c in dev} == {"answer", "abstain", "cite_external"}
+    assert {c["route"] for c in dev} == {"vector", "combined"}
+    assert 8 <= sum(len(c["questions"]) for c in dev) <= 14

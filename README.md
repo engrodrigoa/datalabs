@@ -279,7 +279,7 @@ The default stack does **not** require a GPU. Without the AI image, `dag_rag_anp
 
 To keep the AI profile across restarts without make, put `INSTALL_AI=true` and `COMPOSE_PROFILES=ai` in `.env`.
 Download the embedding model at setup time, not inside the first DAG run: `make models`.
-The RAG DAGs (embeddings → pgvector → evaluation gates) run without Ollama; the interactive assistant and the LC 214 answer generation (`generate_answers` in `dag_rag_lc214`, ADR 0015) need it. Without Ollama, that task is *skipped*, not failed.
+The RAG DAGs (embeddings → pgvector → evaluation gates) run without Ollama; the interactive assistant and the LC 214 answer generation (`generate_answers` in `dag_rag_lc214`, ADR 0015) need it. Without Ollama, that task is *skipped*, not failed. Generation on CPU is bound by the prompt size and the cores: on WSL, check `processors` in `%USERPROFILE%\.wslconfig` (4 of 8 cores made the same answer take 130 s instead of 88 s).
 </details>
 
 <details>

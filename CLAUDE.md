@@ -114,6 +114,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   golden, model digest, prompt version); exit 99 when it exists or Ollama is down. Metrics per group: refusal
   accuracy, citation validity, citation recall (all / in context). CI replays recorded Ollama bodies; the model is
   measured only in the lab. Step 6b (gate vs `answer_baseline.yml`) comes after the first lab run.
+  Latency: `LC214_NUM_CTX` 6144 (same recall as 8192, swept by lc05); trade context for speed only within 2 fiscal /
+  1 formal cases. CPU-bound: WSL needs every core (`.wslconfig processors`). Iterate prompts on `--golden --dev`.
 
 ## Development rules
 

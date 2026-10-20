@@ -37,7 +37,7 @@ one (e5, limit 512).
    whole provision. Revoked/vetoed provisions show their note, like the SQL answer.
 6. **A greedy budget, in LLM tokens, estimated until it is measured.**
    `budget = (num_ctx − answer reserve − fixed prompt − question) × (1 − margin)` = (8192 − 1024 − 500 − ~30) × 0.8
-   ≈ 5,300. Each block takes min(ceiling, what is left); hits that no longer fit are reported as `dropped`. LLM
+   ≈ 5,300 (6,144 since ADR 0015: ≈ 3,670, the same context recall). Each block takes min(ceiling, what is left); hits that no longer fit are reported as `dropped`. LLM
    tokens are words × `LC214_LLM_TOKENS_PER_WORD` (1.7, conservative for legal Portuguese, with its numbers, "§"
    and "º"): an **estimate**, labelled as such in the CLI, corrected by the generation step, which logs Ollama's
    `prompt_eval_count` for the same prompt.

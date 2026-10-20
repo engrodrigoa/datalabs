@@ -148,9 +148,10 @@ with DAG(
 
     evaluate = observed_script("evaluate_retrieval", "lc214", "rag/lc214/lc05_eval.py",
                                trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=15))
-    # ~60 phrasings x 20-60 s on CPU when it runs; most weeks it exits 99 (same fingerprint, same answers)
+    # measured 2026-10-19 (8 logical cores, num_ctx 6144): 88 s for a 3,144-token prompt; ~157k context tokens over
+    # 60 phrasings -> ~80 min when it runs. Most weeks it exits 99 (same fingerprint, same answers).
     generate = observed_script("generate_answers", "lc214", "rag/lc214/lc06_generate.py", args=f"--golden {FORCE}",
-                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=120))
+                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=150))
 
     check_ai_runtime >> extract >> parse >> chunk >> [load, embed, golden]
     [load, embed] >> data_health
