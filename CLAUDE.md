@@ -33,7 +33,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
   (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
-  gate; dataset `datalabs://silver/lc214`),
+  gate → lc06 generation; dataset `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
@@ -41,7 +41,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
-- `docs/adr/` (0001–0014), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0015), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -105,6 +105,15 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `--write-baseline`) minus `LC214_EVAL_TOLERANCE_CASES` (1 case ≈ 3-4 pp); improvements are logged, never fail;
   no baseline = failure. Report per phrasing in the lake (`silver/lc214/<sha12>/eval/`). Every retrieval change is
   an experiment of one variable against this baseline.
+- **0015 LC 214 answer generation:** `lc06_generate` (task `generate_answers`, after the lc05 gate): Ollama
+  `llama3.2:1b` with a JSON Schema (`answerable`, `answer`, `citations[{artigo, dispositivo}]`), `temperature 0` +
+  `LC214_GEN_SEED`, `num_ctx` explicit. "Não consta" by three barriers: no LLM call on `clarify` / no context block;
+  the model's `answerable`; no citation left that the context showed (each citation resolved by the router's
+  `parse_citations` + `Index.resolve`: valid | outside_context | not_found | foreign). Route `sql` answers by structure,
+  never by the LLM; `foreign` still answers. Report `silver/lc214/<sha12>/answers/<fingerprint>.json` (law, chunks,
+  golden, model digest, prompt version); exit 99 when it exists or Ollama is down. Metrics per group: refusal
+  accuracy, citation validity, citation recall (all / in context). CI replays recorded Ollama bodies; the model is
+  measured only in the lab. Step 6b (gate vs `answer_baseline.yml`) comes after the first lab run.
 
 ## Development rules
 
@@ -214,6 +223,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold. LC 214: fiscal phrasings miss the
   law's vocabulary (content-03: "matriz/filial" vs "estabelecimentos do mesmo contribuinte"), measured by lc05.
+- LC 214 generation (ADR 0015): first lab run, digest stable across two `force` runs, record real replies as CI
+  fixtures, then the 6b gate; calibrate `LC214_LLM_TOKENS_PER_WORD` from the report (its own commit, lc05 re-run).
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
 - Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
   Same day: RFB, ANP and NF-e ran end to end on a clean clone (RFB dev_mode: download 21 min, `dag_rfb_dw_dbt` 5m18s,

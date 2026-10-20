@@ -3,9 +3,9 @@ dag_rag_lc214 — LC 214/2025 (IBS/CBS law) as a governed source for the legisla
 
   check_ai_runtime -> extract_source -> parse_dispositivos -> build_chunks -+-> load_postgres --+-> health_checks_lc214 -+
      (gate)            lc01 (watch)      lc02 (structure)      lc03 (small-to-big) |   lc04a (upsert)   |   (audit, serving,     |
-                                                                                 +-> embed_chunks ---+    vectors)            +-> evaluate_retrieval
-                                                                                 |   lc04c (pgvector)                         |   lc05 (gate vs
-                                                                                 +-> golden_contract -------------------------+    the baseline)
+                                                                                 +-> embed_chunks ---+    vectors)            +-> evaluate_retrieval -> generate_answers
+                                                                                 |   lc04c (pgvector)                         |   lc05 (gate vs        lc06 (Ollama, cited
+                                                                                 +-> golden_contract -------------------------+    the baseline)       JSON answers)
                                                                                      (labels vs the law)
 
 Storage: the lake only (landing/lc214 -> bronze/lc214 -> silver/lc214/<sha12>/, see lake.py).
@@ -48,6 +48,14 @@ Retrieval gate (lc05_eval.py, ADR 0014)
     context recall (fiscal and formal phrasings) drop below eval_baseline.yml minus one case of tolerance. Runs
     every week, even with nothing new (it is a check, ~15 s): a model or code change shows up here. It needs the
     labels to hold (golden_contract) and the store to be loaded, so it runs last.
+
+Answer generation (lc06_generate.py, ADR 0015)
+    The golden phrasings of the vector/combined routes through the retriever and the local LLM (Ollama, profile
+    `ai`, JSON Schema output, temperature 0 + seed). Three barriers decide "não consta": nothing to ground on (no LLM
+    call), the model's `answerable`, no citation left in the context (each citation resolved by the router's parser).
+    Runs after the retrieval gate, so a worse retriever fails there first (alert on the root cause). Exit 99 when
+    the report for the same fingerprint (law, chunks, golden set, model digest, prompt) is already in the lake, or
+    when Ollama is not running (optional layer). `force` regenerates. Not gated yet: it measures and reports.
 
 Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
@@ -104,7 +112,8 @@ with DAG(
     max_active_runs=1,
     tags=["rag", "ai", "lc214", "legislation", "observability"],
     params={
-        "force": Param(False, type="boolean", description="Re-parse and re-chunk the current version"),
+        "force": Param(False, type="boolean",
+                       description="Re-parse and re-chunk the current version, and regenerate the answers"),
         # ["null", "string"]: the trigger form sends an empty field as null; with type "string" alone Airflow marks
         # the field required (*) and rejects a run that leaves it empty - the normal case
         "pdf": Param(None, type=["null", "string"],
@@ -139,7 +148,10 @@ with DAG(
 
     evaluate = observed_script("evaluate_retrieval", "lc214", "rag/lc214/lc05_eval.py",
                                trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=15))
+    # ~60 phrasings x 20-60 s on CPU when it runs; most weeks it exits 99 (same fingerprint, same answers)
+    generate = observed_script("generate_answers", "lc214", "rag/lc214/lc06_generate.py", args=f"--golden {FORCE}",
+                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=120))
 
     check_ai_runtime >> extract >> parse >> chunk >> [load, embed, golden]
     [load, embed] >> data_health
-    [data_health, golden] >> evaluate
+    [data_health, golden] >> evaluate >> generate

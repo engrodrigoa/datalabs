@@ -279,7 +279,7 @@ The default stack does **not** require a GPU. Without the AI image, `dag_rag_anp
 
 To keep the AI profile across restarts without make, put `INSTALL_AI=true` and `COMPOSE_PROFILES=ai` in `.env`.
 Download the embedding model at setup time, not inside the first DAG run: `make models`.
-The RAG DAG (embeddings → pgvector → evaluation gate) does not need Ollama; only the interactive assistant does.
+The RAG DAGs (embeddings → pgvector → evaluation gates) run without Ollama; the interactive assistant and the LC 214 answer generation (`generate_answers` in `dag_rag_lc214`, ADR 0015) need it. Without Ollama, that task is *skipped*, not failed.
 </details>
 
 <details>
@@ -352,6 +352,12 @@ scripts/                      sample data generator
 * [0007 — RAG: incremental embeddings and a CPU-sized model](docs/adr/0007-rag-incremental-embeddings.md)
 * [0008 — Stateful services in Docker volumes, not Windows bind mounts](docs/adr/0008-stateful-services-in-docker-volumes.md)
 * [0009 — RFB download driven by a file contract, not by the source's listing](docs/adr/0009-rfb-source-contract.md)
+* [0010 — Legislation RAG (LC 214/2025): source contract, structural parser, small-to-big chunks](docs/adr/0010-lc214-legislation-rag-ingestion.md)
+* [0011 — LC 214 serving tables: upsert by content hash, a projection of the lake](docs/adr/0011-lc214-serving-load.md)
+* [0012 — LC 214 question router: citations by SQL, questions by vectors, both when both](docs/adr/0012-lc214-question-router.md)
+* [0013 — LC 214 vector search: exact cosine over an incremental store, context under an LLM budget](docs/adr/0013-lc214-vector-search-and-context.md)
+* [0014 — LC 214 retrieval gate: golden set through the real retriever, thresholds from a committed baseline](docs/adr/0014-lc214-retrieval-evaluation-gate.md)
+* [0015 — LC 214 answer generation: cited JSON from a local LLM, three barriers to "não consta"](docs/adr/0015-lc214-answer-generation.md)
 
 ## Roadmap
 

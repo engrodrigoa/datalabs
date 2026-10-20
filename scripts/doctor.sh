@@ -68,7 +68,7 @@ sys.exit(not isinstance(try_to_load_from_cache(MODEL_NAME, 'config.json'), str))
     else fail "embedding model not downloaded yet" "make models  (or make models-import on a restricted network)"; fi
     if running ollama; then
       if docker compose exec -T ollama ollama list 2>/dev/null | grep -q .; then ok "Ollama has a model"
-      else fail "Ollama has no model (the interactive assistant needs it; the RAG DAG does not)" "docker compose logs ollama-pull"; fi
+      else fail "Ollama has no model (the interactive assistant and the LC 214 generate_answers task need it)" "docker compose logs ollama-pull"; fi
     fi
   else info "base image (no INSTALL_AI): RAG DAG and checks are skipped by design"; fi
 else fail "airflow-scheduler is not running"; fi
