@@ -92,6 +92,28 @@ the context (5th block) and the model cited two valid provisions: a false refusa
 count. Without context, the same model says IBS is "Intestino Irritável": the case for grounding in one
 line. The real ratio is ~1.79 LLM tokens per word (+5% over the 1.7 estimate, inside the 20% margin).
 
+**The first dev run: refusal collapse (2026-10-19, baseline prompt, 11 phrasings, 15 min).** The model refused all
+11. Only the 2 `no_answer` refusals were right (fiscal refusal accuracy 0.286, formal 0.000, citation recall 0).
+In `content-02/formal` the context held 3 of the 3 expected provisions, and the model still refused. One reply ran
+into `num_predict` (truncated, 167 s). Five replies cited valid provisions next to `answerable=false`. The single
+question that isolates it ("diferença entre fornecedor, adquirente e destinatário", art. 3 as the FIRST block)
+came back as `answerable=false` with `answer` = one word ("destinatário") and no citations. The model commits to the
+verdict on its first token and the rest only follows it. A refusal-everything baseline would gate a floor, so the
+full run waits for a prompt that answers. Prompt eval went from ~26 to 46 tok/s with 8 cores, and the ratio held at 1.795
+tokens per word.
+
+11. **Prompt experiments are named variants, one change each.** `LC214_GEN_VARIANT` / `--variant`: `baseline`,
+    `verdict_last` (H1: the JSON asks for `answer` and `citations` before `answerable`; Ollama turns the schema
+    into a grammar, so property order is the order the model writes in), `answer_default` (H2: answering is the
+    default, refusing the exception, stated last). They compose with `+`, so `verdict_last+answer_default` is
+    tested only after each one alone. The variant and the hash of the prompt are in the fingerprint. The hash
+    used to sort the schema's keys, which made `verdict_last` hash like `baseline` (fixed: the order is part of
+    the prompt). A subset run (`--dev`, `--case`) writes `answers/dev/<fingerprint>-<subset>-<time>.json`, never
+    skips and keeps every run, so variants are compared side by side and the same variant twice must give the same
+    digest. Every answer keeps the raw reply: the recorded replies become the CI fixtures. The winner becomes the
+    default in a commit of its own, after the full run confirms it. Failing both H1 and H2 means `llama3.2:1b`
+    cannot do this task. Then the LLM comparison stops being a later project and becomes the next step.
+
 **Consequences.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta".
 Every refusal names its barrier. The first numbers will be low (1B model), and that is accepted: the gate of
 step 6b catches drops, not levels, like lc05. Next: (6b) run in the lab, verify the digest is stable across two

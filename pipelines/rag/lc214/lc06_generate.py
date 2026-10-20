@@ -36,14 +36,19 @@ Calibrating the token estimate (ADR 0013 left it open)
     call after the first may count fewer tokens; a ratio below 1.0 token/word is impossible for Portuguese and is
     flagged `cache_suspect` instead of being used.
 
+Reports: answers/<fingerprint>.json for the full run (skipped when present); answers/dev/<fingerprint>-<subset>-<time>.json
+for a subset (--dev / --case: never skipped, every run kept, to compare variants and check the digest).
+
 Not gated here (patch 2 of ADR 0015 adds the gate against a committed baseline, like lc05): this step measures
 and writes the report (silver/lc214/<sha12>/answers/<fingerprint>.json).
 
 Run in the lab (needs Postgres, the embedding model and the Ollama of profile `ai`):
     python -m pipelines.rag.lc214.lc06_generate "o art. 6º se aplica a transferência entre filiais?"
     python -m pipelines.rag.lc214.lc06_generate --golden                  the golden set (DAG task generate_answers)
-    python -m pipelines.rag.lc214.lc06_generate --golden --case content-03 --case no_answer-01   a subset, no report
+    python -m pipelines.rag.lc214.lc06_generate --golden --case content-03 --case no_answer-01   a subset (answers/dev/)
     python -m pipelines.rag.lc214.lc06_generate --golden --dev            the dev subset (prompt experiments)
+    python -m pipelines.rag.lc214.lc06_generate --golden --dev --variant verdict_last     one experiment
+Prompt variants (LC214_GEN_VARIANT / --variant, composed with '+'): see VARIANTS. Each is part of the fingerprint.
 Exit codes: 0 generated | 99 report up to date, or no Ollama (optional layer) | 1 failure.
 """
 from __future__ import annotations
@@ -71,11 +76,12 @@ from pipelines.rag.lc214.router import Index, parse_citations, render_structure 
 
 logger = get_logger("lc06_generate")
 
-GEN_VERSION = "1"                    # bump when the report's definitions change
+GEN_VERSION = "2"                    # bump when the report's definitions change (2: variants, raw replies)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 SEED = int(os.getenv("LC214_GEN_SEED", "42"))
 TIMEOUT_S = int(os.getenv("LC214_GEN_TIMEOUT_S", "600"))       # per call: the first one loads the model on CPU
+VARIANT = os.getenv("LC214_GEN_VARIANT", "baseline")
 GROUPS = ("fiscal", "formal")
 EXIT_OK, EXIT_FAILED, EXIT_SKIPPED = 0, 1, 99
 
@@ -95,6 +101,25 @@ Regras:
    Não invente o conteúdo da outra norma.
 5. Responda em português, de forma objetiva, em no máximo 5 frases."""
 
+# answer_default: the same rules, but answering is the default and refusing the exception, stated last. Small models
+# give a refusal rule stated first more weight than the rest of the prompt (hypothesis H2, ADR 0015).
+SYSTEM_ANSWER_DEFAULT = """Você explica a Lei Complementar nº 214/2025 (IBS, CBS e Imposto Seletivo) a um auditor fiscal,
+usando os trechos da lei que estão no contexto.
+
+Regras:
+1. Responda à pergunta com base nos trechos do contexto. Se algum trecho trata do assunto, responda, mesmo que a
+   resposta seja parcial, e diga o que o contexto não cobre.
+2. Cada afirmação da resposta precisa de um dispositivo do contexto que a sustente. Liste-os em "citations":
+   "artigo" é o número do artigo (ex.: "5", "7-A") e "dispositivo" é a parte dentro dele
+   ("caput", "§ 1º", "parágrafo único", "§ 2º, inciso III", "inciso II, alínea a").
+3. Cite apenas dispositivos da LC 214/2025 que aparecem no contexto. Não use conhecimento de fora do contexto.
+4. Se a pergunta ou o contexto remeter a outra lei (Código Tributário Nacional, Constituição, outra lei
+   complementar), diga que a regra está nessa outra norma e cite o dispositivo da LC 214 que faz a remissão.
+   Não invente o conteúdo da outra norma.
+5. Devolva "answerable": false somente se nenhum trecho do contexto tratar do assunto da pergunta; nesse caso,
+   explique em uma frase o que falta.
+6. Responda em português, de forma objetiva, em no máximo 5 frases."""
+
 PROMPT = "Contexto (trechos da LC 214/2025):\n{context}\n\nPergunta: {question}"
 FOREIGN_NOTE = "\n\nA pergunta menciona outra norma: {foreign}. A regra dela não está no contexto."
 
@@ -112,15 +137,50 @@ SCHEMA = {
 }
 
 
+# Named prompt variants: each one changes ONE thing, and they compose with "+" ("verdict_last+answer_default").
+# The variant is part of the fingerprint, so every experiment is its own report.
+VARIANTS = {
+    "baseline": "the first prompt: refusal rule first, the verdict (answerable) first in the JSON",
+    "verdict_last": "the same prompt; the JSON asks for answer and citations BEFORE answerable (H1: a model that "
+                    "writes the verdict first commits to it before reading its own answer)",
+    "answer_default": "answering is the default, refusing the exception, stated last (H2)",
+}
+
+
+@dataclass(frozen=True)
+class PromptSpec:
+    name: str
+    system: str
+    schema: dict
+
+
+def prompt_spec(variant: str | None = None) -> PromptSpec:
+    names = [n.strip() for n in (variant or VARIANT).split("+") if n.strip()]
+    unknown = [n for n in names if n not in VARIANTS]
+    if unknown or not names:
+        raise GenError("lc214_gen_unknown_variant", f"unknown prompt variant {unknown or variant!r}: use one of "
+                       f"{sorted(VARIANTS)}, composed with '+'")
+    mods = [n for n in VARIANTS if n in names and n != "baseline"]          # canonical order: a+b == b+a
+    system, schema = SYSTEM, SCHEMA
+    if "answer_default" in mods:
+        system = SYSTEM_ANSWER_DEFAULT
+    if "verdict_last" in mods:
+        order = ["answer", "citations", "answerable"]
+        schema = {**SCHEMA, "properties": {k: SCHEMA["properties"][k] for k in order}, "required": order}
+    return PromptSpec("+".join(mods) or "baseline", system, schema)
+
+
 def llm_options() -> dict:
     return {"temperature": 0, "seed": SEED, "num_ctx": rt.NUM_CTX, "num_predict": rt.ANSWER_TOKENS}
 
 
-def prompt_version() -> str:
-    """Anything that changes what the model is asked changes this hash (and with it the fingerprint)."""
-    spec = json.dumps({"system": SYSTEM, "prompt": PROMPT, "foreign": FOREIGN_NOTE, "schema": SCHEMA,
-                       "refusal": REFUSAL}, sort_keys=True, ensure_ascii=False)
-    return hashlib.md5(spec.encode()).hexdigest()[:12]
+def prompt_version(spec: PromptSpec | None = None) -> str:
+    """Anything that changes what the model is asked changes this hash (and with it the fingerprint). No sort_keys:
+    the ORDER of the schema's properties is the order the model writes them in (Ollama turns the schema into a
+    grammar), so it is part of the prompt."""
+    spec = spec or prompt_spec()
+    body = json.dumps([spec.system, PROMPT, FOREIGN_NOTE, spec.schema, REFUSAL], ensure_ascii=False)
+    return hashlib.md5(body.encode()).hexdigest()[:12]
 
 
 class GenError(Exception):
@@ -241,6 +301,7 @@ class Answer:
     prompt_eval_count: int | None = None
     eval_count: int | None = None
     latency_s: float | None = None
+    raw_response: str | None = None                          # the model's reply as received (fixtures for CI, audit)
     load_s: float | None = None                              # Ollama's split of the latency (ns -> s): where the
     prompt_eval_s: float | None = None                       # time goes; on CPU the prompt dominates
     eval_s: float | None = None
@@ -296,7 +357,8 @@ def _seconds(ns) -> float | None:
 
 
 def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]], llm: LLM,
-           index: Index | None = None, k: int = rt.TOP_K) -> Answer:
+           index: Index | None = None, k: int = rt.TOP_K, spec: PromptSpec | None = None) -> Answer:
+    spec = spec or prompt_spec()
     index = index or Index(store.ids())
     r = rt.retrieve(question, store, encode, index=index, k=k)
     a = Answer(question, r.plan.route, r.plan.intent, foreign=list(r.plan.foreign),
@@ -316,10 +378,10 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
         return a
 
     prompt = build_prompt(question, r)
-    a.prompt_words = len((SYSTEM + "\n" + prompt).split())
-    a.prompt_tokens_estimate = rt.llm_tokens(SYSTEM + "\n" + prompt)
+    a.prompt_words = len((spec.system + "\n" + prompt).split())
+    a.prompt_tokens_estimate = rt.llm_tokens(spec.system + "\n" + prompt)
     t0 = time.monotonic()
-    resp = llm.generate(SYSTEM, prompt, SCHEMA, llm_options())
+    resp = llm.generate(spec.system, prompt, spec.schema, llm_options())
     a.latency_s = round(time.monotonic() - t0, 2)
     a.llm_called = True
     a.done_reason = resp.get("done_reason")
@@ -327,7 +389,8 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     a.load_s, a.prompt_eval_s, a.eval_s = (_seconds(resp.get(f)) for f in ("load_duration", "prompt_eval_duration",
                                                                            "eval_duration"))
 
-    reply = parse_reply(resp.get("response", ""))
+    a.raw_response = resp.get("response", "")
+    reply = parse_reply(a.raw_response)
     a.json_valid = reply is not None
     if reply is None:
         a.refusal = "truncated" if a.done_reason == "length" else "invalid_json"
@@ -393,21 +456,36 @@ def outcome(case: dict, phrasing: str, a: Answer) -> Outcome:
                                 "prompt_eval_rate": a.prompt_eval_rate})
 
 
+def progress_line(n: int, total: int, o: Outcome, a: Answer) -> str:
+    """One line per phrasing, with what is needed to read a failure without opening the report: the model's own
+    words when it refused and the citations that were dropped."""
+    line = (f"  [{n}/{total}] {o.case}/{o.phrasing}: " + ("ANSWER" if a.answerable else f"REFUSE ({a.refusal})")
+            + f" cites {len(a.valid_ids)} valid / {len(a.violations)} bad, expected {len(o.cited_expected)}/"
+              f"{len(o.expected)} (context {len(o.in_context)}) {a.latency_s or 0:.1f}s")
+    if a.violations:
+        line += " | bad: " + "; ".join(f"{_short(c['text'], 40)} ({c['status']})" for c in a.violations)
+    if not a.answerable and a.reply_answer:
+        line += f' | model: "{_short(a.reply_answer, 100)}"'
+    return line
+
+
+def _short(text: str, n: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
 def run_golden(golden: dict, store: rt.Store, encode, llm: LLM, cases: set[str] | None = None,
-               progress: Callable[[str], None] = print) -> list[Outcome]:
+               progress: Callable[[str], None] = print, spec: PromptSpec | None = None) -> list[Outcome]:
     k = golden.get("k", 5)
     index = Index(store.ids())
     todo = [(c, p, q) for c in golden.get("cases") or [] if generated(c) and (not cases or c["id"] in cases)
             for p, q in (c.get("questions") or {}).items()]
     out = []
     for n, (case, phrasing, question) in enumerate(todo, 1):
-        a = answer(str(question), store, encode, llm, index=index, k=k)
+        a = answer(str(question), store, encode, llm, index=index, k=k, spec=spec)
         o = outcome(case, phrasing, a)
         out.append(o)
-        progress(f"  [{n}/{len(todo)}] {case['id']}/{phrasing}: "
-                 + ("ANSWER" if a.answerable else f"REFUSE ({a.refusal})")
-                 + f" cites {len(a.valid_ids)} valid / {len(a.violations)} bad, expected {len(o.cited_expected)}/"
-                   f"{len(o.expected)} (context {len(o.in_context)}) {a.latency_s or 0:.1f}s")
+        progress(progress_line(n, len(todo), o, a))
     return out
 
 
@@ -472,9 +550,10 @@ def answers_digest(outcomes: list[Outcome]) -> str:
     return hashlib.md5(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
-def report(outcomes: list[Outcome], fp: dict, key: str) -> dict:
+def report(outcomes: list[Outcome], fp: dict, key: str, subset: list[str] | None = None) -> dict:
     return {
         "gen_version": GEN_VERSION, "fingerprint_key": key,
+        "variant": (fp.get("llm") or {}).get("variant"), "subset": subset,
         "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "fingerprint": fp, "answers_digest": answers_digest(outcomes),
         "metrics": {g: group_metrics(outcomes, g) for g in GROUPS},
@@ -489,24 +568,26 @@ def summary_line(rep: dict) -> str:
 
     parts = [f"{g} (n={m['n']}): refusal_acc {fmt(m['refusal_accuracy'])} cit_validity {fmt(m['citation_validity'])}"
              f" cit_recall {fmt(m['citation_recall'])} (in context {fmt(m['citation_recall_in_context'])})"
-             f" json {fmt(m['json_valid'])} p50 {m['latency_p50_s']}s"
+             f" json {fmt(m['json_valid'])} p50 " + ("-" if m['latency_p50_s'] is None else f"{m['latency_p50_s']}s")
              for g, m in rep["metrics"].items()]
     c = rep["calibration"]
     parts.append(f"tokens/word {c['measured_median']} measured vs {c['estimate_tokens_per_word']} estimated"
                  + (f" ({c['cache_suspect']} cache-suspect)" if c["cache_suspect"] else "")
                  + f"; prompt {c['prompt_eval_rate_median']} tok/s, answer {c['eval_rate_median']} tok/s")
-    return " | ".join(parts) + f" | digest {rep['answers_digest']}"
+    return f"[{rep.get('variant') or 'baseline'}] " + " | ".join(parts) + f" | digest {rep['answers_digest']}"
 
 
 # --------------------------------------------------------------------------- what is being generated
-def fingerprint(cur, llm: LLM, golden_path: Path, k: int) -> tuple[dict, str]:
+def fingerprint(cur, llm: LLM, golden_path: Path, k: int, spec: PromptSpec | None = None) -> tuple[dict, str]:
     from pipelines.rag.lc214.lc05_eval import EvalError, fingerprint as store_fingerprint
 
     try:
         fp = store_fingerprint(cur, golden_path, k)
     except EvalError as exc:
         raise GenError(exc.event, str(exc)) from None
-    fp["llm"] = {"model": llm.model, "digest": llm.digest(), "options": llm_options(), "prompt_version": prompt_version()}
+    spec = spec or prompt_spec()
+    fp["llm"] = {"model": llm.model, "digest": llm.digest(), "options": llm_options(), "variant": spec.name,
+                 "prompt_version": prompt_version(spec)}
     fp["gen_version"] = GEN_VERSION
     key = hashlib.md5(json.dumps(fp, sort_keys=True).encode()).hexdigest()[:12]
     return fp, key
@@ -514,42 +595,55 @@ def fingerprint(cur, llm: LLM, golden_path: Path, k: int) -> tuple[dict, str]:
 
 # --------------------------------------------------------------------------- the step
 def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases: set[str] | None = None,
-        force: bool = False, dev: bool = False) -> int:
+        force: bool = False, dev: bool = False, variant: str | None = None) -> int:
     step = current_step()
+    spec = prompt_spec(variant)
     golden = load_golden(golden_path)
+    extra = set(cases or ())
     if dev:
         cases = (cases or set()) | dev_cases(golden)
         if not cases:
             raise GenError("lc214_gen_no_dev_cases", "no case is marked `dev: true` in the golden set")
     k = golden.get("k", 5)
-    fp, key = fingerprint(cur, llm, golden_path, k)
+    fp, key = fingerprint(cur, llm, golden_path, k, spec)
     if golden.get("law_version") != fp["law_version"]:
         raise GenError("lc214_gen_labels_stale", f"golden set labelled against {golden.get('law_version')}, vectors "
                        f"are of {fp['law_version']}: the golden contract (G2) must pass first")
 
+    # The full run: one report per fingerprint, and a re-run is a no-op (exit 99). A subset (--dev, --case) is an
+    # experiment: it never skips and keeps every run (answers/dev/...-<time>.json), so variants can be compared and
+    # two runs of the same variant must show the same digest.
     report_key = None
-    if lake is not None and not cases:
+    if lake is not None:
         from pipelines.rag.lc214.lake import k_manifest, k_silver
-        report_key = k_silver(lake.get_json(k_manifest())["current"], f"answers/{key}.json")
-        if not force and lake.exists(report_key):
+        root = k_silver(lake.get_json(k_manifest())["current"], "answers")
+        if cases:
+            tag = "dev" if dev and not extra else "cases-" + hashlib.md5(",".join(sorted(cases)).encode()).hexdigest()[:8]
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            report_key = f"{root}/dev/{key}-{tag}-{stamp}.json"
+        else:
+            report_key = f"{root}/{key}.json"
+        if not cases and not force and lake.exists(report_key):
             log_event(logger, "lc214_gen_up_to_date", f"answers for fingerprint {key} already in {lake.url(report_key)}"
                       " (same law, chunks, golden set, model digest and prompt): nothing to generate",
                       fingerprint=key)
             return EXIT_SKIPPED
 
-    log_event(logger, "lc214_gen_started", f"model {llm.model}@{fp['llm']['digest']} prompt "
-              f"{fp['llm']['prompt_version']} fingerprint {key}", fingerprint=key, model=llm.model)
+    log_event(logger, "lc214_gen_started", f"model {llm.model}@{fp['llm']['digest']} variant {spec.name} prompt "
+              f"{fp['llm']['prompt_version']} fingerprint {key}" + (f" subset {len(cases)} cases" if cases else ""),
+              fingerprint=key, model=llm.model, variant=spec.name)
     t0 = time.monotonic()
-    outcomes = run_golden(golden, rt.PgStore(cur), encode, llm, cases)
-    rep = report(outcomes, fp, key)
+    outcomes = run_golden(golden, rt.PgStore(cur), encode, llm, cases, spec=spec)
+    rep = report(outcomes, fp, key, sorted(cases) if cases else None)
     line = summary_line(rep)
-    log_event(logger, "lc214_gen_measured", line, fingerprint=key, digest=rep["answers_digest"],
+    log_event(logger, "lc214_gen_measured", line, fingerprint=key, digest=rep["answers_digest"], variant=spec.name,
               duration_s=round(time.monotonic() - t0, 1),
               **{f"{g}_{m}": rep["metrics"][g][m] for g in GROUPS
                  for m in ("refusal_accuracy", "citation_validity", "citation_recall", "citation_recall_in_context")})
     for g in GROUPS:
         step.set(**{f"{g}_{m}": v for m, v in rep["metrics"][g].items() if isinstance(v, (int, float))})
     step.set(tokens_per_word=rep["calibration"]["measured_median"])
+    step.label(variant=spec.name)
     step.add(rows_in=len(outcomes), rows_out=sum(not o.refused for o in outcomes))
 
     if report_key:
@@ -570,8 +664,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("question", nargs="?", help="one question (prints the JSON answer); omit with --golden")
     ap.add_argument("--golden", action="store_true", help="answer every generated phrasing of the golden set")
-    ap.add_argument("--case", action="append", default=[], help="with --golden: only this case (repeatable, no report)")
-    ap.add_argument("--dev", action="store_true", help="with --golden: only the cases marked dev: true (no report)")
+    ap.add_argument("--case", action="append", default=[], help="with --golden: only this case (repeatable, report "
+                    "in answers/dev/)")
+    ap.add_argument("--dev", action="store_true", help="with --golden: only the cases marked dev: true (report in "
+                    "answers/dev/, never skipped)")
+    ap.add_argument("--variant", default=None, help=f"prompt variant (LC214_GEN_VARIANT, default {VARIANT}): "
+                    f"{', '.join(VARIANTS)}, composed with '+'")
     ap.add_argument("--force", action="store_true", help="generate even when the report for this fingerprint exists")
     ap.add_argument("--context", action="store_true", help="single question: also print the context sent")
     ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE), file:///dir, or 'none' (no report)")
@@ -592,14 +690,15 @@ def main(argv=None) -> int:
                 encode = (lambda q: encode_query(model, q))
                 if args.golden:
                     lake = None if args.lake == "none" else lake_from_env(args.lake)
-                    return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force, args.dev)
-                a = answer(args.question, rt.PgStore(cur), encode, llm)
+                    return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force, args.dev,
+                               args.variant)
+                a = answer(args.question, rt.PgStore(cur), encode, llm, spec=prompt_spec(args.variant))
                 if args.context:
                     print(rt.retrieve(args.question, rt.PgStore(cur), encode).context() + "\n")
         finally:
             conn.close()
         print(json.dumps(a.public(), ensure_ascii=False, indent=2))
-        print(f"route={a.route} refusal={a.refusal} blocks={a.blocks} citations="
+        print(f"variant={prompt_spec(args.variant).name} route={a.route} refusal={a.refusal} blocks={a.blocks} citations="
               f"{[(c['text'], c['status']) for c in a.citations]}\n"
               f"latency={a.latency_s}s (load {a.load_s}s, prompt {a.prompt_eval_s}s at {a.prompt_eval_rate} tok/s, "
               f"answer {a.eval_s}s) prompt_eval_count={a.prompt_eval_count} (estimate {a.prompt_tokens_estimate}) "

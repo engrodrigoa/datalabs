@@ -235,7 +235,7 @@ def step_env(tmp_path, monkeypatch):
     golden_path.write_text(json.dumps(GOLDEN), encoding="utf-8")       # JSON is YAML
     monkeypatch.setattr(gen.rt, "PgStore", lambda cur: FakeStore())
     fp = {"law_version": "0cf36f4433ce", "llm": {"model": "llama3.2:1b", "digest": "a80c4f17acd5", "prompt_version": "p"}}
-    monkeypatch.setattr(gen, "fingerprint", lambda cur, llm, path, k: (fp, "fp0000000001"))
+    monkeypatch.setattr(gen, "fingerprint", lambda cur, llm, path, k, spec=None: (fp, "fp0000000001"))
     return lake, golden_path
 
 
@@ -251,15 +251,34 @@ def test_the_report_is_written_once_per_fingerprint(step_env):
     assert gen.run(None, encode, llm, lake, golden_path, force=True) == gen.EXIT_OK
 
 
-def test_a_subset_of_cases_never_writes_or_skips(step_env):
+SHA = "0cf36f4433ce" + "0" * 52
+
+
+def _dev_reports(lake):
+    root = Path(lake._path(k_silver(SHA, "answers/dev")))
+    return sorted(p.name for p in root.glob("*.json")) if root.exists() else []
+
+
+def test_a_subset_keeps_every_run_apart_and_never_skips(step_env, monkeypatch):
     lake, golden_path = step_env
-    assert gen.run(None, encode, FakeLLM(), lake, golden_path, cases={"no_answer-01"}) == gen.EXIT_OK
-    assert not lake.exists(k_silver("0cf36f4433ce" + "0" * 52, "answers/fp0000000001.json"))
+    real_datetime, ticks = gen.datetime, iter(range(100))
+
+    class Clock(real_datetime):                         # every call is a minute later: two runs, two names
+        @classmethod
+        def now(cls, tz=None):
+            return real_datetime(2026, 10, 20, 20, next(ticks), tzinfo=tz)
+
+    monkeypatch.setattr(gen, "datetime", Clock)
+    for _ in range(2):
+        assert gen.run(None, encode, FakeLLM(), lake, golden_path, cases={"no_answer-01"}) == gen.EXIT_OK
+    assert not lake.exists(k_silver(SHA, "answers/fp0000000001.json"))          # the full run's report is untouched
+    names = _dev_reports(lake)
+    assert len(names) == 2 and all(n.startswith("fp0000000001-cases-") for n in names)
 
 
 def test_stale_labels_stop_the_run(step_env, monkeypatch):
     lake, golden_path = step_env
-    monkeypatch.setattr(gen, "fingerprint", lambda cur, llm, path, k: ({"law_version": "ffffffffffff"}, "k"))
+    monkeypatch.setattr(gen, "fingerprint", lambda cur, llm, path, k, spec=None: ({"law_version": "ffffffffffff"}, "k"))
     with pytest.raises(gen.GenError) as exc:
         gen.run(None, encode, FakeLLM(), lake, golden_path)
     assert exc.value.event == "lc214_gen_labels_stale"
@@ -335,7 +354,9 @@ def test_the_dev_subset_is_what_the_golden_set_marks(step_env):
     golden_path.write_text(json.dumps(marked), encoding="utf-8")
     llm = FakeLLM()
     assert gen.run(None, encode, llm, lake, golden_path, dev=True) == gen.EXIT_OK and len(llm.calls) == 1
-    assert not lake.exists(k_silver("0cf36f4433ce" + "0" * 52, "answers/fp0000000001.json"))    # a subset: no report
+    assert not lake.exists(k_silver(SHA, "answers/fp0000000001.json"))
+    [name] = _dev_reports(lake)
+    assert name.startswith("fp0000000001-dev-")
 
 
 def test_dev_without_marked_cases_says_so(step_env):
@@ -353,3 +374,47 @@ def test_the_committed_golden_set_has_a_dev_subset_of_every_behavior():
     assert {c["behavior"] for c in dev} == {"answer", "abstain", "cite_external"}
     assert {c["route"] for c in dev} == {"vector", "combined"}
     assert 8 <= sum(len(c["questions"]) for c in dev) <= 14
+
+
+# --------------------------------------------------------------------------- patch 1.2: prompt variants
+def test_variants_change_one_thing_and_compose_in_any_order():
+    base, last, default = (gen.prompt_spec(v) for v in ("baseline", "verdict_last", "answer_default"))
+    assert list(base.schema["properties"]) == ["answerable", "answer", "citations"]
+    assert list(last.schema["properties"]) == ["answer", "citations", "answerable"] and last.system == base.system
+    assert default.schema == base.schema and default.system != base.system
+    both = gen.prompt_spec("answer_default+verdict_last")
+    assert both.name == "verdict_last+answer_default" == gen.prompt_spec("verdict_last+answer_default").name
+    assert both.system == default.system and both.schema == last.schema
+
+
+def test_the_schema_order_is_part_of_the_prompt_version():
+    # with sort_keys the reordered schema hashed the same: verdict_last would have been skipped as already generated
+    versions = {gen.prompt_version(gen.prompt_spec(v)) for v in ("baseline", "verdict_last", "answer_default",
+                                                                  "verdict_last+answer_default")}
+    assert len(versions) == 4
+
+
+def test_an_unknown_variant_is_refused():
+    with pytest.raises(gen.GenError) as exc:
+        gen.prompt_spec("verdict_first")
+    assert exc.value.event == "lc214_gen_unknown_variant"
+
+
+def test_the_variant_reaches_the_model():
+    llm = FakeLLM()
+    gen.answer("remessa para filial incide?", FakeStore(), encode, llm, spec=gen.prompt_spec("verdict_last"))
+    assert list(llm.calls[0]["schema"]["properties"])[-1] == "answerable"
+
+
+def test_the_raw_reply_is_kept():
+    a, _ = _answer(reply="model_refuses")
+    assert json.loads(a.raw_response)["answerable"] is False
+
+
+def test_the_progress_line_shows_the_models_words_and_the_dropped_citations():
+    a, _ = _answer(reply="one_invented")
+    o = gen.outcome(GOLDEN["cases"][0], "fiscal", a)
+    assert "bad: art. 99 (not_found)" in gen.progress_line(1, 1, o, a)
+    a, _ = _answer(reply="model_refuses")
+    o = gen.outcome(GOLDEN["cases"][1], "fiscal", a)
+    assert 'model: "O contexto não trata de multa por atraso de EFD."' in gen.progress_line(1, 1, o, a)
