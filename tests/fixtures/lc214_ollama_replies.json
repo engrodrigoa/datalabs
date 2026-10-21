@@ -1,5 +1,5 @@
 {
-  "_comment": "Bodies in the shape of Ollama 0.6.5 POST /api/generate (stream=false, format=JSON Schema). Hand-written for the first version of lc06 (ADR 0015); patch 2 replaces them with replies recorded in the lab. Fields the code does not read are kept to show the real shape. refuses_but_cites reproduces the 2026-10-20 dev runs: a reply that cites a valid provision and still says answerable=false (verdict written last).",
+  "_comment": "Bodies in the shape of Ollama 0.6.5 POST /api/generate (stream=false, format=JSON Schema). Hand-written for the first version of lc06 (ADR 0015); patch 2 replaces them with replies recorded in the lab. Fields the code does not read are kept to show the real shape. refuses_but_cites reproduces the 2026-10-20 dev runs: a reply that cites a valid provision and still says answerable=false (verdict written last). cites_in_text and refuses_naming_provisions reproduce qwen2.5:3b (2026-10-20): citations written in the prose with an empty field, and a refusal that names provisions.",
   "grounded": {
     "model": "llama3.2:1b",
     "done": true,
@@ -50,5 +50,21 @@
     "response": "{\"answer\": \"A filial está incluída no § 1º do art. 1º.\", \"citations\": [{\"artigo\": \"1\", \"dispositivo\": \"§ 1º\"}], \"answerable\": false}",
     "prompt_eval_count": 402,
     "eval_count": 40
+  },
+  "cites_in_text": {
+    "model": "qwen2.5:3b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": true, \"answer\": \"Sim. A filial está incluída, conforme § 1º do art. 1º da LC 214/2025.\", \"citations\": []}",
+    "prompt_eval_count": 430,
+    "eval_count": 45
+  },
+  "refuses_naming_provisions": {
+    "model": "qwen2.5:3b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": false, \"answer\": \"Nenhum trecho trata da multa da EFD; o art. 1º e o § 1º do art. 1º tratam de remessa.\", \"citations\": []}",
+    "prompt_eval_count": 420,
+    "eval_count": 38
   }
 }

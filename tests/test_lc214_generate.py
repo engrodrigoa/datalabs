@@ -493,7 +493,7 @@ def test_rescore_reads_every_dev_report_without_the_llm(step_env, capsys):
     lines = []
     assert gen.run_rescore(lake, ["dev"], detail="citations", out=lines.append) == gen.EXIT_OK
     text = "\n".join(lines)
-    assert "citations fiscal n=2" in text and "model     fiscal n=2" in text
+    assert "citations  fiscal n=2" in text and "model      fiscal n=2" in text and "model_text fiscal n=2" in text
     assert 'ok  content-01/fiscal: ANSWER expected [art. 1, § 1º] cited [art. 1, § 1º]' in text
     assert "model (False)" in text
 
@@ -513,3 +513,47 @@ def test_a_lake_lists_its_keys_and_skips_temporaries(tmp_path):
     assert lake.keys("silver/lc214/x/answers/dev") == ["silver/lc214/x/answers/dev/a.json",
                                                        "silver/lc214/x/answers/dev/b.json"]
     assert lake.keys("silver/nothing") == []
+
+
+# --------------------------------------------------------------------------- patch 1.4a: citations read from the text
+def test_citations_written_in_the_prose_are_parsed_and_checked():
+    index, shown = Index(FakeStore().ids()), {P + "1", P + "1:par-1"}
+    got = gen.text_citations("Conforme o § 1º do art. 1º da LC 214/2025, sim; o art. 3º não se aplica e o art. 14 do "
+                             "Código Tributário Nacional exige requisitos. Ver também § 1º do art. 1º.", index, shown)
+    assert [(c["text"][:11], c["status"]) for c in got] == [                    # once each, in reading order
+        ("art. 1, § 1", "valid"), ("art. 3", "outside_context"), ("art. 14 (do", "foreign")]
+
+
+def test_model_text_shows_an_answer_that_cites_only_in_its_prose():
+    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("cites_in_text"))
+    assert not a.answerable and a.refusal == "no_valid_citation"                # the field is empty
+    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("cites_in_text"), decision="model_text")
+    assert a.answerable and a.valid_ids == [P + "1:par-1"]
+    assert a.public()["citations"] == ["art. 1, § 1"]
+
+
+def test_model_text_never_turns_a_refusal_that_names_provisions_into_an_answer():
+    a = gen.answer("multa da EFD?", FakeStore(), encode, FakeLLM("refuses_naming_provisions"), decision="model_text")
+    assert not a.answerable and a.refusal == "model" and a.text_citations          # read, recorded, not obeyed
+
+
+def test_an_old_report_is_rescored_with_the_law_from_the_lake(step_env):
+    import polars as pl
+
+    lake, golden_path = step_env
+    llm = FakeLLM(by_question={"vendi para a filial, incide?": "cites_in_text"})
+    golden_path.write_text(json.dumps({**GOLDEN, "cases": [{**c, "dev": True} for c in GOLDEN["cases"]]}),
+                           encoding="utf-8")
+    gen.run(None, encode, llm, lake, golden_path, dev=True)
+    [key] = lake.keys(k_silver(SHA, "answers/dev"))
+    old = lake.get_json(key)
+    for d in old["outcomes"]:                                                  # as written before GEN_VERSION 4
+        d["answer"].pop("text_citations"), d["answer"].pop("cites_text")
+    lake.put_json(key, old)
+    with pytest.raises(gen.GenError):                                          # no law in the lake yet
+        gen.run_rescore(lake, ["dev"], detail="model_text", out=lambda _: None)
+    lake.put_parquet(k_silver(SHA, "dispositivos.parquet"), pl.DataFrame({"dispositivo_id": FakeStore().ids()}))
+    lines = []
+    gen.run_rescore(lake, ["dev"], detail="model_text", out=lines.append)
+    text = "\n".join(lines)
+    assert "ok  content-01/fiscal: ANSWER expected [art. 1, § 1º] cited [art. 1, § 1º]" in text

@@ -136,6 +136,25 @@ and two replies looped into `num_predict`.
     measures the second, and no metric here replaces it. The default stays `model` until the rescore and that read
     agree. Then `citations` becomes the default in a commit of its own.
 
+**H4: qwen2.5:3b (2026-10-20, dev subset, `answer_default`, 39 min, 213 s per phrasing, prompt 15.9 tok/s).** The
+largest prompt was 4,338 tokens (no silent cut at `num_ctx` 6144; 1.83 tokens per word for this tokenizer). The
+failure changed in kind. `answerable` carries signal again (0.143 fiscal, 0.500 formal). Both `no_answer` questions
+were refused with a correct reason ("nenhum trecho... trata do DIFAL"). The refusals are coherent sentences, and
+there was no visible invention. Two things remain. (a) Literalism: 8 of 9 answerable phrasings were refused with
+"o contexto não trata especificamente...", three of them with the expected provision in the context. This is the
+fiscal vocabulary gap again, now on the generation side. (b) The model cites in the prose ("conforme § 2º do art.
+4º da LC 214/2025") and leaves the citation field empty: two replies flagged answerable were stopped by barrier 3
+for that alone. Strictly, 1 of 9 phrasings was shown with the expected provision cited.
+
+13. **Citations are read where the model writes them.** Decision rule `model_text`: barrier 2 obeys `answerable`,
+    and barrier 3 accepts citations from the field AND from the answer's text, parsed and checked by the same
+    router code (`parse_citations` + `Index.resolve`, valid only if the context showed the provision). The grounding
+    check is as strict as before, but it reads the prose too. It is never used without the flag: a refusal
+    names provisions too (qwen's DIFAL refusal cites art. 69, §§ 1º-2º), and reading its text would turn it into an
+    answer. Reports from GEN_VERSION 4 on store `text_citations`. `--rescore` computes them for older reports from
+    the recorded answer and context, with the law's provision ids from the lake (`dispositivos.parquet` of the
+    report's law version).
+
 **Consequences.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta".
 Every refusal names its barrier. The first numbers will be low (1B model), and that is accepted: the gate of
 step 6b catches drops, not levels, like lc05. Next: (6b) run in the lab, verify the digest is stable across two

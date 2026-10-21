@@ -121,6 +121,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   The decision rule (`LC214_GEN_DECISION`: model | citations) is NOT in the fingerprint: every report scores both,
   `lc06_generate --rescore dev [--detail citations]` re-decides recorded replies without the LLM. The 1B's
   `answerable` was false in 33/33 dev replies (uncalibrated): prefer the checkable citation over the model's flag.
+  qwen2.5:3b: the flag carries signal, but citations land in the prose; rule `model_text` reads them (same parser),
+  only when the model says answerable (refusals name provisions too).
 
 ## Development rules
 

@@ -82,7 +82,7 @@ from pipelines.rag.lc214.router import Index, parse_citations, render_structure 
 
 logger = get_logger("lc06_generate")
 
-GEN_VERSION = "3"                    # bump when the report's definitions change (3: metrics under both decisions)
+GEN_VERSION = "4"                    # bump when the report's definitions change (4: citations read from the text)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 SEED = int(os.getenv("LC214_GEN_SEED", "42"))
@@ -160,6 +160,9 @@ DECISIONS = {
     "model": "barrier 2 trusts the model's `answerable`, then barrier 3 needs a valid citation",
     "citations": "the model's `answerable` is recorded, not obeyed: a reply with a valid citation is shown (a small "
                  "model's self-assessment is not calibrated; a citation can be checked)",
+    "model_text": "barrier 2 obeys `answerable`; barrier 3 accepts citations from the field AND from the answer's text, "
+                  "resolved by the same router parser (qwen2.5:3b writes 'conforme § 2º do art. 4º' in the prose and "
+                  "leaves the field empty). Never without the flag: refusals name provisions too",
 }
 FINAL_REFUSALS = ("clarify", "no_context", "invalid_json", "truncated")     # decided before the reply is read
 
@@ -170,7 +173,7 @@ def decide(pre_refusal: str | None, reply_answerable: bool | None, has_valid: bo
         raise GenError("lc214_gen_unknown_decision", f"unknown decision {rule!r}: use one of {sorted(DECISIONS)}")
     if pre_refusal in FINAL_REFUSALS:
         return False, pre_refusal
-    if rule == "model" and not reply_answerable:
+    if rule in ("model", "model_text") and not reply_answerable:
         return False, "model"
     if not has_valid:
         return False, "no_valid_citation"
@@ -293,17 +296,38 @@ def citation_text(artigo: str, dispositivo: str) -> str:
     return art if not disp or disp.lower() == "caput" else f"{art}, {disp}"
 
 
-def check_citation(cite: dict, index: Index, shown: set[str]) -> dict:
-    text = citation_text(cite["artigo"], cite["dispositivo"])
-    parsed = parse_citations(text)
-    out = {**cite, "text": text, "ids": []}
+def _status(parsed: list, index: Index, shown: set[str]) -> dict:
     if parsed and all(c.foreign for c in parsed):
-        return out | {"status": "foreign"}
+        return {"status": "foreign", "ids": []}
     candidates = sorted({pid for c in parsed if not c.foreign for pid in index.resolve(c)})
     in_context = [p for p in candidates if p in shown]
     if in_context:
-        return out | {"status": "valid", "ids": in_context}
-    return out | {"status": "outside_context" if candidates else "not_found", "ids": candidates}
+        return {"status": "valid", "ids": in_context}
+    return {"status": "outside_context" if candidates else "not_found", "ids": candidates}
+
+
+def check_citation(cite: dict, index: Index, shown: set[str]) -> dict:
+    text = citation_text(cite["artigo"], cite["dispositivo"])
+    return {**cite, "text": text, **_status(parse_citations(text), index, shown)}
+
+
+def text_citations(answer_text: str, index: Index, shown: set[str]) -> list[dict]:
+    """The citations written in the answer's prose ("conforme § 2º do art. 4º da LC 214/2025"), each checked like a
+    citation of the field. One entry per distinct citation, in reading order."""
+    out, seen = [], set()
+    for c in parse_citations(answer_text or ""):
+        label = c.label() + (f" ({c.foreign})" if c.foreign else "")
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append({"text": label, "source": "text", **_status([c], index, shown)})
+    return out
+
+
+def valid_of(a: dict) -> list[str]:
+    """The provisions a reply validly cites: from the field, plus from its text when the rule reads the text."""
+    cites = list(a.get("citations") or []) + (list(a.get("text_citations") or []) if a.get("cites_text") else [])
+    return sorted({p for c in cites if c["status"] == "valid" for p in c["ids"]})
 
 
 # --------------------------------------------------------------------------- one question
@@ -317,6 +341,8 @@ class Answer:
     refusal: str | None = None               # clarify | no_context | model | no_valid_citation | invalid_json | truncated
     llm_called: bool = False
     citations: list[dict] = field(default_factory=list)      # every citation the model returned, with its status
+    text_citations: list[dict] = field(default_factory=list) # the citations written in the answer's text
+    cites_text: bool = False                                 # the decision rule counts text_citations (model_text)
     foreign: list[str] = field(default_factory=list)
     blocks: list[str] = field(default_factory=list)          # art_id of each context block, in order
     context_ids: list[str] = field(default_factory=list)     # what the context showed (what may be cited)
@@ -338,11 +364,16 @@ class Answer:
 
     @property
     def valid_ids(self) -> list[str]:
-        return sorted({p for c in self.citations if c["status"] == "valid" for p in c["ids"]})
+        return valid_of({"citations": self.citations, "text_citations": self.text_citations,
+                         "cites_text": self.cites_text})
+
+    @property
+    def counted(self) -> list[dict]:
+        return self.citations + (self.text_citations if self.cites_text else [])
 
     @property
     def violations(self) -> list[dict]:
-        return [c for c in self.citations if c["status"] in ("outside_context", "not_found")]
+        return [c for c in self.counted if c["status"] in ("outside_context", "not_found")]
 
     @property
     def tokens_per_word(self) -> float | None:
@@ -356,8 +387,8 @@ class Answer:
 
     def public(self) -> dict:
         """What a user would receive."""
-        return {"answerable": self.answerable, "answer": self.answer,
-                "citations": [c["text"] for c in self.citations if c["status"] == "valid"] if self.answerable else []}
+        shown = list(dict.fromkeys(c["text"] for c in self.counted if c["status"] == "valid"))
+        return {"answerable": self.answerable, "answer": self.answer, "citations": shown if self.answerable else []}
 
 
 def build_prompt(question: str, r: rt.Retrieval) -> str:
@@ -429,6 +460,7 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     a.reply_answerable, a.reply_answer = reply["answerable"], reply["answer"]
     shown = set(a.context_ids)
     a.citations = [check_citation(c, index, shown) for c in reply["citations"]]
+    a.text_citations, a.cites_text = text_citations(reply["answer"], index, shown), decision == "model_text"
     a.answerable, a.refusal = decide(None, reply["answerable"], bool(a.valid_ids), decision)   # barriers 2 and 3
     if a.answerable:
         a.answer = reply["answer"]
@@ -523,14 +555,22 @@ def _mean(values) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
-def rescore(o: Outcome, rule: str) -> Outcome:
+def rescore(o: Outcome, rule: str, index: Index | None = None) -> Outcome:
     """The same reply under another decision rule: answerable, refusal, shown text and cited_expected recomputed from
-    what the report recorded (the pre-decision refusal, the model's flag, the citations' statuses)."""
+    what the report recorded (the pre-decision refusal, the model's flag, the citations' statuses). A report written
+    before the text was read (GEN_VERSION < 4) has no text_citations: they are computed from the recorded answer
+    and context with `index` (the law's provision ids)."""
     a = dict(o.answer)
     if not a.get("llm_called"):                                # sql / clarify / no_context: no reply to re-decide
         return o
+    if a.get("text_citations") is None and a.get("json_valid"):
+        if index is None:
+            raise GenError("lc214_gen_rescore_needs_law", "an old report: reading citations from the text needs the "
+                           "law's provision ids (run_rescore loads them from the lake)")
+        a["text_citations"] = text_citations(a.get("reply_answer") or "", index, set(a.get("context_ids") or []))
+    a["cites_text"] = rule == "model_text"
     pre = a.get("refusal") if a.get("refusal") in FINAL_REFUSALS else None
-    valid = sorted({p for c in a.get("citations") or [] if c["status"] == "valid" for p in c["ids"]})
+    valid = valid_of(a)
     a["answerable"], a["refusal"] = decide(pre, a.get("reply_answerable"), bool(valid), rule)
     a["answer"] = a.get("reply_answer") if a["answerable"] else REFUSAL
     cited = valid if a["answerable"] else []
@@ -540,7 +580,9 @@ def rescore(o: Outcome, rule: str) -> Outcome:
 
 def outcome_from_dict(d: dict) -> Outcome:
     names = Outcome.__dataclass_fields__
-    return Outcome(**{k: v for k, v in d.items() if k in names})
+    o = Outcome(**{k: v for k, v in d.items() if k in names})
+    o.answer = {**o.answer, "text_citations": o.answer.get("text_citations")}     # None: an old report, not "none"
+    return o
 
 
 def group_metrics(outcomes: list[Outcome], phrasing: str) -> dict:
@@ -600,8 +642,9 @@ def answers_digest(outcomes: list[Outcome]) -> str:
     return hashlib.md5(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
-def metrics_by_decision(outcomes: list[Outcome]) -> dict:
-    return {rule: {g: group_metrics([rescore(o, rule) for o in outcomes], g) for g in GROUPS} for rule in DECISIONS}
+def metrics_by_decision(outcomes: list[Outcome], index: Index | None = None) -> dict:
+    return {rule: {g: group_metrics([rescore(o, rule, index) for o in outcomes], g) for g in GROUPS}
+            for rule in DECISIONS}
 
 
 def report(outcomes: list[Outcome], fp: dict, key: str, subset: list[str] | None = None,
@@ -719,7 +762,7 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
 
 
 # --------------------------------------------------------------------------- re-deciding recorded replies
-def rescore_table(rep: dict) -> list[str]:
+def rescore_table(rep: dict, index: Index | None = None) -> list[str]:
     """A report's replies under every decision rule: what would have been shown, without calling the LLM again."""
     outcomes = [outcome_from_dict(d) for d in rep["outcomes"]]
 
@@ -731,10 +774,10 @@ def rescore_table(rep: dict) -> list[str]:
     lines = [head]
     for rule in DECISIONS:
         for g in GROUPS:
-            m = group_metrics([rescore(o, rule) for o in outcomes], g)
+            m = group_metrics([rescore(o, rule, index) for o in outcomes], g)
             if not m["n"]:
                 continue
-            lines.append(f"  {rule:<9} {g:<6} n={m['n']:<2} refusal_acc {fmt(m['refusal_accuracy'])} "
+            lines.append(f"  {rule:<10} {g:<6} n={m['n']:<2} refusal_acc {fmt(m['refusal_accuracy'])} "
                          f"(false refusals {m['false_refusals']}, false answers {m['false_answers']}) "
                          f"cit_validity {fmt(m['citation_validity'])} cit_recall {fmt(m['citation_recall'])} "
                          f"(in context {fmt(m['citation_recall_in_context'])}) model says answerable "
@@ -742,14 +785,14 @@ def rescore_table(rep: dict) -> list[str]:
     return lines
 
 
-def rescore_detail(rep: dict, rule: str) -> list[str]:
+def rescore_detail(rep: dict, rule: str, index: Index | None = None) -> list[str]:
     out = []
     for d in rep["outcomes"]:
-        o = rescore(outcome_from_dict(d), rule)
+        o = rescore(outcome_from_dict(d), rule, index)
         a = o.answer
         verdict = "ANSWER" if a["answerable"] else f"REFUSE ({a['refusal']})"
         ok = "ok " if o.refusal_correct else "BAD"
-        valid = sorted({p for c in a.get("citations") or [] if c["status"] == "valid" for p in c["ids"]})
+        valid = valid_of(a) if a.get("llm_called") else []
         out.append(f"  {ok} {o.case}/{o.phrasing}: {verdict} expected {_ids(o.expected)} cited {_ids(o.cited_expected)}"
                    f" valid {_ids(valid)} (in context {len(o.in_context)}/{len(o.expected)}) | "
                    f'model ({a.get("reply_answerable")}): "{_short(a.get("reply_answer") or "", 160)}"')
@@ -782,14 +825,30 @@ def run_rescore(lake, refs: list[str], detail: str | None = None, out: Callable[
     keys = report_keys(lake, refs)
     if not keys:
         raise GenError("lc214_gen_rescore_empty", f"no report found for {refs}")
+    laws: dict[str, Index] = {}
     for key in keys:
         rep = lake.get_json(key)
         if not rep or "outcomes" not in rep:
             raise GenError("lc214_gen_rescore_not_a_report", f"{key} is not an lc06 report")
-        out("\n".join(rescore_table(rep)))
+        index = None
+        if any("text_citations" not in d["answer"] for d in rep["outcomes"]):      # written before GEN_VERSION 4
+            index = laws.get(rep["fingerprint"]["law_version"]) or _law_index(lake, rep["fingerprint"]["law_version"])
+            laws[rep["fingerprint"]["law_version"]] = index
+        out("\n".join(rescore_table(rep, index)))
         if detail:
-            out("\n".join(rescore_detail(rep, detail)))
+            out("\n".join(rescore_detail(rep, detail, index)))
     return EXIT_OK
+
+
+def _law_index(lake, law_version: str) -> Index:
+    from pipelines.rag.lc214.lake import LakeMissing, k_silver
+
+    key = k_silver(law_version, "dispositivos.parquet")
+    try:
+        return Index(lake.get_parquet(key)["dispositivo_id"].to_list())
+    except LakeMissing:
+        raise GenError("lc214_gen_rescore_needs_law", f"{key} is not in the lake: an old report is re-read with the "
+                       "provision ids of the law it was generated against") from None
 
 
 def _connect():
