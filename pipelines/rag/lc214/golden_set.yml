@@ -25,6 +25,9 @@
 #   mode      all -> coverage@k (every expected chunk in the top k) | any -> hit@k (one is enough)
 #   scope     now (measured) | annexes (needs the Annex tables, step 6) | future_project (another corpus)
 #   known_issue  the case is known to fail the contract for the reason given (strict: once it passes, remove it)
+#   dev       true on a fixed subset (~11 phrasings: answer, the vocabulary miss, a false refusal, abstain,
+#             cite_external, combined) that lc06 --dev runs in minutes to iterate a prompt experiment; the
+#             full run (~80 min on CPU) only confirms the winner (ADR 0015)
 #
 # Each provision id lives in exactly one chunk (chunks.parquet `dispositivo_ids`), so a case maps to a set of
 # chunks; the contract reports how many each case needs and fails a mode=all case that needs more than k.
@@ -39,6 +42,7 @@ cases:
     type: content
     route: vector
     behavior: answer
+    dev: true
     questions:
       fiscal: "Remessa gratuita, sem pagamento, fica fora do IBS e da CBS? Ou a lei prevê casos em que incide mesmo sem contraprestação?"
       formal: "Quais operações com bens e serviços estão sujeitas ao IBS e à CBS, e como a lei trata operações não onerosas?"
@@ -50,6 +54,7 @@ cases:
     type: content
     route: vector
     behavior: answer
+    dev: true
     questions:
       fiscal: "Na NF-e, quando um terceiro paga em nome do cliente (por conta e ordem), quem é o adquirente e quem é o destinatário?"
       formal: "Qual é a diferença entre fornecedor, adquirente e destinatário, especialmente quando uma pessoa paga por conta e ordem de outra?"
@@ -61,6 +66,7 @@ cases:
     type: content
     route: vector
     behavior: answer
+    dev: true
     questions:
       fiscal: "O contribuinte transferiu mercadoria da matriz para a filial sem destacar IBS e CBS. Está correto? Ele ainda precisa emitir NF-e?"
       formal: "Quais operações de transferência entre estabelecimentos do mesmo contribuinte não sofrem incidência de IBS e CBS, e qual obrigação documental permanece?"
@@ -397,6 +403,7 @@ cases:
     type: no_answer
     route: vector
     behavior: abstain
+    dev: true
     questions:
       fiscal: "Qual é a multa por atraso na entrega da EFD ICMS/IPI?"
     expected: []
@@ -406,6 +413,7 @@ cases:
     type: no_answer
     route: vector
     behavior: abstain
+    dev: true
     questions:
       fiscal: "Como calculo o DIFAL de ICMS numa venda interestadual para consumidor final?"
     expected: []
@@ -415,6 +423,7 @@ cases:
     type: external_ref
     route: vector
     behavior: cite_external
+    dev: true
     questions:
       fiscal: "Uma instituição de educação sem fins lucrativos alega imunidade. Que requisitos ela precisa cumprir?"
       formal: "Quais requisitos do art. 14 do Código Tributário Nacional uma instituição de educação ou assistência social sem fins lucrativos deve cumprir para se beneficiar da imunidade mencionada na LC 214?"
@@ -569,6 +578,7 @@ cases:
     type: combined
     route: combined
     behavior: answer
+    dev: true
     questions:
       fiscal: "O art. 6º se aplica à transferência de mercadoria entre a matriz e a filial?"
     anchors: [lc214-2025:art-6]

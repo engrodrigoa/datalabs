@@ -1,0 +1,70 @@
+{
+  "_comment": "Bodies in the shape of Ollama 0.6.5 POST /api/generate (stream=false, format=JSON Schema). Hand-written for the first version of lc06 (ADR 0015); patch 2 replaces them with replies recorded in the lab. Fields the code does not read are kept to show the real shape. refuses_but_cites reproduces the 2026-10-20 dev runs: a reply that cites a valid provision and still says answerable=false (verdict written last). cites_in_text and refuses_naming_provisions reproduce qwen2.5:3b (2026-10-20): citations written in the prose with an empty field, and a refusal that names provisions.",
+  "grounded": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": true, \"answer\": \"A remessa entre estabelecimentos do mesmo contribuinte está tratada no art. 1º, e o § 1º inclui a filial.\", \"citations\": [{\"artigo\": \"1\", \"dispositivo\": \"caput\"}, {\"artigo\": \"1\", \"dispositivo\": \"§ 1º\"}]}",
+    "prompt_eval_count": 410,
+    "eval_count": 62,
+    "total_duration": 9100000000,
+    "prompt_eval_duration": 6200000000,
+    "eval_duration": 2800000000
+  },
+  "one_invented": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": true, \"answer\": \"Está no art. 1º; o art. 99 detalha a regra.\", \"citations\": [{\"artigo\": \"1\", \"dispositivo\": \"§ 1º\"}, {\"artigo\": \"99\", \"dispositivo\": \"\"}]}",
+    "prompt_eval_count": 405,
+    "eval_count": 48
+  },
+  "outside_only": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": true, \"answer\": \"O art. 3º resolve a questão.\", \"citations\": [{\"artigo\": \"3\", \"dispositivo\": \"caput\"}]}",
+    "prompt_eval_count": 120,
+    "eval_count": 30
+  },
+  "model_refuses": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": false, \"answer\": \"O contexto não trata de multa por atraso de EFD.\", \"citations\": []}",
+    "prompt_eval_count": 398,
+    "eval_count": 25
+  },
+  "cut_by_num_predict": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "length",
+    "response": "{\"answerable\": true, \"answer\": \"A remessa entre estabelecimentos do mesmo contri",
+    "prompt_eval_count": 410,
+    "eval_count": 1024
+  },
+  "refuses_but_cites": {
+    "model": "llama3.2:1b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answer\": \"A filial está incluída no § 1º do art. 1º.\", \"citations\": [{\"artigo\": \"1\", \"dispositivo\": \"§ 1º\"}], \"answerable\": false}",
+    "prompt_eval_count": 402,
+    "eval_count": 40
+  },
+  "cites_in_text": {
+    "model": "qwen2.5:3b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": true, \"answer\": \"Sim. A filial está incluída, conforme § 1º do art. 1º da LC 214/2025.\", \"citations\": []}",
+    "prompt_eval_count": 430,
+    "eval_count": 45
+  },
+  "refuses_naming_provisions": {
+    "model": "qwen2.5:3b",
+    "done": true,
+    "done_reason": "stop",
+    "response": "{\"answerable\": false, \"answer\": \"Nenhum trecho trata da multa da EFD; o art. 1º e o § 1º do art. 1º tratam de remessa.\", \"citations\": []}",
+    "prompt_eval_count": 420,
+    "eval_count": 38
+  }
+}

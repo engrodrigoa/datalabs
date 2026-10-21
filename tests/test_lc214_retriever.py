@@ -85,7 +85,7 @@ def _retrieve(q, k=5):
 
 # --------------------------------------------------------------------------- pure helpers
 def test_budget_is_what_is_left_of_num_ctx_with_a_margin():
-    assert rt.context_budget("") == int((8192 - 1024 - 500) * 0.8)
+    assert rt.context_budget("") == int((rt.NUM_CTX - 1024 - 500) * 0.8)
     assert rt.context_budget("uma pergunta de seis palavras aqui") < rt.context_budget("")
 
 

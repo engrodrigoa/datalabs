@@ -112,6 +112,8 @@ def validate_schema(golden: dict) -> list[dict]:
             bad(cid, "G1_route", f"type {ctype} goes by route {route!r}, not {c.get('route')!r}")
         if c.get("behavior") not in behaviors:
             bad(cid, "G1_behavior", f"type {ctype} expects behavior in {sorted(behaviors)}")
+        if "dev" in c and not isinstance(c["dev"], bool):
+            bad(cid, "G1_dev", "dev must be true or false")
         questions = c.get("questions") or {}
         if not str(questions.get("fiscal", "")).strip():
             bad(cid, "G1_question", "the fiscal phrasing is required (it is the primary user)")

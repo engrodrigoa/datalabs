@@ -1,0 +1,93 @@
+# LC 214 answer baseline (ADR 0015, step 6b): the thresholds of the generate_answers gate, from a measured run.
+# Written by `lc06_generate --golden --dev --write-baseline`. Review it like a label change: a lower baseline
+# accepts a worse generator. Gate: refusal_accuracy and citation_recall may drop at most
+# LC214_GEN_TOLERANCE_CASES / n; false_answers may not grow at all. Text drift is recorded, never gated.
+gen_version: '5'
+measured_at: '2026-10-21T11:30:32Z'
+subset:
+- combined-01
+- content-01
+- content-02
+- content-03
+- external-01
+- no_answer-01
+- no_answer-02
+decision: model_text
+variant: answer_default
+model:
+  model: qwen2.5:3b
+  digest: 357c53fb659c
+  prompt_version: 26212dfcf35f
+law_version: 0cf36f4433ce
+verdict_digest: 6a1473989cc9
+metrics:
+  fiscal:
+    n: 7
+    n_answerable: 5
+    n_abstain: 2
+    refusal_accuracy: 0.4286
+    false_refusals: 4
+    false_answers: 0
+    citation_validity: null
+    citation_recall: 0.0
+    citation_recall_in_context: 0.0
+  formal:
+    n: 4
+    n_answerable: 4
+    n_abstain: 0
+    refusal_accuracy: 0.5
+    false_refusals: 2
+    false_answers: 0
+    citation_validity: 1.0
+    citation_recall: 0.5
+    citation_recall_in_context: 0.5
+verdicts:
+  content-01/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 0d51fc465739
+  content-01/formal:
+    answerable: true
+    cited_expected:
+    - lc214-2025:art-4
+    - lc214-2025:art-4:par-1
+    text_md5: fb4d521884fc
+  content-02/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 9109de780469
+  content-02/formal:
+    answerable: true
+    cited_expected:
+    - lc214-2025:art-3:inc-III
+    - lc214-2025:art-3:inc-IV:ali-b
+    - lc214-2025:art-3:inc-V
+    text_md5: 91edb009fca1
+  content-03/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 1a76b15cef7c
+  content-03/formal:
+    answerable: false
+    cited_expected: []
+    text_md5: 4522cb7f10e2
+  no_answer-01/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 43c791b2b223
+  no_answer-02/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 75517781057e
+  external-01/fiscal:
+    answerable: true
+    cited_expected: []
+    text_md5: 134f1f892048
+  external-01/formal:
+    answerable: false
+    cited_expected: []
+    text_md5: e24628bb1fcb
+  combined-01/fiscal:
+    answerable: false
+    cited_expected: []
+    text_md5: 790dc86dcdc6

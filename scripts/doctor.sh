@@ -67,8 +67,11 @@ sys.exit(not isinstance(try_to_load_from_cache(MODEL_NAME, 'config.json'), str))
       ok "embedding model cached (hf_cache volume)"
     else fail "embedding model not downloaded yet" "make models  (or make models-import on a restricted network)"; fi
     if running ollama; then
+      gen_model=$(grep -E '^LC214_GEN_MODEL=' .env 2>/dev/null | cut -d= -f2-); gen_model=${gen_model:-qwen2.5:3b}
       if docker compose exec -T ollama ollama list 2>/dev/null | grep -q .; then ok "Ollama has a model"
-      else fail "Ollama has no model (the interactive assistant needs it; the RAG DAG does not)" "docker compose logs ollama-pull"; fi
+      else fail "Ollama has no model (the interactive assistant and the LC 214 generate_answers task need it)" "docker compose logs ollama-pull"; fi
+      if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "^${gen_model}"; then ok "Ollama has the LC 214 model ($gen_model)"
+      else fail "Ollama lacks the LC 214 model $gen_model (generate_answers skips without it)" "docker compose exec ollama ollama pull $gen_model"; fi
     fi
   else info "base image (no INSTALL_AI): RAG DAG and checks are skipped by design"; fi
 else fail "airflow-scheduler is not running"; fi
