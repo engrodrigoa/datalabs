@@ -362,6 +362,7 @@ scripts/                      sample data generator
 ## Roadmap
 
 **RAG (next focus)**
+- [ ] LC 214 answer generation to its acceptance bar (2/9 → 3/9 measured, ADR 0015): fiscal → legal glossary, labelled context lines, full golden run on the lambda server
 - [ ] Retrieval quality: hybrid search (Postgres full-text + vectors with reciprocal rank fusion), per-station chunks, a similarity threshold that answers "not in the data"
 - [ ] Retrieval metrics in the eval gate (recall@k, MRR), answer-level evaluation (faithfulness), known gaps first: name queries (precision@5 = 0) and out-of-scope questions
 - [ ] Unstructured corpus (ANP resolutions, RFB manuals) with document-level chunking and metadata filters

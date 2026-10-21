@@ -1,7 +1,8 @@
 # ADR 0015 — LC 214 answer generation: cited JSON from a local LLM, three barriers to "não consta"
 
-**Status:** accepted, step 6a (`pipelines/rag/lc214/lc06_generate.py`, task `generate_answers` in `dag_rag_lc214`):
-generation and measurement. Step 6b, the gate against a committed answer baseline, comes after the first lab run.
+**Status:** accepted (`pipelines/rag/lc214/lc06_generate.py`, task `generate_answers` in `dag_rag_lc214`, thresholds
+in `pipelines/rag/lc214/answer_baseline.yml`). Delivered below its own acceptance bar (2 of 9 against 3 of 9),
+declared as such: see "Where it stands".
 
 **Context.** Retrieval is measured and gated (ADR 0014), but nothing produces an answer yet: the R and the A of RAG
 exist, the G does not. Primary user: a SEFAZ tax auditor. For that reader, an answer that sounds right and is not in
@@ -155,11 +156,39 @@ for that alone. Strictly, 1 of 9 phrasings was shown with the expected provision
     the recorded answer and context, with the law's provision ids from the lake (`dispositivos.parquet` of the
     report's law version).
 
-**Consequences.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta".
-Every refusal names its barrier. The first numbers will be low (1B model), and that is accepted: the gate of
-step 6b catches drops, not levels, like lc05. Next: (6b) run in the lab, verify the digest is stable across two
-runs, record real replies as the CI fixtures, write `answer_baseline.yml` and gate `refusal_accuracy`,
-`citation_validity` and `citation_recall_in_context`. Then experiments, one variable each: labelled context lines
-(the `[art. 5, § 2º]` of each provision in the prompt: it changes the context size, so lc05 runs too), field order
-in the schema (verdict after the answer), larger models (a project of its own), the similarity threshold. The
-calibrated tokens-per-word ratio feeds back into the retriever budget.
+**The acceptance read (2026-10-20, a human, the domain expert).** Criterion fixed BEFORE the run: at least 3 of the
+9 answerable dev phrasings shown with the expected provision cited and a correct text, both `no_answer` refused, no
+silent cut of the prompt. qwen2.5:3b + `answer_default` + `model_text` showed 3. Two were read as correct
+(content-01/formal, art. 4; content-02/formal, art. 3). One was partial: external-01/fiscal points to art. 14 of the
+CTN as it should, but frames an education institution as social assistance, and it cites § 2º and § 4º of art. 9 where
+§ 3º was expected. Both `no_answer` were refused, and the largest prompt was 4,338 tokens. **2 of 9: below the bar.**
+The criterion is not reread after the fact. What failed is coverage (6 false refusals, fiscal phrasings answered
+"não trata especificamente"), not reliability: nothing shown was invented.
+
+**Determinism (2026-10-21).** The same fingerprint, run twice: 11 of 11 verdicts (`answerable`) held, 11 of 11 texts
+were reworded, and 2 of 11 citation lists changed (content-02/formal: art. 3 → art. 3, IV). `temperature 0` and a
+seed do not make greedy decoding bit-identical when Ollama's prompt cache or batching differs (the second run
+followed two concurrent runs that were stopped). The answers' digest was the wrong ruler.
+
+14. **A tolerant gate with a full record.** `verdict_digest` hashes only the verdicts, and the text digest stays as
+    information. The DAG runs the dev subset with `--once --gate` (exit 99 when this fingerprint's dev answers exist).
+    `answer_baseline.yml` (written by `--write-baseline`, reviewed and committed like `eval_baseline.yml`) holds the
+    metrics and the verdict of every phrasing. A run fails when refusal accuracy or citation recall drop more than
+    `LC214_GEN_TOLERANCE_CASES` (1) / n, or when false answers grow at all: showing an answer to an unanswerable
+    question is the failure the barriers exist for, and no tolerance applies. Everything else is recorded, not
+    gated: verdict flips by name, expected-citation changes, how many texts were reworded. It is logged
+    (`lc214_gen_drift`), stored in the report and in the step's metrics, so drift has a history before it has a
+    threshold. With 7 fiscal and 4 formal phrasings, one case is 14 and 25 pp. That makes this a coarse gate: it
+    catches collapse, not nuance. Growing the dev subset is the way to sharpen it, and each phrasing costs ~3.5 min of CPU.
+15. **The model is the LC 214's own setting.** `LC214_GEN_MODEL` = qwen2.5:3b. `OLLAMA_MODEL` stays the ANP assistant's
+    1B, and `ollama-pull` fetches both. The full golden run (60 phrasings, ~3.5 h on this CPU) is manual, a job for
+    the dedicated lambda server, and the DAG keeps the 40-minute dev subset.
+
+**Where it stands.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta", and
+every refusal names its barrier. Measured: llama3.2:1b 0/9 (it invented a DIFAL calculation), qwen2.5:3b 2/9 (it
+invented nothing; both unanswerable questions were refused with the right reason). The bar is 3/9. The remaining gap is
+the one lc05 measures in retrieval, now on the generation side: the auditor's vocabulary against the law's.
+Next, one variable each: a fiscal → legal glossary (retrieval and generation), labelled context lines
+(`[art. 5, § 2º]` per provision in the prompt: it changes the context size, so lc05 runs too), the full golden run
+on the lambda server, a larger or hosted model behind the same `LLM` interface and the same gate (a project of its
+own). The calibrated ratio (1.79 tokens per word with llama, 1.83 with qwen) feeds back into the retriever budget.

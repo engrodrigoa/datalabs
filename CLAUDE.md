@@ -105,24 +105,21 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `--write-baseline`) minus `LC214_EVAL_TOLERANCE_CASES` (1 case ≈ 3-4 pp); improvements are logged, never fail;
   no baseline = failure. Report per phrasing in the lake (`silver/lc214/<sha12>/eval/`). Every retrieval change is
   an experiment of one variable against this baseline.
-- **0015 LC 214 answer generation:** `lc06_generate` (task `generate_answers`, after the lc05 gate): Ollama
-  `llama3.2:1b` with a JSON Schema (`answerable`, `answer`, `citations[{artigo, dispositivo}]`), `temperature 0` +
-  `LC214_GEN_SEED`, `num_ctx` explicit. "Não consta" by three barriers: no LLM call on `clarify` / no context block;
-  the model's `answerable`; no citation left that the context showed (each citation resolved by the router's
-  `parse_citations` + `Index.resolve`: valid | outside_context | not_found | foreign). Route `sql` answers by structure,
-  never by the LLM; `foreign` still answers. Report `silver/lc214/<sha12>/answers/<fingerprint>.json` (law, chunks,
-  golden, model digest, prompt version); exit 99 when it exists or Ollama is down. Metrics per group: refusal
-  accuracy, citation validity, citation recall (all / in context). CI replays recorded Ollama bodies; the model is
-  measured only in the lab. Step 6b (gate vs `answer_baseline.yml`) comes after the first lab run.
-  Latency: `LC214_NUM_CTX` 6144 (same recall as 8192, swept by lc05); trade context for speed only within 2 fiscal /
-  1 formal cases. CPU-bound: WSL needs every core (`.wslconfig processors`). Iterate prompts on `--golden --dev`.
-  Prompt changes are named variants (`LC214_GEN_VARIANT`: baseline | verdict_last | answer_default, `+` composes),
-  part of the fingerprint; dev runs land in `answers/dev/`. First dev run: refusal collapse (11/11 refused).
-  The decision rule (`LC214_GEN_DECISION`: model | citations) is NOT in the fingerprint: every report scores both,
-  `lc06_generate --rescore dev [--detail citations]` re-decides recorded replies without the LLM. The 1B's
-  `answerable` was false in 33/33 dev replies (uncalibrated): prefer the checkable citation over the model's flag.
-  qwen2.5:3b: the flag carries signal, but citations land in the prose; rule `model_text` reads them (same parser),
-  only when the model says answerable (refusals name provisions too).
+- **0015 LC 214 answer generation:** `lc06_generate` (task `generate_answers`, after the lc05 gate). Model
+  `LC214_GEN_MODEL` qwen2.5:3b (its own setting; `OLLAMA_MODEL` stays the ANP assistant's 1B), JSON Schema
+  (`answerable`, `answer`, `citations[{artigo, dispositivo}]`), `temperature 0` + `LC214_GEN_SEED`, `num_ctx` 6144
+  (same recall as 8192, swept by lc05). "Não consta" by three barriers: no LLM call on `clarify` / no context block;
+  the model's `answerable`; no citation of the context left. Citations are resolved by the router's `parse_citations`
+  + `Index.resolve` (valid | outside_context | not_found | foreign), from the field and the answer's text: decision
+  rule `LC214_GEN_DECISION=model_text`; the text is never read without the flag (refusals name provisions too).
+  Route `sql` answers by structure, never by the LLM. Prompt = named variant (`LC214_GEN_VARIANT=answer_default`),
+  in the fingerprint; the decision rule is not (every report scores all rules, `--rescore` re-decides old reports
+  with no LLM). The DAG runs the dev subset (`dev: true`, 11 phrasings, ~40 min CPU) with `--once --gate`: refusal
+  accuracy / citation recall within `LC214_GEN_TOLERANCE_CASES`, false answers never above `answer_baseline.yml`;
+  drift (verdict flips, reworded texts) logged and stored, not gated: greedy decoding rewords across runs (11/11
+  texts), verdicts held (11/11). Measured level: 2 of 9 answerable phrasings shown with the expected provision and a
+  correct text (bar was 3/9), 0 invented; the gap is fiscal vocabulary (literal "não trata especificamente").
+  Prompt experiments: `--golden --dev --variant X`. CPU-bound: WSL needs every core (`.wslconfig processors`).
 
 ## Development rules
 
@@ -232,8 +229,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
 - RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold. LC 214: fiscal phrasings miss the
   law's vocabulary (content-03: "matriz/filial" vs "estabelecimentos do mesmo contribuinte"), measured by lc05.
-- LC 214 generation (ADR 0015): first lab run, digest stable across two `force` runs, record real replies as CI
-  fixtures, then the 6b gate; calibrate `LC214_LLM_TOKENS_PER_WORD` from the report (its own commit, lc05 re-run).
+- LC 214 generation (ADR 0015): below its bar (2/9 vs 3/9, fiscal phrasings refused as "não trata
+  especificamente"). Next: a fiscal -> legal glossary (retrieval and generation), labelled context lines; the full
+  golden run (~3.5 h) on the lambda server. Calibrate `LC214_LLM_TOKENS_PER_WORD` (1.79 llama / 1.83 qwen measured).
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
 - Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
   Same day: RFB, ANP and NF-e ran end to end on a clean clone (RFB dev_mode: download 21 min, `dag_rfb_dw_dbt` 5m18s,

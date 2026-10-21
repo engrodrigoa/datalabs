@@ -72,6 +72,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
+import yaml
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
@@ -82,13 +84,18 @@ from pipelines.rag.lc214.router import Index, parse_citations, render_structure 
 
 logger = get_logger("lc06_generate")
 
-GEN_VERSION = "4"                    # bump when the report's definitions change (4: citations read from the text)
+GEN_VERSION = "5"                    # bump when the report's definitions change (5: verdicts, drift, gate)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+# The LC 214 model is its own setting: OLLAMA_MODEL stays the ANP assistant's (llama3.2:1b). qwen2.5:3b was chosen
+# on the dev subset (ADR 0015, H4): the 1B answered 0 of 9 correctly and invented content; the 3B 2 of 9, invented none.
+GEN_MODEL = os.getenv("LC214_GEN_MODEL", "qwen2.5:3b")
 SEED = int(os.getenv("LC214_GEN_SEED", "42"))
 TIMEOUT_S = int(os.getenv("LC214_GEN_TIMEOUT_S", "600"))       # per call: the first one loads the model on CPU
-VARIANT = os.getenv("LC214_GEN_VARIANT", "baseline")
-DECISION = os.getenv("LC214_GEN_DECISION", "model")
+VARIANT = os.getenv("LC214_GEN_VARIANT", "answer_default")
+DECISION = os.getenv("LC214_GEN_DECISION", "model_text")
+ANSWER_BASELINE_PATH = Path(__file__).with_name("answer_baseline.yml")
+GEN_TOLERANCE_CASES = float(os.getenv("LC214_GEN_TOLERANCE_CASES", "1"))
+GATED_GEN = ("refusal_accuracy", "citation_recall")      # plus false_answers, with no tolerance (see gen_gate)
 GROUPS = ("fiscal", "formal")
 EXIT_OK, EXIT_FAILED, EXIT_SKIPPED = 0, 1, 99
 
@@ -237,7 +244,7 @@ class LLM(Protocol):
 class OllamaClient:
     """Ollama's /api/generate with structured outputs (`format` = JSON Schema, Ollama >= 0.5; the stack pins 0.6.5)."""
 
-    def __init__(self, url: str = OLLAMA_URL, model: str = OLLAMA_MODEL, timeout: int = TIMEOUT_S):
+    def __init__(self, url: str = OLLAMA_URL, model: str = GEN_MODEL, timeout: int = TIMEOUT_S):
         import requests
 
         self.requests, self.url, self.model, self.timeout = requests, url, model, timeout
@@ -260,7 +267,7 @@ class OllamaClient:
             if m.get("name") in names or m.get("model") in names:
                 return str(m.get("digest", ""))[:12]
         raise GenError("lc214_gen_model_missing", f"Ollama has no model {self.model}: pull it with "
-                       "`docker compose --profile ai up ollama-pull` (OLLAMA_MODEL)")
+                       "`docker compose --profile ai up ollama-pull` (LC214_GEN_MODEL)")
 
     def generate(self, system, prompt, schema, options):
         return self._call("POST", self.url, timeout=self.timeout, json={
@@ -369,7 +376,15 @@ class Answer:
 
     @property
     def counted(self) -> list[dict]:
-        return self.citations + (self.text_citations if self.cites_text else [])
+        """The citations the decision counts, each once: the field's first, then the text's that the field did not
+        already make (same provisions, or the same label when unresolved)."""
+        out, seen = [], set()
+        for c in self.citations + (self.text_citations if self.cites_text else []):
+            key = tuple(c["ids"]) if c["ids"] else c["text"].replace("º", "").replace("°", "").lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(c)
+        return out
 
     @property
     def violations(self) -> list[dict]:
@@ -387,7 +402,7 @@ class Answer:
 
     def public(self) -> dict:
         """What a user would receive."""
-        shown = list(dict.fromkeys(c["text"] for c in self.counted if c["status"] == "valid"))
+        shown = [c["text"] for c in self.counted if c["status"] == "valid"]
         return {"answerable": self.answerable, "answer": self.answer, "citations": shown if self.answerable else []}
 
 
@@ -636,8 +651,24 @@ def _median(values) -> float | None:
     return round(statistics.median(values), 2) if values else None
 
 
+def verdict_digest(outcomes: list[Outcome]) -> str:
+    """One hash over the VERDICTS only (shown or refused, per phrasing). Measured 2026-10-21: two runs of the same
+    fingerprint on Ollama 0.6.5 (temperature 0, seed) kept 11 of 11 verdicts and changed 11 of 11 texts. Greedy decoding
+    is not bit-identical when the prompt cache or the batch differs. This is the stable digest; answers_digest is not."""
+    body = [[o.case, o.phrasing, o.answer["answerable"]] for o in outcomes]
+    return hashlib.md5(json.dumps(body).encode()).hexdigest()[:12]
+
+
+def verdicts(outcomes: list[Outcome]) -> dict:
+    """Per phrasing, what the gate's drift record compares with the baseline."""
+    return {f"{o.case}/{o.phrasing}": {
+        "answerable": o.answer["answerable"], "cited_expected": list(o.cited_expected),
+        "text_md5": hashlib.md5((o.answer.get("reply_answer") or "").encode()).hexdigest()[:12]} for o in outcomes}
+
+
 def answers_digest(outcomes: list[Outcome]) -> str:
-    """One hash over every answer (text, flag, citations): two runs of the same fingerprint must print the same."""
+    """One hash over every answer (text, flag, citations). Informative only: the text is not reproducible across runs
+    (see verdict_digest)."""
     body = [[o.case, o.phrasing, o.answer["answerable"], o.answer["answer"], o.answer["citations"]] for o in outcomes]
     return hashlib.md5(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
 
@@ -655,7 +686,8 @@ def report(outcomes: list[Outcome], fp: dict, key: str, subset: list[str] | None
         "gen_version": GEN_VERSION, "fingerprint_key": key,
         "variant": (fp.get("llm") or {}).get("variant"), "subset": subset, "decision": decision,
         "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "fingerprint": fp, "answers_digest": answers_digest(outcomes),
+        "fingerprint": fp, "answers_digest": answers_digest(outcomes), "verdict_digest": verdict_digest(outcomes),
+        "verdicts": verdicts(outcomes),
         "metrics": by_decision[decision],
         "metrics_by_decision": by_decision,
         "calibration": calibration(outcomes),
@@ -681,7 +713,7 @@ def summary_line(rep: dict) -> str:
     says = "/".join(fmt(m.get("model_says_answerable")) for m in rep["metrics"].values())
     return (f"[{rep.get('variant') or 'baseline'}, decision {rep.get('decision')}] " + " | ".join(parts)
             + f" | model says answerable {says}" + (f" | under {'; '.join(other)}" if other else "")
-            + f" | digest {rep['answers_digest']}")
+            + f" | verdicts {rep.get('verdict_digest')} | text digest {rep['answers_digest']}")
 
 
 # --------------------------------------------------------------------------- what is being generated
@@ -702,7 +734,9 @@ def fingerprint(cur, llm: LLM, golden_path: Path, k: int, spec: PromptSpec | Non
 
 # --------------------------------------------------------------------------- the step
 def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases: set[str] | None = None,
-        force: bool = False, dev: bool = False, variant: str | None = None, decision: str | None = None) -> int:
+        force: bool = False, dev: bool = False, variant: str | None = None, decision: str | None = None,
+        gate: bool = False, write_baseline: bool = False, once: bool = False,
+        baseline_path: Path = ANSWER_BASELINE_PATH, tolerance_cases: float = GEN_TOLERANCE_CASES) -> int:
     step = current_step()
     spec, decision = prompt_spec(variant), decision or DECISION
     decide(None, True, True, decision)                         # an unknown rule fails before an hour of generation
@@ -729,6 +763,11 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
             tag = "dev" if dev and not extra else "cases-" + hashlib.md5(",".join(sorted(cases)).encode()).hexdigest()[:8]
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             report_key = f"{root}/dev/{key}-{tag}-{stamp}.json"
+            done = [k for k in lake.keys(f"{root}/dev") if k.startswith(f"{root}/dev/{key}-{tag}-")]
+            if once and done and not force:                  # the DAG: the same inputs were already generated and gated
+                log_event(logger, "lc214_gen_up_to_date", f"{tag} answers for fingerprint {key} already in "
+                          f"{lake.url(done[-1])}: nothing to generate (force to regenerate)", fingerprint=key)
+                return EXIT_SKIPPED
         else:
             report_key = f"{root}/{key}.json"
         if not cases and not force and lake.exists(report_key):
@@ -755,9 +794,127 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
     step.label(variant=spec.name, decision=decision)
     step.add(rows_in=len(outcomes), rows_out=sum(not o.refused for o in outcomes))
 
-    if report_key:
+    status = EXIT_OK
+    if write_baseline:
+        text = answer_baseline_yaml(rep)
+        try:
+            Path(baseline_path).write_text(text, encoding="utf-8")
+            log_event(logger, "lc214_gen_baseline_written", f"{baseline_path}: review the numbers and commit it")
+        except OSError as exc:
+            print(text)
+            raise GenError("lc214_gen_baseline_not_written", f"{baseline_path}: {exc}. The YAML is printed above: save "
+                           "it there from the host") from None
+    elif gate:
+        status = apply_gate(rep, load_answer_baseline(baseline_path), tolerance_cases, step)
+
+    if report_key:                                             # written last, with the drift when gated
         lake.put_json(report_key, rep)
         log_event(logger, "lc214_gen_report_written", lake.url(report_key), fingerprint=key)
+    return status
+
+
+# --------------------------------------------------------------------------- the answer gate (step 6b)
+def load_answer_baseline(path: Path = ANSWER_BASELINE_PATH) -> dict | None:
+    if not Path(path).exists():
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or None
+
+
+def answer_baseline_yaml(rep: dict) -> str:
+    fp = rep["fingerprint"]
+    body = {"gen_version": rep["gen_version"], "measured_at": rep["measured_at"], "subset": rep["subset"],
+            "decision": rep["decision"], "variant": rep["variant"],
+            "model": {k: fp["llm"][k] for k in ("model", "digest", "prompt_version")},
+            "law_version": fp.get("law_version"), "verdict_digest": rep["verdict_digest"],
+            "metrics": {g: {m: rep["metrics"][g][m] for m in ("n", "n_answerable", "n_abstain", "refusal_accuracy",
+                                                               "false_refusals", "false_answers", "citation_validity",
+                                                               "citation_recall", "citation_recall_in_context")}
+                        for g in GROUPS},
+            "verdicts": rep["verdicts"]}
+    head = ("# LC 214 answer baseline (ADR 0015, step 6b): the thresholds of the generate_answers gate, from a measured run.\n"
+            "# Written by `lc06_generate --golden --dev --write-baseline`. Review it like a label change: a lower baseline\n"
+            "# accepts a worse generator. Gate: refusal_accuracy and citation_recall may drop at most\n"
+            "# LC214_GEN_TOLERANCE_CASES / n; false_answers may not grow at all. Text drift is recorded, never gated.\n")
+    return head + yaml.safe_dump(body, sort_keys=False, allow_unicode=True)
+
+
+def drift(rep: dict, base: dict) -> dict:
+    """What changed per phrasing since the baseline. Recorded on every gated run, never a failure by itself: the
+    model's wording is not reproducible (verdict_digest), its verdicts so far are."""
+    now, ref = rep.get("verdicts") or {}, base.get("verdicts") or {}
+    common = sorted(set(now) & set(ref))
+    return {
+        "phrasings": len(common), "verdict_digest_same": rep.get("verdict_digest") == base.get("verdict_digest"),
+        "verdict_flips": [f"{k}: {'ANSWER' if ref[k]['answerable'] else 'REFUSE'} -> "
+                          f"{'ANSWER' if now[k]['answerable'] else 'REFUSE'}"
+                          for k in common if now[k]["answerable"] != ref[k]["answerable"]],
+        "cited_expected_changed": [k for k in common if sorted(now[k]["cited_expected"]) != sorted(ref[k]["cited_expected"])],
+        "text_changed": sum(now[k]["text_md5"] != ref[k]["text_md5"] for k in common),
+        "missing": sorted(set(ref) ^ set(now)),
+    }
+
+
+def gen_gate(rep: dict, base: dict | None, tolerance_cases: float = GEN_TOLERANCE_CASES) -> tuple[list[dict], list[dict]]:
+    """(regressions, improvements) of a run against the committed baseline. refusal_accuracy over every phrasing of a
+    group, citation_recall over its answerable ones: a drop beyond tolerance_cases / n fails. false_answers fails on
+    any increase: an answer shown for an unanswerable question is the error the barriers exist to stop."""
+    if not base or not base.get("metrics"):
+        raise GenError("lc214_gen_baseline_missing", f"no answer baseline in {ANSWER_BASELINE_PATH.name}: run "
+                       "`lc06_generate --golden --dev --write-baseline`, review the numbers and commit the file")
+    if str(base.get("gen_version")) != GEN_VERSION:
+        raise GenError("lc214_gen_baseline_incompatible", f"baseline written by gen v{base.get('gen_version')}, this is "
+                       f"v{GEN_VERSION}: the metrics changed meaning, write a new baseline")
+    if (base.get("subset") or None) != (rep.get("subset") or None):
+        raise GenError("lc214_gen_baseline_incompatible", f"baseline measured {base.get('subset')}, this run "
+                       f"{rep.get('subset')}: compare the same phrasings or write a new baseline")
+    regressions, improvements = [], []
+    for g in GROUPS:
+        now, ref = rep["metrics"].get(g) or {}, base["metrics"].get(g) or {}
+        for m in GATED_GEN:
+            if now.get(m) is None or ref.get(m) is None:
+                continue
+            n = now["n_answerable"] if m == "citation_recall" else now["n"]
+            slack = tolerance_cases / n if n else 0.0
+            item = {"group": g, "metric": m, "value": now[m], "baseline": ref[m], "threshold": round(ref[m] - slack, 4)}
+            if now[m] < ref[m] - slack - 1e-9:
+                regressions.append(item)
+            elif now[m] > ref[m] + 1e-9:
+                improvements.append(item)
+        if (now.get("false_answers") or 0) > (ref.get("false_answers") or 0):
+            regressions.append({"group": g, "metric": "false_answers", "value": now["false_answers"],
+                                "baseline": ref["false_answers"], "threshold": ref["false_answers"]})
+    return regressions, improvements
+
+
+def apply_gate(rep: dict, base: dict | None, tolerance_cases: float = GEN_TOLERANCE_CASES, step=None) -> int:
+    regressions, improvements = gen_gate(rep, base, tolerance_cases)
+    d = drift(rep, base)
+    rep["drift"] = d
+    changed = [f"{k} of {base.get(k)}" for k in ("decision", "variant") if base.get(k) != rep.get(k)]
+    if base.get("model", {}).get("model") != rep["fingerprint"]["llm"]["model"]:
+        changed.append(f"model of {base['model']['model']}")
+    log_event(logger, "lc214_gen_drift", f"since the baseline ({base.get('measured_at')}): {len(d['verdict_flips'])} "
+              f"verdict flip(s), {len(d['cited_expected_changed'])} expected-citation change(s), {d['text_changed']}/"
+              f"{d['phrasings']} texts reworded" + (f"; flips: {'; '.join(d['verdict_flips'])}" if d["verdict_flips"]
+                                                   else "") + (f"; this run changes the {', '.join(changed)}"
+                                                               if changed else ""),
+              verdict_flips=len(d["verdict_flips"]), text_changed=d["text_changed"],
+              cited_expected_changed=len(d["cited_expected_changed"]))
+    if step is not None:
+        step.set(verdict_flips=len(d["verdict_flips"]), text_changed=d["text_changed"],
+                 cited_expected_changed=len(d["cited_expected_changed"]))
+    for i in improvements:
+        log_event(logger, "lc214_gen_improved", f"{i['group']} {i['metric']} {i['value']:.3f} > baseline "
+                  f"{i['baseline']:.3f}: raise the baseline with --write-baseline", **i)
+    if regressions:
+        for r in regressions:
+            log_event(logger, "lc214_gen_regression", f"{r['group']} {r['metric']} {r['value']} beyond threshold "
+                      f"{r['threshold']} (baseline {r['baseline']})", level=40, **r)
+        log_event(logger, "lc214_gen_gate_failed", f"{len(regressions)} regression(s): {summary_line(rep)}", level=40)
+        return EXIT_FAILED
+    log_event(logger, "lc214_gen_gate_passed", summary_line(rep), improvements=len(improvements),
+              verdict_flips=len(d["verdict_flips"]))
     return EXIT_OK
 
 
@@ -875,6 +1032,12 @@ def main(argv=None) -> int:
                     "rule, without the LLM: lake keys, s3:// URLs, or 'dev' (every dev report of the current law)")
     ap.add_argument("--detail", default=None, choices=sorted(DECISIONS), help="with --rescore: one line per phrasing "
                     "under this rule")
+    ap.add_argument("--gate", action="store_true", help=f"with --golden: compare with {ANSWER_BASELINE_PATH.name} "
+                    "(exit 1 on a regression; drift is recorded, not gated)")
+    ap.add_argument("--write-baseline", action="store_true", help=f"with --golden: write {ANSWER_BASELINE_PATH.name} "
+                    "from this run (review, commit)")
+    ap.add_argument("--once", action="store_true", help="with --dev: exit 99 when this fingerprint's dev answers exist "
+                    "(the DAG; force overrides)")
     ap.add_argument("--force", action="store_true", help="generate even when the report for this fingerprint exists")
     ap.add_argument("--context", action="store_true", help="single question: also print the context sent")
     ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE), file:///dir, or 'none' (no report)")
@@ -904,7 +1067,8 @@ def main(argv=None) -> int:
                 if args.golden:
                     lake = None if args.lake == "none" else lake_from_env(args.lake)
                     return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force, args.dev,
-                               args.variant, args.decision)
+                               args.variant, args.decision, gate=args.gate, write_baseline=args.write_baseline,
+                               once=args.once)
                 a = answer(args.question, rt.PgStore(cur), encode, llm, spec=prompt_spec(args.variant),
                            decision=args.decision)
                 if args.context:

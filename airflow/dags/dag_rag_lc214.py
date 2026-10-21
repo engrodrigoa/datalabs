@@ -50,12 +50,15 @@ Retrieval gate (lc05_eval.py, ADR 0014)
     labels to hold (golden_contract) and the store to be loaded, so it runs last.
 
 Answer generation (lc06_generate.py, ADR 0015)
-    The golden phrasings of the vector/combined routes through the retriever and the local LLM (Ollama, profile
-    `ai`, JSON Schema output, temperature 0 + seed). Three barriers decide "não consta": nothing to ground on (no LLM
-    call), the model's `answerable`, no citation left in the context (each citation resolved by the router's parser).
-    Runs after the retrieval gate, so a worse retriever fails there first (alert on the root cause). Exit 99 when
-    the report for the same fingerprint (law, chunks, golden set, model digest, prompt) is already in the lake, or
-    when Ollama is not running (optional layer). `force` regenerates. Not gated yet: it measures and reports.
+    The dev subset of the golden set (11 phrasings, `dev: true`) through the retriever and a local LLM (Ollama,
+    profile `ai`, LC214_GEN_MODEL qwen2.5:3b, JSON Schema output, temperature 0 + seed). Three barriers decide "não
+    consta": nothing to ground on (no LLM call), the model's `answerable`, no citation of the context left (read from
+    the citation field and from the answer's text by the router's parser: rule model_text). Runs after the retrieval
+    gate, so a worse retriever fails there first (alert on the root cause). Gated against answer_baseline.yml:
+    refusal accuracy and citation recall within one case, false answers never more than the baseline; the drift
+    since the baseline (verdict flips, reworded texts) is logged and kept in the report, never gated: the wording is
+    not reproducible, the verdicts are. Exit 99 when this fingerprint's answers exist (--once) or Ollama is down.
+    `force` regenerates.
 
 Golden contract (golden.py, golden_set.yml)
     The evaluation labels are provision ids of ONE version of the law. Every run re-checks them against the
@@ -148,10 +151,11 @@ with DAG(
 
     evaluate = observed_script("evaluate_retrieval", "lc214", "rag/lc214/lc05_eval.py",
                                trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=15))
-    # measured 2026-10-19 (8 logical cores, num_ctx 6144): 88 s for a 3,144-token prompt; ~157k context tokens over
-    # 60 phrasings -> ~80 min when it runs. Most weeks it exits 99 (same fingerprint, same answers).
-    generate = observed_script("generate_answers", "lc214", "rag/lc214/lc06_generate.py", args=f"--golden {FORCE}",
-                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=150))
+    # the dev subset (11 phrasings) with qwen2.5:3b: measured 39-40 min on 8 logical cores (p50 213 s, max 342 s per
+    # phrasing); the full golden set (~3.5 h) is a manual run. Most weeks it exits 99 (--once: same fingerprint).
+    generate = observed_script("generate_answers", "lc214", "rag/lc214/lc06_generate.py",
+                               args=f"--golden --dev --once --gate {FORCE}",
+                               trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=90))
 
     check_ai_runtime >> extract >> parse >> chunk >> [load, embed, golden]
     [load, embed] >> data_health

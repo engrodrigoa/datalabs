@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from pipelines.rag.lc214 import lc06_generate as gen
 from pipelines.rag.lc214 import retriever as rt
@@ -127,10 +128,17 @@ def test_the_call_is_repeatable_and_does_not_cut_the_context():
 
 
 def test_an_invented_citation_is_dropped_and_counted_the_answer_stays():
-    a, _ = _answer(reply="one_invented")
+    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("one_invented"), decision="model")
     assert a.answerable and a.valid_ids == [P + "1:par-1"]
     assert [v["status"] for v in a.violations] == ["not_found"]
     assert a.public()["citations"] == ["art. 1, § 1º"]
+
+
+def test_a_citation_in_the_field_and_in_the_text_counts_once():
+    # "Está no art. 1º; o art. 99 detalha a regra." + field [art. 1, § 1º; art. 99]: art. 99 is one violation, not two
+    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("one_invented"), decision="model_text")
+    assert a.valid_ids == [P + "1", P + "1:par-1"] and [v["text"] for v in a.violations] == ["art. 99"]
+    assert a.public()["citations"] == ["art. 1, § 1º", "art. 1"]
 
 
 def test_without_a_valid_citation_the_answer_is_refused():                    # barrier 3
@@ -331,9 +339,9 @@ def test_the_request_asks_for_json_schema_output():
 
 
 def test_the_prompt_version_changes_with_the_prompt(monkeypatch):
-    before = gen.prompt_version()
+    before = gen.prompt_version(gen.prompt_spec("baseline"))
     monkeypatch.setattr(gen, "SYSTEM", gen.SYSTEM + " ")
-    assert gen.prompt_version() != before
+    assert gen.prompt_version(gen.prompt_spec("baseline")) != before
 
 
 # --------------------------------------------------------------------------- patch 1.1: timings, the model's text, dev
@@ -525,7 +533,7 @@ def test_citations_written_in_the_prose_are_parsed_and_checked():
 
 
 def test_model_text_shows_an_answer_that_cites_only_in_its_prose():
-    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("cites_in_text"))
+    a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("cites_in_text"), decision="model")
     assert not a.answerable and a.refusal == "no_valid_citation"                # the field is empty
     a = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("cites_in_text"), decision="model_text")
     assert a.answerable and a.valid_ids == [P + "1:par-1"]
@@ -557,3 +565,101 @@ def test_an_old_report_is_rescored_with_the_law_from_the_lake(step_env):
     gen.run_rescore(lake, ["dev"], detail="model_text", out=lines.append)
     text = "\n".join(lines)
     assert "ok  content-01/fiscal: ANSWER expected [art. 1, § 1º] cited [art. 1, § 1º]" in text
+
+
+# --------------------------------------------------------------------------- patch 1.4: the answer gate (step 6b)
+DEV_GOLDEN = {**GOLDEN, "cases": [{**c, "dev": True} for c in GOLDEN["cases"]]}
+GOOD = {"vendi para a filial, incide?": "grounded", "remessa entre estabelecimentos?": "grounded",
+        "multa da EFD?": "model_refuses"}
+
+
+def _gated(step_env, by_question, tmp_path, **kw):
+    lake, golden_path = step_env
+    golden_path.write_text(json.dumps(DEV_GOLDEN), encoding="utf-8")
+    return gen.run(None, encode, FakeLLM(by_question=by_question), lake, golden_path, dev=True,
+                   baseline_path=tmp_path / "answer_baseline.yml", **kw)
+
+
+def _last_report(lake):
+    return lake.get_json(lake.keys(k_silver(SHA, "answers/dev"))[-1])
+
+
+def test_the_verdict_digest_ignores_rewording():
+    first = _decided_run("model")
+    reworded = [gen.Outcome(o.case, o.type, o.behavior, o.phrasing, o.expected, o.should_refuse, o.in_context,
+                            o.cited_expected, {**o.answer, "answer": o.answer["answer"] + " (reescrito)"}) for o in first]
+    assert gen.verdict_digest(first) == gen.verdict_digest(reworded)
+    assert gen.answers_digest(first) != gen.answers_digest(reworded)
+
+
+def test_no_baseline_fails_the_gate_and_says_how_to_write_one(step_env, tmp_path):
+    with pytest.raises(gen.GenError) as exc:
+        _gated(step_env, GOOD, tmp_path, gate=True)
+    assert exc.value.event == "lc214_gen_baseline_missing"
+
+
+def test_a_written_baseline_holds_metrics_and_verdicts(step_env, tmp_path):
+    assert _gated(step_env, GOOD, tmp_path, write_baseline=True) == gen.EXIT_OK
+    base = gen.load_answer_baseline(tmp_path / "answer_baseline.yml")
+    assert base["decision"] == gen.DECISION and base["subset"] == ["content-01", "no_answer-01"]
+    assert set(base["verdicts"]) == {"content-01/fiscal", "content-01/formal", "no_answer-01/fiscal"}
+    assert base["metrics"]["fiscal"]["refusal_accuracy"] == 1.0
+
+
+def test_the_same_verdicts_reworded_pass_and_the_rewording_is_recorded(step_env, tmp_path, monkeypatch):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    base = gen.load_answer_baseline(tmp_path / "answer_baseline.yml")
+    for v in base["verdicts"].values():
+        v["text_md5"] = "000000000000"                                   # as if the model worded every reply anew
+    (tmp_path / "answer_baseline.yml").write_text(yaml.safe_dump(base), encoding="utf-8")
+    lake, _ = step_env
+    assert _gated(step_env, GOOD, tmp_path, gate=True) == gen.EXIT_OK
+    d = _last_report(lake)["drift"]
+    assert d["verdict_digest_same"] and d["verdict_flips"] == [] and d["text_changed"] == 3
+
+
+def test_one_lost_answer_is_within_tolerance_and_named_as_a_flip(step_env, tmp_path):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    lake, _ = step_env
+    worse = {**GOOD, "remessa entre estabelecimentos?": "model_refuses"}      # formal: 1 of 1 answerable lost
+    status = _gated(step_env, worse, tmp_path, gate=True, tolerance_cases=1)
+    assert status == gen.EXIT_OK                                             # 1 case of tolerance
+    assert _last_report(lake)["drift"]["verdict_flips"] == ["content-01/formal: ANSWER -> REFUSE"]
+
+
+def test_beyond_tolerance_fails(step_env, tmp_path):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    worse = {**GOOD, "remessa entre estabelecimentos?": "model_refuses"}
+    assert _gated(step_env, worse, tmp_path, gate=True, tolerance_cases=0) == gen.EXIT_FAILED
+
+
+def test_an_answer_to_an_unanswerable_question_fails_whatever_the_tolerance(step_env, tmp_path):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    unsafe = {**GOOD, "multa da EFD?": "grounded"}                           # no_answer-01 now answered
+    assert _gated(step_env, unsafe, tmp_path, gate=True, tolerance_cases=5) == gen.EXIT_FAILED
+
+
+def test_a_baseline_of_another_subset_is_not_compared(step_env, tmp_path):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    base = gen.load_answer_baseline(tmp_path / "answer_baseline.yml")
+    base["subset"] = ["content-01"]
+    (tmp_path / "answer_baseline.yml").write_text(yaml.safe_dump(base), encoding="utf-8")
+    with pytest.raises(gen.GenError) as exc:
+        _gated(step_env, GOOD, tmp_path, gate=True)
+    assert exc.value.event == "lc214_gen_baseline_incompatible"
+
+
+def test_once_skips_answers_already_generated_for_the_fingerprint(step_env, tmp_path):
+    lake, golden_path = step_env
+    golden_path.write_text(json.dumps(DEV_GOLDEN), encoding="utf-8")
+    llm = FakeLLM(by_question=GOOD)
+    assert gen.run(None, encode, llm, lake, golden_path, dev=True, once=True) == gen.EXIT_OK
+    calls = len(llm.calls)
+    assert gen.run(None, encode, llm, lake, golden_path, dev=True, once=True) == gen.EXIT_SKIPPED
+    assert len(llm.calls) == calls
+    assert gen.run(None, encode, llm, lake, golden_path, dev=True, once=True, force=True) == gen.EXIT_OK
+
+
+def test_the_lc214_model_is_its_own_setting():
+    assert gen.GEN_MODEL == "qwen2.5:3b" and gen.OllamaClient().model == "qwen2.5:3b"
+    assert (gen.VARIANT, gen.DECISION) == ("answer_default", "model_text")
