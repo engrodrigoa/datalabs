@@ -1,7 +1,7 @@
 {
   "uid": "datalabs-rag-lc214",
   "title": "DataLabs · RAG LC 214",
-  "description": "RAG da LC 214/2025: contrato dos dados, gate de retrieval (lc05), gate de respostas (lc06), drift e custo. Toda série vem de audit.pipeline_step_runs; o piso de cada gate é gravado pelo próprio passo.",
+  "description": "LC 214/2025 RAG: data contract, retrieval gate (lc05), answer gate (lc06), drift and cost. Every series comes from audit.pipeline_step_runs; each gate records its own floor.",
   "tags": [
     "datalabs",
     "rag",
@@ -50,10 +50,10 @@
   "panels": [
     {
       "type": "text",
-      "title": "Leitura",
+      "title": "Reading guide",
       "options": {
         "mode": "markdown",
-        "content": "**Como ler.** Linha cheia = métrica da execução; tracejada = piso do gate (baseline − tolerância de 1 caso). Gate de pé = a linha cheia não cruza a tracejada. *Folga* = a menor distância até o piso. Redação do modelo muda entre execuções; veredito não (drift de texto é registro, não falha)."
+        "content": "**How to read.** Solid line = the run's metric; dashed = the gate floor (baseline − a tolerance of 1 case). Gate standing = the solid line does not cross the dashed one. *Margin* = the smallest distance to the floor. The model's wording changes between runs; its verdict does not (text drift is recorded, not a failure)."
       },
       "id": 1,
       "gridPos": {
@@ -66,7 +66,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "1 · Veredito da última execução",
+      "title": "1 · Verdict of the latest run",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -78,8 +78,8 @@
     },
     {
       "type": "stat",
-      "title": "Gate de retrieval (lc05)",
-      "description": "Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão ou erro do passo; interrompido = processo morto de fora (SIGTERM), sem relação com a qualidade.",
+      "title": "Retrieval gate (lc05)",
+      "description": "Latest evaluate_retrieval result: passing = within the floor; failed = regression or step error; interrupted = process killed from outside (SIGTERM), unrelated to quality.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -121,17 +121,17 @@
               "type": "value",
               "options": {
                 "1": {
-                  "text": "✔ de pé",
+                  "text": "✔ passing",
                   "color": "green",
                   "index": 0
                 },
                 "0": {
-                  "text": "✖ reprovou",
+                  "text": "✖ failed",
                   "color": "red",
                   "index": 1
                 },
                 "2": {
-                  "text": "⏸ interrompido",
+                  "text": "⏸ interrupted",
                   "color": "orange",
                   "index": 2
                 }
@@ -142,7 +142,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "sem execução",
+                  "text": "no run yet",
                   "color": "text",
                   "index": 3
                 }
@@ -179,8 +179,8 @@
     },
     {
       "type": "stat",
-      "title": "Gate de respostas (lc06)",
-      "description": "Último resultado do generate_answers (subconjunto dev, ADR 0015). Interrompido = processo morto de fora (SIGTERM): rode de novo, a qualidade não foi medida.",
+      "title": "Answer gate (lc06)",
+      "description": "Latest generate_answers result (dev subset, ADR 0015). Interrupted = process killed from outside (SIGTERM): run it again, quality was not measured.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -222,17 +222,17 @@
               "type": "value",
               "options": {
                 "1": {
-                  "text": "✔ de pé",
+                  "text": "✔ passing",
                   "color": "green",
                   "index": 0
                 },
                 "0": {
-                  "text": "✖ reprovou",
+                  "text": "✖ failed",
                   "color": "red",
                   "index": 1
                 },
                 "2": {
-                  "text": "⏸ interrompido",
+                  "text": "⏸ interrupted",
                   "color": "orange",
                   "index": 2
                 }
@@ -243,7 +243,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "sem execução",
+                  "text": "no run yet",
                   "color": "text",
                   "index": 3
                 }
@@ -280,8 +280,8 @@
     },
     {
       "type": "stat",
-      "title": "Folga mínima · retrieval",
-      "description": "Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. Uma métrica exatamente na baseline tem folga de 1 caso (a tolerância): é o repouso, não alerta. Vazio até a primeira execução que grava os pisos.",
+      "title": "Minimum margin · retrieval",
+      "description": "Smallest (metric − floor) across success@k, MRR and context_recall. Negative = regression. A metric exactly on its baseline has a margin of 1 case (the tolerance): that is rest, not an alert. Empty until the first run that records the floors.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -324,7 +324,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "aguardando 1ª execução",
+                  "text": "awaiting first run",
                   "color": "text",
                   "index": 0
                 }
@@ -362,8 +362,8 @@
     },
     {
       "type": "stat",
-      "title": "Folga mínima · respostas",
-      "description": "Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo. Na baseline, a folga é a tolerância de 1 caso (14 p.p. no grupo fiscal, 25 no formal).",
+      "title": "Minimum margin · answers",
+      "description": "Smallest (metric − floor) across refusal accuracy and citation recall, per group. On the baseline the margin is the tolerance of 1 case (14 pp in the fiscal group, 25 in the formal one).",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -406,7 +406,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "aguardando 1ª execução",
+                  "text": "awaiting first run",
                   "color": "text",
                   "index": 0
                 }
@@ -444,8 +444,8 @@
     },
     {
       "type": "stat",
-      "title": "Respostas indevidas (false answers)",
-      "description": "Resposta mostrada a pergunta sem resposta na lei. É o erro que as 3 barreiras existem para impedir: teto = 0, sem tolerância.",
+      "title": "False answers",
+      "description": "An answer shown for a question the law does not answer. The error the 3 barriers exist to stop: ceiling = 0, no tolerance.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -488,7 +488,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "aguardando 1ª execução",
+                  "text": "awaiting first run",
                   "color": "text",
                   "index": 0
                 }
@@ -526,8 +526,8 @@
     },
     {
       "type": "stat",
-      "title": "Checks de dados (última rodada)",
-      "description": "Health checks lc214 que não passaram na última rodada.",
+      "title": "Data checks (latest round)",
+      "description": "lc214 health checks that did not pass in the latest round.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -542,7 +542,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) FILTER (WHERE status NOT IN ('pass','skipped')) AS falhas FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)"
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE status NOT IN ('pass','skipped')) AS failures FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)"
         }
       ],
       "fieldConfig": {
@@ -597,7 +597,7 @@
     {
       "id": 9,
       "type": "row",
-      "title": "2 · Contrato dos dados (lc01 → lc04): cada passo, o que entregou",
+      "title": "2 · Data contract (lc01 → lc04): what each step delivered",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -609,8 +609,8 @@
     },
     {
       "type": "table",
-      "title": "Último estado de cada passo",
-      "description": "skipped (exit 99) = a saída já estava atualizada para esta entrada e versão de código; não é falha.",
+      "title": "Latest state of each step",
+      "description": "skipped (exit 99) = the output was already up to date for this input and code version; not a failure.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -625,7 +625,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT s.step AS passo, s.status, s.started_at AS inicio, ROUND(s.duration_s::numeric) AS duracao_s, s.rows_in AS entrada, s.rows_out AS saida, (SELECT MAX(started_at) FROM audit.pipeline_step_runs x WHERE x.pipeline = 'lc214' AND x.step = s.step AND x.status = 'success') AS ultimo_sucesso FROM (SELECT DISTINCT ON (step) * FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' ORDER BY step, started_at DESC) s ORDER BY array_position(ARRAY['extract_source','parse_dispositivos','build_chunks','load_postgres', 'embed_chunks','golden_contract','evaluate_retrieval','generate_answers'], s.step)"
+          "rawSql": "SELECT s.step AS step, s.status, s.started_at AS started, ROUND(s.duration_s::numeric) AS duration_s, s.rows_in AS rows_in, s.rows_out AS rows_out, (SELECT MAX(started_at) FROM audit.pipeline_step_runs x WHERE x.pipeline = 'lc214' AND x.step = s.step AND x.status = 'success') AS last_success FROM (SELECT DISTINCT ON (step) * FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' ORDER BY step, started_at DESC) s ORDER BY array_position(ARRAY['extract_source','parse_dispositivos','build_chunks','load_postgres', 'embed_chunks','golden_contract','evaluate_retrieval','generate_answers'], s.step)"
         }
       ],
       "fieldConfig": {
@@ -742,8 +742,8 @@
     },
     {
       "type": "table",
-      "title": "Health checks (última rodada)",
-      "description": "Paridade lei × serving, versão única, paridade chunks × vetores, mesma lei nos vetores, volume e frescor.",
+      "title": "Health checks (latest round)",
+      "description": "Law × serving parity, single version, chunks × vectors parity, same law in the vectors, volume and freshness.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -758,7 +758,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT check_name AS check, check_type AS tipo, status, severity AS severidade, ROUND(observed_value::numeric, 3) AS observado, LEFT(message, 70) AS mensagem FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1) ORDER BY check_name"
+          "rawSql": "SELECT check_name AS check, check_type AS type, status, severity AS severity, ROUND(observed_value::numeric, 3) AS observed, LEFT(message, 70) AS message FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1) ORDER BY check_name"
         }
       ],
       "fieldConfig": {
@@ -867,7 +867,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "mensagem"
+              "options": "message"
             },
             "properties": [
               {
@@ -899,8 +899,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Volumes: dispositivos, chunks",
-      "description": "Provisões parseadas (≥ 4.000 pelo check) e chunks. Uma emenda da lei move estes números; uma queda sem emenda é parser quebrado.",
+      "title": "Volumes: provisions, chunks",
+      "description": "Parsed provisions (≥ 4,000 by the check) and chunks. An amendment moves these numbers; a drop with no amendment is a broken parser.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -976,8 +976,8 @@
     },
     {
       "type": "table",
-      "title": "Roteamento e auto-citações (golden contract)",
-      "description": "Os rótulos do golden set ainda valem para a versão atual da lei? Roteamento exige 100%; auto-citações resolvidas ≥ 99%.",
+      "title": "Routing and self-citations (golden contract)",
+      "description": "Do the golden set labels still hold for the current law version? Routing must be 100%; resolved self-citations ≥ 99%.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -992,7 +992,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS inicio, status, rows_in AS casos, (metrics->>'routing_accuracy')::float AS roteamento, (metrics->>'self_ref_rate')::float AS auto_citacoes FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'golden_contract' AND status IN ('success','failed') AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 10"
+          "rawSql": "SELECT started_at AS started, status, rows_in AS cases, (metrics->>'routing_accuracy')::float AS routing, (metrics->>'self_ref_rate')::float AS self_citations FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'golden_contract' AND status IN ('success','failed') AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 10"
         }
       ],
       "fieldConfig": {
@@ -1110,7 +1110,7 @@
     {
       "id": 14,
       "type": "row",
-      "title": "3 · Gate de retrieval (lc05): a resposta certa chega ao contexto?",
+      "title": "3 · Retrieval gate (lc05): does the right provision reach the context?",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1123,7 +1123,7 @@
     {
       "type": "timeseries",
       "title": "Success@k",
-      "description": "Todas as provisões esperadas no top-k. Gated.",
+      "description": "Every expected provision in the top-k. Gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1138,7 +1138,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_success_at_k' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · floor' AS metric, (metrics->>'floor_fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · floor' AS metric, (metrics->>'floor_formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_success_at_k' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1180,7 +1180,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1227,7 +1227,7 @@
     {
       "type": "timeseries",
       "title": "MRR",
-      "description": "Posição do 1º acerto (média do inverso do rank). Gated.",
+      "description": "Position of the first hit (mean of the inverse rank). Gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1242,7 +1242,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_mrr' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · floor' AS metric, (metrics->>'floor_fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · floor' AS metric, (metrics->>'floor_formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_mrr' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1284,7 +1284,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1331,7 +1331,7 @@
     {
       "type": "timeseries",
       "title": "Context recall",
-      "description": "Provisões esperadas no contexto montado para o LLM (orçamento de tokens). Gated.",
+      "description": "Expected provisions in the context built for the LLM (token budget). Gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1346,7 +1346,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_context_recall' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · floor' AS metric, (metrics->>'floor_fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · floor' AS metric, (metrics->>'floor_formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_context_recall' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1388,7 +1388,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1434,8 +1434,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Lacuna fiscal × formal (paired gap)",
-      "description": "Diferença de success@k entre a pergunta formal e a mesma pergunta em vocabulário fiscal. Mede o vocabulário que o retriever não cobre; informativo, não gated.",
+      "title": "Fiscal × formal gap (paired)",
+      "description": "success@k of the formal phrasing minus the same question in fiscal vocabulary. Measures the vocabulary the retriever does not cover; informational, not gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1492,7 +1492,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1538,8 +1538,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Hit@k e Recall@k (informativos)",
-      "description": "Não gated: ajudam a explicar uma queda de success@k.",
+      "title": "Hit@k and Recall@k (informational)",
+      "description": "Not gated: they help explain a drop in success@k.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1596,7 +1596,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1643,7 +1643,7 @@
     {
       "id": 20,
       "type": "row",
-      "title": "4 · Gate de respostas (lc06): responde certo, recusa quando deve, cita o que existe?",
+      "title": "4 · Answer gate (lc06): answers right, refuses when it should, cites what exists?",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -1656,7 +1656,7 @@
     {
       "type": "timeseries",
       "title": "Refusal accuracy",
-      "description": "Acerto do veredito: responder quando há resposta e recusar quando não há. Gated.",
+      "description": "Verdict accuracy: answer when the law has an answer, refuse when it has not. Gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1671,7 +1671,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_refusal_accuracy' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · floor' AS metric, (metrics->>'floor_fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · floor' AS metric, (metrics->>'floor_formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_refusal_accuracy' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1713,7 +1713,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1760,7 +1760,7 @@
     {
       "type": "timeseries",
       "title": "Citation recall",
-      "description": "Das respostas esperadas, quantas citam a provisão esperada. Gated.",
+      "description": "Of the expected answers, how many cite the expected provision. Gated.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1775,7 +1775,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_citation_recall' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · floor' AS metric, (metrics->>'floor_fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · floor' AS metric, (metrics->>'floor_formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_citation_recall' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -1817,7 +1817,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1864,7 +1864,7 @@
     {
       "type": "timeseries",
       "title": "Citation validity",
-      "description": "Citações que existem na lei E estavam no contexto mostrado. Abaixo de 100% = o modelo citou o que não viu.",
+      "description": "Citations that exist in the law AND were in the context shown. Below 100% = the model cited what it did not see.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -1921,7 +1921,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -1967,8 +1967,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Respostas indevidas e recusas indevidas",
-      "description": "false_answers: teto 0 (gate estrito). false_refusals: o custo de ser conservador: onde a qualidade está perdendo hoje.",
+      "title": "False answers and false refusals",
+      "description": "false_answers: ceiling 0 (strict gate). false_refusals: the cost of being conservative, where quality is being lost today.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2025,7 +2025,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -2071,8 +2071,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Veredito do modelo × decisão final",
-      "description": "Quanto o modelo diz que é respondível, antes das barreiras. Muito baixo = o modelo recusa tudo.",
+      "title": "Share of replies the model says it can answer",
+      "description": "How often the model claims it can answer, before the barriers. Stuck near 0 = the model refuses everything.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2129,7 +2129,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -2176,7 +2176,7 @@
     {
       "id": 26,
       "type": "row",
-      "title": "5 · Drift e custo",
+      "title": "5 · Drift and cost",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -2188,8 +2188,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Drift desde o baseline",
-      "description": "Registro, não gate. Veredito estável + texto reescrito = redação não reproduzível; flip de veredito = comportamento mudou.",
+      "title": "Drift since the baseline",
+      "description": "A record, not a gate. Stable verdict + reworded text = non-reproducible wording; a verdict flip = behaviour changed.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2204,7 +2204,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'flips de veredito' AS metric, (metrics->>'verdict_flips')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'verdict_flips' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'textos reescritos' AS metric, (metrics->>'text_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'text_changed' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'citação esperada mudou' AS metric, (metrics->>'cited_expected_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'cited_expected_changed' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'verdict flips' AS metric, (metrics->>'verdict_flips')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'verdict_flips' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'texts reworded' AS metric, (metrics->>'text_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'text_changed' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'expected citation changed' AS metric, (metrics->>'cited_expected_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'cited_expected_changed' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2246,7 +2246,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -2292,8 +2292,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Latência por frase (s)",
-      "description": "CPU, qwen2.5:3b, num_ctx 6144. Orçamento do DAG: 90 min para 11 frases.",
+      "title": "Latency per phrasing (s)",
+      "description": "CPU, qwen2.5:3b, num_ctx 6144. DAG budget: 90 min for 11 phrasings.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2308,7 +2308,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'fiscal p50' AS metric, (metrics->>'fiscal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal p50' AS metric, (metrics->>'formal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal máx' AS metric, (metrics->>'fiscal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_max_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal máx' AS metric, (metrics->>'formal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_max_s' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'fiscal p50' AS metric, (metrics->>'fiscal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal p50' AS metric, (metrics->>'formal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal max' AS metric, (metrics->>'fiscal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_max_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal max' AS metric, (metrics->>'formal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_max_s' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2350,7 +2350,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -2396,8 +2396,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Tokens por palavra (calibração do orçamento)",
-      "description": "O retriever estima 1,7 token/palavra; o lc06 mede com prompt_eval_count. Estimativa abaixo do medido = contexto estourando o num_ctx.",
+      "title": "Tokens per word (budget calibration)",
+      "description": "The retriever estimates 1.7 tokens/word; lc06 measures it with prompt_eval_count. An estimate below the measured value = context overflowing num_ctx.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2412,7 +2412,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS time, 'medido' AS metric, (metrics->>'tokens_per_word')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'tokens_per_word' AND $__timeFilter(started_at) ORDER BY 1"
+          "rawSql": "SELECT started_at AS time, 'measured' AS metric, (metrics->>'tokens_per_word')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'tokens_per_word' AND $__timeFilter(started_at) ORDER BY 1"
         }
       ],
       "fieldConfig": {
@@ -2454,7 +2454,7 @@
           {
             "matcher": {
               "id": "byRegexp",
-              "options": ".* · piso"
+              "options": ".* · floor"
             },
             "properties": [
               {
@@ -2500,8 +2500,8 @@
     },
     {
       "type": "table",
-      "title": "Execuções do gate de respostas",
-      "description": "Inclui execuções skipped (--once: mesma impressão digital, nada a gerar).",
+      "title": "Answer gate runs",
+      "description": "Includes skipped runs (--once: same fingerprint, nothing to generate).",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2516,7 +2516,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS inicio, status, ROUND(duration_s::numeric) AS duracao_s, metrics->>'variant' AS variante, metrics->>'decision' AS regra, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_recusa, (metrics->>'formal_citation_recall')::float AS formal_cit_recall, (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS erro FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running' AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20"
+          "rawSql": "SELECT started_at AS started, status, ROUND(duration_s::numeric) AS duration_s, metrics->>'variant' AS variant, metrics->>'decision' AS rule, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_refusal_acc, (metrics->>'formal_citation_recall')::float AS formal_cit_recall, (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS error FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running' AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20"
         }
       ],
       "fieldConfig": {
