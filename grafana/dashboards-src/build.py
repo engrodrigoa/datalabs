@@ -921,23 +921,34 @@ def rag_lc214() -> Board:
                "(drift de texto é registro, não falha).", "Leitura"), 24, 3)
 
     b.row("1 · Veredito da última execução")
-    b.add(stat("Gate de retrieval (lc05)", last(ev, "status"), thresholds=None, mappings=STATUS_MAPPINGS,
-               desc="Último resultado do evaluate_retrieval: success = dentro do piso; failed = regressão."), 4, 4)
-    b.add(stat("Gate de respostas (lc06)", last(gen, "status"), mappings=STATUS_MAPPINGS,
+    # a stat panel does not show a text field: the verdict is a number with value mappings
+    verdict = [{"type": "value", "options": {"1": {"text": "✔ de pé", "color": GOOD, "index": 0},
+                                              "0": {"text": "✖ reprovou", "color": CRITICAL, "index": 1}}},
+               {"type": "special", "options": {"match": "null", "result": {"text": "sem execução", "color": NEUTRAL,
+                                                                           "index": 2}}}]
+    waiting = [{"type": "special", "options": {"match": "null", "result": {
+        "text": "aguardando 1ª execução", "color": NEUTRAL, "index": 0}}}]
+    b.add(stat("Gate de retrieval (lc05)", last(ev, "(status = 'success')::int"), mappings=verdict,
+               thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
+               desc="Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão."), 4, 4)
+    b.add(stat("Gate de respostas (lc06)", last(gen, "(status = 'success')::int"), mappings=verdict,
+               thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
                desc="Último resultado do generate_answers (subconjunto dev, ADR 0015)."), 4, 4)
-    steps_margin = [{"color": CRITICAL, "value": None}, {"color": WARN, "value": 0}, {"color": GOOD, "value": 0.05}]
+    steps_margin = [{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 0}]
     ret_keys = [f"{g}_{m}" for g in ("fiscal", "formal") for m in ("success_at_k", "mrr", "context_recall")]
     b.add(stat("Folga mínima · retrieval", last(ev, margin(ret_keys)), unit="percentunit", decimals=1,
-               thresholds=steps_margin,
+               thresholds=steps_margin, mappings=waiting,
                desc="Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. "
+                    "Uma métrica exatamente na baseline tem folga de 1 caso (a tolerância): é o repouso, não alerta. "
                     "Vazio até a primeira execução que grava os pisos."), 4, 4)
     gen_keys = [f"{g}_{m}" for g in ("fiscal", "formal") for m in ("refusal_accuracy", "citation_recall")]
     b.add(stat("Folga mínima · respostas", last(gen, margin(gen_keys)), unit="percentunit", decimals=1,
-               thresholds=steps_margin,
-               desc="Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo."), 4, 4)
+               thresholds=steps_margin, mappings=waiting,
+               desc="Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo. Na baseline, a "
+                    "folga é a tolerância de 1 caso (14 p.p. no grupo fiscal, 25 no formal)."), 4, 4)
     b.add(stat("Respostas indevidas (false answers)",
                last(gen, f"COALESCE({f('fiscal_false_answers')}, 0) + COALESCE({f('formal_false_answers')}, 0)"),
-               thresholds=ZERO_GOOD, decimals=0,
+               thresholds=ZERO_GOOD, decimals=0, mappings=waiting,
                desc="Resposta mostrada a pergunta sem resposta na lei. É o erro que as 3 barreiras existem para "
                     "impedir: teto = 0, sem tolerância."), 4, 4)
     b.add(stat("Checks de dados (última rodada)", """
@@ -964,7 +975,10 @@ def rag_lc214() -> Board:
         WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks
                                                      WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)
         ORDER BY check_name""",
-        desc="Paridade lei × serving, versão única, paridade chunks × vetores, mesma lei nos vetores, volume e frescor."), 12, 9)
+        desc="Paridade lei × serving, versão única, paridade chunks × vetores, mesma lei nos vetores, volume e frescor.",
+        overrides=[{"matcher": {"id": "byName", "options": "check"}, "properties": [{"id": "custom.width", "value": 250}]},
+                   {"matcher": {"id": "byName", "options": "mensagem"}, "properties": [{"id": "custom.minWidth", "value": 260}]}]),
+        12, 9)
     b.add(timeseries("Volumes: dispositivos, chunks", [sql_target("""
         SELECT started_at AS time, step AS metric, rows_out::float AS value FROM audit.pipeline_step_runs
         WHERE pipeline = 'lc214' AND step IN ('parse_dispositivos','build_chunks') AND status = 'success'

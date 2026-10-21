@@ -79,7 +79,7 @@
     {
       "type": "stat",
       "title": "Gate de retrieval (lc05)",
-      "description": "Último resultado do evaluate_retrieval: success = dentro do piso; failed = regressão.",
+      "description": "Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -94,7 +94,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT status FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT (status = 'success')::int FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -104,8 +104,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "text",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
           },
@@ -116,50 +120,26 @@
             {
               "type": "value",
               "options": {
-                "success": {
-                  "text": "✔ success",
+                "1": {
+                  "text": "✔ de pé",
                   "color": "green",
                   "index": 0
                 },
-                "pass": {
-                  "text": "✔ pass",
-                  "color": "green",
+                "0": {
+                  "text": "✖ reprovou",
+                  "color": "red",
                   "index": 1
-                },
-                "skipped": {
-                  "text": "⏭ skipped",
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "sem execução",
                   "color": "text",
                   "index": 2
-                },
-                "running": {
-                  "text": "▶ running",
-                  "color": "blue",
-                  "index": 3
-                },
-                "warn": {
-                  "text": "▲ warn",
-                  "color": "yellow",
-                  "index": 4
-                },
-                "stale": {
-                  "text": "⏸ stale",
-                  "color": "orange",
-                  "index": 5
-                },
-                "error": {
-                  "text": "✖ error",
-                  "color": "red",
-                  "index": 6
-                },
-                "fail": {
-                  "text": "✖ fail",
-                  "color": "red",
-                  "index": 7
-                },
-                "failed": {
-                  "text": "✖ failed",
-                  "color": "red",
-                  "index": 8
                 }
               }
             }
@@ -210,7 +190,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT status FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT (status = 'success')::int FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -220,8 +200,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "text",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
           },
@@ -232,50 +216,26 @@
             {
               "type": "value",
               "options": {
-                "success": {
-                  "text": "✔ success",
+                "1": {
+                  "text": "✔ de pé",
                   "color": "green",
                   "index": 0
                 },
-                "pass": {
-                  "text": "✔ pass",
-                  "color": "green",
+                "0": {
+                  "text": "✖ reprovou",
+                  "color": "red",
                   "index": 1
-                },
-                "skipped": {
-                  "text": "⏭ skipped",
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "sem execução",
                   "color": "text",
                   "index": 2
-                },
-                "running": {
-                  "text": "▶ running",
-                  "color": "blue",
-                  "index": 3
-                },
-                "warn": {
-                  "text": "▲ warn",
-                  "color": "yellow",
-                  "index": 4
-                },
-                "stale": {
-                  "text": "⏸ stale",
-                  "color": "orange",
-                  "index": 5
-                },
-                "error": {
-                  "text": "✖ error",
-                  "color": "red",
-                  "index": 6
-                },
-                "fail": {
-                  "text": "✖ fail",
-                  "color": "red",
-                  "index": 7
-                },
-                "failed": {
-                  "text": "✖ failed",
-                  "color": "red",
-                  "index": 8
                 }
               }
             }
@@ -311,7 +271,7 @@
     {
       "type": "stat",
       "title": "Folga mínima · retrieval",
-      "description": "Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. Vazio até a primeira execução que grava os pisos.",
+      "description": "Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. Uma métrica exatamente na baseline tem folga de 1 caso (a tolerância): é o repouso, não alerta. Vazio até a primeira execução que grava os pisos.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -340,19 +300,27 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0
-              },
-              {
                 "color": "green",
-                "value": 0.05
+                "value": 0
               }
             ]
           },
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "aguardando 1ª execução",
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "noValue": "–",
           "decimals": 1
         },
@@ -385,7 +353,7 @@
     {
       "type": "stat",
       "title": "Folga mínima · respostas",
-      "description": "Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo.",
+      "description": "Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo. Na baseline, a folga é a tolerância de 1 caso (14 p.p. no grupo fiscal, 25 no formal).",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -414,19 +382,27 @@
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 0
-              },
-              {
                 "color": "green",
-                "value": 0.05
+                "value": 0
               }
             ]
           },
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "aguardando 1ª execução",
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "noValue": "–",
           "decimals": 1
         },
@@ -496,7 +472,19 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "aguardando 1ª execução",
+                  "color": "text",
+                  "index": 0
+                }
+              }
+            }
+          ],
           "noValue": "–",
           "decimals": 0
         },
@@ -851,6 +839,30 @@
                 "value": {
                   "type": "color-text"
                 }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "check"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "mensagem"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 260
               }
             ]
           }
