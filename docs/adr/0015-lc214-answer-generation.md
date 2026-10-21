@@ -170,6 +170,13 @@ were reworded, and 2 of 11 citation lists changed (content-02/formal: art. 3 →
 seed do not make greedy decoding bit-identical when Ollama's prompt cache or batching differs (the second run
 followed two concurrent runs that were stopped). The answers' digest was the wrong ruler.
 
+**Determinism, second observation (2026-10-21, the DAG with `force=true`).** Run with nothing else on Ollama, the dev
+subset reproduced the baseline (written the same day by a clean run): 0 verdict flips, 0 expected-citation changes,
+0 of 11 texts reworded. Of the four runs, the two that ran with no concurrent request match each other byte for byte;
+the divergent one followed two concurrent runs. That makes contamination by parallel requests (prompt cache / batching)
+the likelier cause than the model itself. One observation on each side is a hypothesis, not a proof, and the tolerant
+gate stays: it does not break if the hypothesis fails, and the drift record would show it.
+
 14. **A tolerant gate with a full record.** `verdict_digest` hashes only the verdicts, and the text digest stays as
     information. The DAG runs the dev subset with `--once --gate` (exit 99 when this fingerprint's dev answers exist).
     `answer_baseline.yml` (written by `--write-baseline`, reviewed and committed like `eval_baseline.yml`) holds the

@@ -136,6 +136,7 @@ Each check also carries guardrails: `timeout_s` (a slow query ends as `error`, n
 | **Airflow Platform** | scheduler heartbeat, import errors, executor slots, task outcomes, p95 duration per DAG, schedule delay, DAG parse time |
 | **Logs Explorer** | filter by DAG / level / event / free text, parsed JSON events and raw logs |
 | **ANP (combustíveis)** | data product view: every load (files, rows, duration, slowest tasks) · batch profile per load (rows/price by product, coverage, volume vs. median) · health checks incl. suspended ones · dbt tests · weekly prices by UF (`gold.ag_anp_preco_semanal`) · RAG sync (full/incremental, embedding speed, parity, eval gate) |
+| **RAG LC 214** | is the gate standing? lc05 retrieval and lc06 answer gates (metric × floor, minimum margin), false answers (ceiling 0), data contract per step, health checks, verdict/text drift, latency and token calibration |
 | **NF-e (IBS/CBS)** | batches (`ctrl.nfe_lote`), quarantine, dbt/Elementary tests, tax performance of the gold layer |
 
 Grafana reads Postgres through a **read-only role** (`grafana_ro`), and Airflow metadata lives in its own database.
@@ -212,6 +213,24 @@ python scripts/nfe/gen_nfe.py --help               # dates, batches, arrival int
 * **One transaction per sync:** delete/resize, `COPY` and the HNSW build commit together, so a failure rolls back to the previous store. A store that is in sync but missing its index rebuilds only the index.
 * **CPU-sized model:** `multilingual-e5-small` (384 dims), one module defines it for writing and querying. A full rebuild of 32,097 chunks takes ~46 min of embedding, 9.6 s of `COPY` and 14 s of HNSW build. The weekly delta takes minutes.
 * Interactive assistant (local LLM through Ollama): `python pipelines/rag/anp/rag03_generator.py`.
+
+### ⚖️ RAG — LC 214/2025 legislation (`dag_rag_lc214`, weekly source watch)
+
+`PDF (versioned by sha256) → one row per provision → small-to-big chunks → Postgres + pgvector → router → retrieval gate → cited JSON answer → answer gate`
+
+An auditor's question is answered from the law or refused, and every refusal names the barrier that decided it. The design starts from *when not to answer*: **false answers have a ceiling of 0**, refusals of answerable questions are measured as the cost.
+
+| | measured (2026-10) |
+|---|---|
+| corpus | 4,223 provisions, 867 chunks (0 over the 512-token limit), 6/6 health checks, golden contract 82/82 |
+| retrieval gate (lc05) | fiscal / formal success@k 0.39 / 0.48, context recall 0.65 / 0.77; fiscal × formal gap 0.16 |
+| answers (lc06, dev subset of 11 phrasings) | llama3.2:1b 0/9 (invented a calculation), **qwen2.5:3b 2/9, 0 invented**; acceptance bar was 3/9 and is **not met** |
+| reproducibility | last DAG run: 0 verdict flips, 0/11 texts reworded against the baseline |
+
+* **Two gates, one rule:** thresholds are a committed baseline minus a tolerance **in cases** (1 case = 3-4 pp at lc05), improvements never fail and raising the baseline is a deliberate commit; a missing baseline fails the run.
+* **Three barriers to "não consta":** nothing to ground on (no LLM call), the model's own `answerable`, and a citation check against the provisions the context actually showed (valid | outside_context | not_found | foreign).
+* **What failed, in the open:** the small model refuses fiscal phrasings with "o contexto não trata especificamente": the auditor's vocabulary against the law's ([ADR 0015](docs/adr/0015-lc214-answer-generation.md), "Where it stands").
+* Study guide, step by step with the metric and the failure mode of each step: [case study (pt-BR)](docs/case-study/lc214-rag.md). Board: **DataLabs · RAG LC 214**.
 
 ---
 

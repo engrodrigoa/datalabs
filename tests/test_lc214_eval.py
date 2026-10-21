@@ -130,6 +130,13 @@ def test_only_the_gated_metrics_fail_the_run():
     assert ev.gate(worse_hit, _baseline()) == ([], [])
 
 
+def test_the_floors_the_gate_used_are_recorded_for_the_dashboard():
+    floors = ev.gate_floors(METRICS, _baseline())
+    regressions, _ = ev.gate({**METRICS, "fiscal": {**METRICS["fiscal"], "success_at_k": 0.40}}, _baseline())
+    assert floors["floor_fiscal_success_at_k"] == regressions[0]["threshold"] == 0.45
+    assert set(floors) == {f"floor_{g}_{m}" for g in ev.GROUPS for m in ev.GATED}
+
+
 def test_the_baseline_file_round_trips(tmp_path):
     rep = {"eval_version": ev.EVAL_VERSION, "measured_at": "2026-10-18T00:00:00Z", "fingerprint": {"k": 5},
            "metrics": METRICS, "paired": {"cases": 0}}

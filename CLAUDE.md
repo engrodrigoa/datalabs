@@ -40,7 +40,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
-- `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json`
+- `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
+- `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
 - `docs/adr/` (0001–0015), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
@@ -119,7 +120,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   drift (verdict flips, reworded texts) logged and stored, not gated: greedy decoding rewords across runs (11/11
   texts), verdicts held (11/11). Measured level: 2 of 9 answerable phrasings shown with the expected provision and a
   correct text (bar was 3/9), 0 invented; the gap is fiscal vocabulary (literal "não trata especificamente").
-  Prompt experiments: `--golden --dev --variant X`. CPU-bound: WSL needs every core (`.wslconfig processors`).
+  Each gate records the floor it judged against in the step's `metrics` (`floor_<group>_<metric>`,
+  `ceiling_<group>_false_answers`), which the RAG dashboard plots against the value. Prompt experiments: `--golden --dev --variant X`. CPU-bound: WSL needs every core (`.wslconfig processors`).
 
 ## Development rules
 
