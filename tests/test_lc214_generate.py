@@ -663,3 +663,14 @@ def test_once_skips_answers_already_generated_for_the_fingerprint(step_env, tmp_
 def test_the_lc214_model_is_its_own_setting():
     assert gen.GEN_MODEL == "qwen2.5:3b" and gen.OllamaClient().model == "qwen2.5:3b"
     assert (gen.VARIANT, gen.DECISION) == ("answer_default", "model_text")
+
+
+def test_the_floors_the_gate_used_are_recorded_for_the_dashboard(step_env, tmp_path):
+    _gated(step_env, GOOD, tmp_path, write_baseline=True)
+    base = gen.load_answer_baseline(tmp_path / "answer_baseline.yml")
+    lake, _ = step_env
+    rep = _last_report(lake)
+    floors = gen.gen_floors(rep, base, tolerance_cases=1)
+    n = rep["metrics"]["fiscal"]["n"]
+    assert floors["floor_fiscal_refusal_accuracy"] == round(base["metrics"]["fiscal"]["refusal_accuracy"] - 1 / n, 4)
+    assert floors["ceiling_fiscal_false_answers"] == base["metrics"]["fiscal"]["false_answers"] == 0

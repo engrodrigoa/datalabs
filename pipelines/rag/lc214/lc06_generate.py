@@ -887,6 +887,22 @@ def gen_gate(rep: dict, base: dict | None, tolerance_cases: float = GEN_TOLERANC
     return regressions, improvements
 
 
+def gen_floors(rep: dict, base: dict, tolerance_cases: float = GEN_TOLERANCE_CASES) -> dict:
+    """The threshold of every gated metric as flat step metrics (see lc05_eval.gate_floors); false_answers has none
+    to relax: its floor is the baseline itself, a ceiling in fact."""
+    out = {}
+    for g in GROUPS:
+        now, ref = rep["metrics"].get(g) or {}, base["metrics"].get(g) or {}
+        for m in GATED_GEN:
+            if now.get(m) is None or ref.get(m) is None:
+                continue
+            n = now["n_answerable"] if m == "citation_recall" else now["n"]
+            out[f"floor_{g}_{m}"] = round(ref[m] - (tolerance_cases / n if n else 0.0), 4)
+        if ref.get("false_answers") is not None:
+            out[f"ceiling_{g}_false_answers"] = ref["false_answers"]
+    return out
+
+
 def apply_gate(rep: dict, base: dict | None, tolerance_cases: float = GEN_TOLERANCE_CASES, step=None) -> int:
     regressions, improvements = gen_gate(rep, base, tolerance_cases)
     d = drift(rep, base)
@@ -903,7 +919,8 @@ def apply_gate(rep: dict, base: dict | None, tolerance_cases: float = GEN_TOLERA
               cited_expected_changed=len(d["cited_expected_changed"]))
     if step is not None:
         step.set(verdict_flips=len(d["verdict_flips"]), text_changed=d["text_changed"],
-                 cited_expected_changed=len(d["cited_expected_changed"]))
+                 cited_expected_changed=len(d["cited_expected_changed"]), gate_regressions=len(regressions),
+                 gate_improvements=len(improvements), **gen_floors(rep, base, tolerance_cases))
     for i in improvements:
         log_event(logger, "lc214_gen_improved", f"{i['group']} {i['metric']} {i['value']:.3f} > baseline "
                   f"{i['baseline']:.3f}: raise the baseline with --write-baseline", **i)

@@ -231,6 +231,20 @@ def gate(metrics: dict, baseline: dict | None, tolerance_cases: float = TOLERANC
     return regressions, improvements
 
 
+def gate_floors(metrics: dict, baseline: dict, tolerance_cases: float = TOLERANCE_CASES) -> dict:
+    """The threshold each gated metric was judged against (baseline - tolerance / n), as flat step metrics: the
+    dashboard draws value x floor from audit.pipeline_step_runs without reading the YAML."""
+    out = {}
+    for g in GROUPS:
+        now, ref = metrics.get(g) or {}, (baseline.get("metrics") or {}).get(g) or {}
+        for m in GATED:
+            if now.get(m) is None or ref.get(m) is None:
+                continue
+            n = now["n_context"] if m == "context_recall" else now["n"]
+            out[f"floor_{g}_{m}"] = round(ref[m] - (tolerance_cases / n if n else 0.0), 4)
+    return out
+
+
 def load_baseline(path: Path = BASELINE_PATH) -> dict | None:
     if not path.exists():
         return None
@@ -326,7 +340,10 @@ def run(cur, encode, lake=None, golden_path: Path = GOLDEN_PATH, baseline_path: 
                             "there from the host") from None
         return EXIT_OK
 
-    regressions, improvements = gate(rep["metrics"], load_baseline(baseline_path), tolerance_cases)
+    base = load_baseline(baseline_path)
+    regressions, improvements = gate(rep["metrics"], base, tolerance_cases)
+    step.set(**gate_floors(rep["metrics"], base, tolerance_cases), gate_regressions=len(regressions),
+             gate_improvements=len(improvements))
     for i in improvements:
         log_event(logger, "lc214_eval_improved", f"{i['group']} {i['metric']} {i['value']:.3f} > baseline "
                   f"{i['baseline']:.3f}: raise the baseline with --write-baseline", **i)

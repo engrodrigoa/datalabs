@@ -1,0 +1,2613 @@
+{
+  "uid": "datalabs-rag-lc214",
+  "title": "DataLabs · RAG LC 214",
+  "description": "RAG da LC 214/2025: contrato dos dados, gate de retrieval (lc05), gate de respostas (lc06), drift e custo. Toda série vem de audit.pipeline_step_runs; o piso de cada gate é gravado pelo próprio passo.",
+  "tags": [
+    "datalabs",
+    "rag",
+    "lc214",
+    "observability"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "liveNow": false,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Pipeline health",
+      "type": "link",
+      "url": "/d/datalabs-pipeline-health",
+      "icon": "dashboard"
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "Leitura",
+      "options": {
+        "mode": "markdown",
+        "content": "**Como ler.** Linha cheia = métrica da execução; tracejada = piso do gate (baseline − tolerância de 1 caso). Gate de pé = a linha cheia não cruza a tracejada. *Folga* = a menor distância até o piso. Redação do modelo muda entre execuções; veredito não (drift de texto é registro, não falha)."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "1 · Veredito da última execução",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Gate de retrieval (lc05)",
+      "description": "Último resultado do evaluate_retrieval: success = dentro do piso; failed = regressão.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT status FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "success": {
+                  "text": "✔ success",
+                  "color": "green",
+                  "index": 0
+                },
+                "pass": {
+                  "text": "✔ pass",
+                  "color": "green",
+                  "index": 1
+                },
+                "skipped": {
+                  "text": "⏭ skipped",
+                  "color": "text",
+                  "index": 2
+                },
+                "running": {
+                  "text": "▶ running",
+                  "color": "blue",
+                  "index": 3
+                },
+                "warn": {
+                  "text": "▲ warn",
+                  "color": "yellow",
+                  "index": 4
+                },
+                "stale": {
+                  "text": "⏸ stale",
+                  "color": "orange",
+                  "index": 5
+                },
+                "error": {
+                  "text": "✖ error",
+                  "color": "red",
+                  "index": 6
+                },
+                "fail": {
+                  "text": "✖ fail",
+                  "color": "red",
+                  "index": 7
+                },
+                "failed": {
+                  "text": "✖ failed",
+                  "color": "red",
+                  "index": 8
+                }
+              }
+            }
+          ],
+          "noValue": "–"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Gate de respostas (lc06)",
+      "description": "Último resultado do generate_answers (subconjunto dev, ADR 0015).",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT status FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "success": {
+                  "text": "✔ success",
+                  "color": "green",
+                  "index": 0
+                },
+                "pass": {
+                  "text": "✔ pass",
+                  "color": "green",
+                  "index": 1
+                },
+                "skipped": {
+                  "text": "⏭ skipped",
+                  "color": "text",
+                  "index": 2
+                },
+                "running": {
+                  "text": "▶ running",
+                  "color": "blue",
+                  "index": 3
+                },
+                "warn": {
+                  "text": "▲ warn",
+                  "color": "yellow",
+                  "index": 4
+                },
+                "stale": {
+                  "text": "⏸ stale",
+                  "color": "orange",
+                  "index": 5
+                },
+                "error": {
+                  "text": "✖ error",
+                  "color": "red",
+                  "index": 6
+                },
+                "fail": {
+                  "text": "✖ fail",
+                  "color": "red",
+                  "index": 7
+                },
+                "failed": {
+                  "text": "✖ failed",
+                  "color": "red",
+                  "index": 8
+                }
+              }
+            }
+          ],
+          "noValue": "–"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 4,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Folga mínima · retrieval",
+      "description": "Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. Vazio até a primeira execução que grava os pisos.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT LEAST((m->>'fiscal_success_at_k')::float - (m->>'floor_fiscal_success_at_k')::float, (m->>'fiscal_mrr')::float - (m->>'floor_fiscal_mrr')::float, (m->>'fiscal_context_recall')::float - (m->>'floor_fiscal_context_recall')::float, (m->>'formal_success_at_k')::float - (m->>'floor_formal_success_at_k')::float, (m->>'formal_mrr')::float - (m->>'floor_formal_mrr')::float, (m->>'formal_context_recall')::float - (m->>'floor_formal_context_recall')::float) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.05
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "–",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Folga mínima · respostas",
+      "description": "Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT LEAST((m->>'fiscal_refusal_accuracy')::float - (m->>'floor_fiscal_refusal_accuracy')::float, (m->>'fiscal_citation_recall')::float - (m->>'floor_fiscal_citation_recall')::float, (m->>'formal_refusal_accuracy')::float - (m->>'floor_formal_refusal_accuracy')::float, (m->>'formal_citation_recall')::float - (m->>'floor_formal_citation_recall')::float) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.05
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "–",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Respostas indevidas (false answers)",
+      "description": "Resposta mostrada a pergunta sem resposta na lei. É o erro que as 3 barreiras existem para impedir: teto = 0, sem tolerância.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE((m->>'fiscal_false_answers')::float, 0) + COALESCE((m->>'formal_false_answers')::float, 0) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "–",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Checks de dados (última rodada)",
+      "description": "Health checks lc214 que não passaram na última rodada.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE status NOT IN ('pass','skipped')) AS falhas FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "noValue": "–",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 20,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "2 · Contrato dos dados (lc01 → lc04): cada passo, o que entregou",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Último estado de cada passo",
+      "description": "skipped (exit 99) = a saída já estava atualizada para esta entrada e versão de código; não é falha.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT s.step AS passo, s.status, s.started_at AS inicio, ROUND(s.duration_s::numeric) AS duracao_s, s.rows_in AS entrada, s.rows_out AS saida, (SELECT MAX(started_at) FROM audit.pipeline_step_runs x WHERE x.pipeline = 'lc214' AND x.step = s.step AND x.status = 'success') AS ultimo_sucesso FROM (SELECT DISTINCT ON (step) * FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' ORDER BY step, started_at DESC) s ORDER BY array_position(ARRAY['extract_source','parse_dispositivos','build_chunks','load_postgres', 'embed_chunks','golden_contract','evaluate_retrieval','generate_answers'], s.step)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "noValue": "–",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "✔ success",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "pass": {
+                        "text": "✔ pass",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "skipped": {
+                        "text": "⏭ skipped",
+                        "color": "text",
+                        "index": 2
+                      },
+                      "running": {
+                        "text": "▶ running",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "warn": {
+                        "text": "▲ warn",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "⏸ stale",
+                        "color": "orange",
+                        "index": 5
+                      },
+                      "error": {
+                        "text": "✖ error",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "fail": {
+                        "text": "✖ fail",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "failed": {
+                        "text": "✖ failed",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "table",
+      "title": "Health checks (última rodada)",
+      "description": "Paridade lei × serving, versão única, paridade chunks × vetores, mesma lei nos vetores, volume e frescor.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT check_name AS check, check_type AS tipo, status, severity AS severidade, ROUND(observed_value::numeric, 3) AS observado, LEFT(message, 70) AS mensagem FROM audit.data_quality_checks WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1) ORDER BY check_name"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "noValue": "–",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "✔ success",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "pass": {
+                        "text": "✔ pass",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "skipped": {
+                        "text": "⏭ skipped",
+                        "color": "text",
+                        "index": 2
+                      },
+                      "running": {
+                        "text": "▶ running",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "warn": {
+                        "text": "▲ warn",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "⏸ stale",
+                        "color": "orange",
+                        "index": 5
+                      },
+                      "error": {
+                        "text": "✖ error",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "fail": {
+                        "text": "✖ fail",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "failed": {
+                        "text": "✖ failed",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volumes: dispositivos, chunks",
+      "description": "Provisões parseadas (≥ 4.000 pelo check) e chunks. Uma emenda da lei move estes números; uma queda sem emenda é parser quebrado.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, step AS metric, rows_out::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step IN ('parse_dispositivos','build_chunks') AND status = 'success' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "points",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Roteamento e auto-citações (golden contract)",
+      "description": "Os rótulos do golden set ainda valem para a versão atual da lei? Roteamento exige 100%; auto-citações resolvidas ≥ 99%.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS inicio, status, rows_in AS casos, (metrics->>'routing_accuracy')::float AS roteamento, (metrics->>'self_ref_rate')::float AS auto_citacoes FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'golden_contract' AND status IN ('success','failed') AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 10"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "noValue": "–",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "✔ success",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "pass": {
+                        "text": "✔ pass",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "skipped": {
+                        "text": "⏭ skipped",
+                        "color": "text",
+                        "index": 2
+                      },
+                      "running": {
+                        "text": "▶ running",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "warn": {
+                        "text": "▲ warn",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "⏸ stale",
+                        "color": "orange",
+                        "index": 5
+                      },
+                      "error": {
+                        "text": "✖ error",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "fail": {
+                        "text": "✖ fail",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "failed": {
+                        "text": "✖ failed",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 13,
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "3 · Gate de retrieval (lc05): a resposta certa chega ao contexto?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Success@k",
+      "description": "Todas as provisões esperadas no top-k. Gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_success_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_success_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_success_at_k' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "MRR",
+      "description": "Posição do 1º acerto (média do inverso do rank). Gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_mrr' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_mrr')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_mrr' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "x": 8,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Context recall",
+      "description": "Provisões esperadas no contexto montado para o LLM (orçamento de tokens). Gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_context_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_context_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'floor_formal_context_recall' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 17,
+      "gridPos": {
+        "x": 16,
+        "y": 26,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Lacuna fiscal × formal (paired gap)",
+      "description": "Diferença de success@k entre a pergunta formal e a mesma pergunta em vocabulário fiscal. Mede o vocabulário que o retriever não cobre; informativo, não gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'gap' AS metric, (metrics->>'paired_gap')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'paired_gap' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Hit@k e Recall@k (informativos)",
+      "description": "Não gated: ajudam a explicar uma queda de success@k.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal hit_at_k' AS metric, (metrics->>'fiscal_hit_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_hit_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal recall_at_k' AS metric, (metrics->>'fiscal_recall_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'fiscal_recall_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal hit_at_k' AS metric, (metrics->>'formal_hit_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_hit_at_k' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal recall_at_k' AS metric, (metrics->>'formal_recall_at_k')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') AND metrics ? 'formal_recall_at_k' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 19,
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "4 · Gate de respostas (lc06): responde certo, recusa quando deve, cita o que existe?",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Refusal accuracy",
+      "description": "Acerto do veredito: responder quando há resposta e recusar quando não há. Gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_refusal_accuracy' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_refusal_accuracy')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_refusal_accuracy' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 21,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Citation recall",
+      "description": "Das respostas esperadas, quantas citam a provisão esperada. Gated.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal · piso' AS metric, (metrics->>'floor_fiscal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_fiscal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_citation_recall' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal · piso' AS metric, (metrics->>'floor_formal_citation_recall')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'floor_formal_citation_recall' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 22,
+      "gridPos": {
+        "x": 8,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Citation validity",
+      "description": "Citações que existem na lei E estavam no contexto mostrado. Abaixo de 100% = o modelo citou o que não viu.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal' AS metric, (metrics->>'fiscal_citation_validity')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_citation_validity' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal' AS metric, (metrics->>'formal_citation_validity')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_citation_validity' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 23,
+      "gridPos": {
+        "x": 16,
+        "y": 42,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Respostas indevidas e recusas indevidas",
+      "description": "false_answers: teto 0 (gate estrito). false_refusals: o custo de ser conservador: onde a qualidade está perdendo hoje.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal false_answers' AS metric, (metrics->>'fiscal_false_answers')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_false_answers' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal false_refusals' AS metric, (metrics->>'fiscal_false_refusals')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_false_refusals' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal false_answers' AS metric, (metrics->>'formal_false_answers')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_false_answers' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal false_refusals' AS metric, (metrics->>'formal_false_refusals')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_false_refusals' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 24,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Veredito do modelo × decisão final",
+      "description": "Quanto o modelo diz que é respondível, antes das barreiras. Muito baixo = o modelo recusa tudo.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal model_says_answerable' AS metric, (metrics->>'fiscal_model_says_answerable')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_model_says_answerable' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal model_says_answerable' AS metric, (metrics->>'formal_model_says_answerable')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_model_says_answerable' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 25,
+      "gridPos": {
+        "x": 12,
+        "y": 50,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "5 · Drift e custo",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 57,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Drift desde o baseline",
+      "description": "Registro, não gate. Veredito estável + texto reescrito = redação não reproduzível; flip de veredito = comportamento mudou.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'flips de veredito' AS metric, (metrics->>'verdict_flips')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'verdict_flips' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'textos reescritos' AS metric, (metrics->>'text_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'text_changed' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'citação esperada mudou' AS metric, (metrics->>'cited_expected_changed')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'cited_expected_changed' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 27,
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latência por frase (s)",
+      "description": "CPU, qwen2.5:3b, num_ctx 6144. Orçamento do DAG: 90 min para 11 frases.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'fiscal p50' AS metric, (metrics->>'fiscal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal p50' AS metric, (metrics->>'formal_latency_p50_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_p50_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'fiscal máx' AS metric, (metrics->>'fiscal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'fiscal_latency_max_s' AND $__timeFilter(started_at) UNION ALL SELECT started_at AS time, 'formal máx' AS metric, (metrics->>'formal_latency_max_s')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'formal_latency_max_s' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 28,
+      "gridPos": {
+        "x": 12,
+        "y": 58,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens por palavra (calibração do orçamento)",
+      "description": "O retriever estima 1,7 token/palavra; o lc06 mede com prompt_eval_count. Estimativa abaixo do medido = contexto estourando o num_ctx.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS time, 'medido' AS metric, (metrics->>'tokens_per_word')::float AS value FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') AND metrics ? 'tokens_per_word' AND $__timeFilter(started_at) ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "lineInterpolation": "linear",
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "axisSoftMin": 0
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "noValue": "no data yet",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* · piso"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.showPoints",
+                "value": "never"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 29,
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 12,
+        "h": 7
+      }
+    },
+    {
+      "type": "table",
+      "title": "Execuções do gate de respostas",
+      "description": "Inclui execuções skipped (--once: mesma impressão digital, nada a gerar).",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT started_at AS inicio, status, ROUND(duration_s::numeric) AS duracao_s, metrics->>'variant' AS variante, metrics->>'decision' AS regra, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_recusa, (metrics->>'formal_citation_recall')::float AS formal_cit_recall, (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS erro FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running' AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "noValue": "–",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "✔ success",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "pass": {
+                        "text": "✔ pass",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "skipped": {
+                        "text": "⏭ skipped",
+                        "color": "text",
+                        "index": 2
+                      },
+                      "running": {
+                        "text": "▶ running",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "warn": {
+                        "text": "▲ warn",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "⏸ stale",
+                        "color": "orange",
+                        "index": 5
+                      },
+                      "error": {
+                        "text": "✖ error",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "fail": {
+                        "text": "✖ fail",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "failed": {
+                        "text": "✖ failed",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 30,
+      "gridPos": {
+        "x": 12,
+        "y": 65,
+        "w": 12,
+        "h": 7
+      }
+    }
+  ]
+}
