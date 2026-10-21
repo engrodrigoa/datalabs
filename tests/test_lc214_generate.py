@@ -418,3 +418,98 @@ def test_the_progress_line_shows_the_models_words_and_the_dropped_citations():
     a, _ = _answer(reply="model_refuses")
     o = gen.outcome(GOLDEN["cases"][1], "fiscal", a)
     assert 'model: "O contexto não trata de multa por atraso de EFD."' in gen.progress_line(1, 1, o, a)
+
+
+# --------------------------------------------------------------------------- patch 1.3: who decides "não consta"
+@pytest.mark.parametrize("pre,flag,valid,rule,expected", [
+    ("truncated", True, True, "citations", (False, "truncated")),       # decided before the reply is read
+    (None, False, True, "model", (False, "model")),                    # barrier 2 obeyed
+    (None, False, True, "citations", (True, None)),                    # barrier 2 recorded, not obeyed
+    (None, False, False, "citations", (False, "no_valid_citation")),   # barrier 3 still holds
+    (None, True, False, "model", (False, "no_valid_citation")),
+    (None, True, True, "model", (True, None)),
+])
+def test_one_function_applies_barriers_2_and_3(pre, flag, valid, rule, expected):
+    assert gen.decide(pre, flag, valid, rule) == expected
+
+
+def test_an_unknown_decision_fails_before_any_generation(step_env):
+    lake, golden_path = step_env
+    llm = FakeLLM()
+    with pytest.raises(gen.GenError) as exc:
+        gen.run(None, encode, llm, lake, golden_path, decision="vibes")
+    assert exc.value.event == "lc214_gen_unknown_decision" and not llm.calls
+
+
+def test_a_cited_reply_the_model_calls_unanswerable_is_shown_only_under_citations():
+    kept, _ = _answer(reply="refuses_but_cites")
+    assert not kept.answerable and kept.refusal == "model"
+    shown = gen.answer("remessa para filial incide?", FakeStore(), encode, FakeLLM("refuses_but_cites"),
+                       decision="citations")
+    assert shown.answerable and shown.reply_answerable is False
+    assert shown.public() == {"answerable": True, "answer": "A filial está incluída no § 1º do art. 1º.",
+                              "citations": ["art. 1, § 1º"]}
+
+
+def _decided_run(decision):
+    llm = FakeLLM(by_question={"vendi para a filial, incide?": "refuses_but_cites",
+                               "remessa entre estabelecimentos?": "grounded", "multa da EFD?": "model_refuses"})
+    return gen.run_golden(GOLDEN, FakeStore(), encode, llm, progress=lambda _: None, decision=decision)
+
+
+def test_rescoring_with_the_rule_used_reproduces_the_live_decision():
+    for rule in gen.DECISIONS:
+        live = _decided_run(rule)
+        assert [gen.rescore(o, rule).answer["answerable"] for o in live] == [o.answer["answerable"] for o in live]
+        assert [gen.rescore(o, rule).cited_expected for o in live] == [o.cited_expected for o in live]
+
+
+def test_rescoring_under_the_other_rule_is_what_a_live_run_with_it_gives():
+    live_model, live_citations = _decided_run("model"), _decided_run("citations")
+    for g in gen.GROUPS:
+        assert gen.group_metrics([gen.rescore(o, "citations") for o in live_model], g) == \
+            gen.group_metrics(live_citations, g)
+
+
+def test_every_report_scores_both_rules_and_names_the_active_one():
+    outcomes = _decided_run("model")
+    rep = gen.report(outcomes, {"llm": {"variant": "baseline"}}, "k", decision="model")
+    assert rep["decision"] == "model" and set(rep["metrics_by_decision"]) == set(gen.DECISIONS)
+    assert rep["metrics"] == rep["metrics_by_decision"]["model"]
+    fiscal = rep["metrics_by_decision"]
+    assert fiscal["model"]["fiscal"]["false_refusals"] == 1 and fiscal["citations"]["fiscal"]["false_refusals"] == 0
+    assert fiscal["citations"]["fiscal"]["citation_recall"] == 1.0                  # it cited art. 1, § 1º
+    assert fiscal["model"]["fiscal"]["model_says_answerable"] == 0.0               # both fiscal replies said false
+    assert "under citations: fiscal refusal_acc 1.000" in gen.summary_line(rep | {"calibration": gen.calibration(
+        outcomes)})
+
+
+def test_rescore_reads_every_dev_report_without_the_llm(step_env, capsys):
+    lake, golden_path = step_env
+    golden_path.write_text(json.dumps({**GOLDEN, "cases": [{**c, "dev": True} for c in GOLDEN["cases"]]}),
+                           encoding="utf-8")
+    gen.run(None, encode, FakeLLM(by_question={"vendi para a filial, incide?": "refuses_but_cites"}), lake, golden_path,
+            dev=True)
+    lines = []
+    assert gen.run_rescore(lake, ["dev"], detail="citations", out=lines.append) == gen.EXIT_OK
+    text = "\n".join(lines)
+    assert "citations fiscal n=2" in text and "model     fiscal n=2" in text
+    assert 'ok  content-01/fiscal: ANSWER expected [art. 1, § 1º] cited [art. 1, § 1º]' in text
+    assert "model (False)" in text
+
+
+def test_rescore_says_when_there_is_nothing_to_read(step_env):
+    lake, _ = step_env
+    with pytest.raises(gen.GenError) as exc:
+        gen.run_rescore(lake, ["dev"])
+    assert exc.value.event == "lc214_gen_rescore_empty"
+
+
+def test_a_lake_lists_its_keys_and_skips_temporaries(tmp_path):
+    lake = LocalLake(str(tmp_path))
+    lake.put_json("silver/lc214/x/answers/dev/a.json", {})
+    lake.put_json("silver/lc214/x/answers/dev/b.json", {})
+    (tmp_path / "silver/lc214/x/answers/dev/c.json.tmp").write_text("{}")
+    assert lake.keys("silver/lc214/x/answers/dev") == ["silver/lc214/x/answers/dev/a.json",
+                                                       "silver/lc214/x/answers/dev/b.json"]
+    assert lake.keys("silver/nothing") == []

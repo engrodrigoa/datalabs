@@ -9,6 +9,8 @@ this step adds the G of RAG and three barriers that decide when the answer is "n
     [1] deterministic: an ambiguous/missing citation asks (clarify); a route with no context block refuses. The LLM
         is not called: there is nothing it could ground an answer on.
     [2] the model: the JSON carries `answerable`; the prompt asks for false when the context does not support it.
+        Obeyed only under the decision rule `model`; under `citations` it is recorded and barrier 3 decides alone
+        (the 1B said false in 33 of 33 dev replies: a constant is not a signal, ADR 0015 decision 12).
     [3] deterministic: every citation the model returns goes through the router's own citation parser
         (parse_citations + Index.resolve, the code that resolves 99.6% of the law's self-citations) and is checked
         against the provisions the context SHOWED (Block.dispositivo_ids):
@@ -49,6 +51,10 @@ Run in the lab (needs Postgres, the embedding model and the Ollama of profile `a
     python -m pipelines.rag.lc214.lc06_generate --golden --dev            the dev subset (prompt experiments)
     python -m pipelines.rag.lc214.lc06_generate --golden --dev --variant verdict_last     one experiment
 Prompt variants (LC214_GEN_VARIANT / --variant, composed with '+'): see VARIANTS. Each is part of the fingerprint.
+Decision rules (LC214_GEN_DECISION / --decision): see DECISIONS. NOT part of the fingerprint: every report scores
+both, and recorded replies are re-decided without the LLM:
+    python -m pipelines.rag.lc214.lc06_generate --rescore dev [--detail citations]
+    python -m pipelines.rag.lc214.lc06_generate --rescore s3://silver/lc214/<sha12>/answers/dev/<report>.json
 Exit codes: 0 generated | 99 report up to date, or no Ollama (optional layer) | 1 failure.
 """
 from __future__ import annotations
@@ -76,12 +82,13 @@ from pipelines.rag.lc214.router import Index, parse_citations, render_structure 
 
 logger = get_logger("lc06_generate")
 
-GEN_VERSION = "2"                    # bump when the report's definitions change (2: variants, raw replies)
+GEN_VERSION = "3"                    # bump when the report's definitions change (3: metrics under both decisions)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 SEED = int(os.getenv("LC214_GEN_SEED", "42"))
 TIMEOUT_S = int(os.getenv("LC214_GEN_TIMEOUT_S", "600"))       # per call: the first one loads the model on CPU
 VARIANT = os.getenv("LC214_GEN_VARIANT", "baseline")
+DECISION = os.getenv("LC214_GEN_DECISION", "model")
 GROUPS = ("fiscal", "formal")
 EXIT_OK, EXIT_FAILED, EXIT_SKIPPED = 0, 1, 99
 
@@ -145,6 +152,29 @@ VARIANTS = {
                     "writes the verdict first commits to it before reading its own answer)",
     "answer_default": "answering is the default, refusing the exception, stated last (H2)",
 }
+
+
+# Who decides "não consta" once the model has replied (barriers 2 and 3). Not part of the generation fingerprint: it
+# changes nothing the model wrote, only what is shown. Every report scores BOTH, so switching costs no LLM time.
+DECISIONS = {
+    "model": "barrier 2 trusts the model's `answerable`, then barrier 3 needs a valid citation",
+    "citations": "the model's `answerable` is recorded, not obeyed: a reply with a valid citation is shown (a small "
+                 "model's self-assessment is not calibrated; a citation can be checked)",
+}
+FINAL_REFUSALS = ("clarify", "no_context", "invalid_json", "truncated")     # decided before the reply is read
+
+
+def decide(pre_refusal: str | None, reply_answerable: bool | None, has_valid: bool, rule: str) -> tuple[bool, str | None]:
+    """(answerable, refusal). The single place barriers 2 and 3 are applied: live and in --rescore."""
+    if rule not in DECISIONS:
+        raise GenError("lc214_gen_unknown_decision", f"unknown decision {rule!r}: use one of {sorted(DECISIONS)}")
+    if pre_refusal in FINAL_REFUSALS:
+        return False, pre_refusal
+    if rule == "model" and not reply_answerable:
+        return False, "model"
+    if not has_valid:
+        return False, "no_valid_citation"
+    return True, None
 
 
 @dataclass(frozen=True)
@@ -357,8 +387,9 @@ def _seconds(ns) -> float | None:
 
 
 def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]], llm: LLM,
-           index: Index | None = None, k: int = rt.TOP_K, spec: PromptSpec | None = None) -> Answer:
-    spec = spec or prompt_spec()
+           index: Index | None = None, k: int = rt.TOP_K, spec: PromptSpec | None = None,
+           decision: str | None = None) -> Answer:
+    spec, decision = spec or prompt_spec(), decision or DECISION
     index = index or Index(store.ids())
     r = rt.retrieve(question, store, encode, index=index, k=k)
     a = Answer(question, r.plan.route, r.plan.intent, foreign=list(r.plan.foreign),
@@ -398,13 +429,9 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     a.reply_answerable, a.reply_answer = reply["answerable"], reply["answer"]
     shown = set(a.context_ids)
     a.citations = [check_citation(c, index, shown) for c in reply["citations"]]
-    if not reply["answerable"]:                                # barrier 2: the model says the context is not enough
-        a.refusal = "model"
-        return a
-    if not a.valid_ids:                                        # barrier 3: nothing it says points at the context
-        a.refusal = "no_valid_citation"
-        return a
-    a.answerable, a.answer = True, reply["answer"]
+    a.answerable, a.refusal = decide(None, reply["answerable"], bool(a.valid_ids), decision)   # barriers 2 and 3
+    if a.answerable:
+        a.answer = reply["answer"]
     return a
 
 
@@ -475,14 +502,15 @@ def _short(text: str, n: int) -> str:
 
 
 def run_golden(golden: dict, store: rt.Store, encode, llm: LLM, cases: set[str] | None = None,
-               progress: Callable[[str], None] = print, spec: PromptSpec | None = None) -> list[Outcome]:
+               progress: Callable[[str], None] = print, spec: PromptSpec | None = None,
+               decision: str | None = None) -> list[Outcome]:
     k = golden.get("k", 5)
     index = Index(store.ids())
     todo = [(c, p, q) for c in golden.get("cases") or [] if generated(c) and (not cases or c["id"] in cases)
             for p, q in (c.get("questions") or {}).items()]
     out = []
     for n, (case, phrasing, question) in enumerate(todo, 1):
-        a = answer(str(question), store, encode, llm, index=index, k=k, spec=spec)
+        a = answer(str(question), store, encode, llm, index=index, k=k, spec=spec, decision=decision)
         o = outcome(case, phrasing, a)
         out.append(o)
         progress(progress_line(n, len(todo), o, a))
@@ -493,6 +521,26 @@ def run_golden(golden: dict, store: rt.Store, encode, llm: LLM, cases: set[str] 
 def _mean(values) -> float | None:
     values = list(values)
     return round(sum(values) / len(values), 4) if values else None
+
+
+def rescore(o: Outcome, rule: str) -> Outcome:
+    """The same reply under another decision rule: answerable, refusal, shown text and cited_expected recomputed from
+    what the report recorded (the pre-decision refusal, the model's flag, the citations' statuses)."""
+    a = dict(o.answer)
+    if not a.get("llm_called"):                                # sql / clarify / no_context: no reply to re-decide
+        return o
+    pre = a.get("refusal") if a.get("refusal") in FINAL_REFUSALS else None
+    valid = sorted({p for c in a.get("citations") or [] if c["status"] == "valid" for p in c["ids"]})
+    a["answerable"], a["refusal"] = decide(pre, a.get("reply_answerable"), bool(valid), rule)
+    a["answer"] = a.get("reply_answer") if a["answerable"] else REFUSAL
+    cited = valid if a["answerable"] else []
+    return Outcome(o.case, o.type, o.behavior, o.phrasing, o.expected, o.should_refuse, o.in_context,
+                   [p for p in o.expected if any(same_branch(p, c) for c in cited)], a)
+
+
+def outcome_from_dict(d: dict) -> Outcome:
+    names = Outcome.__dataclass_fields__
+    return Outcome(**{k: v for k, v in d.items() if k in names})
 
 
 def group_metrics(outcomes: list[Outcome], phrasing: str) -> dict:
@@ -514,6 +562,8 @@ def group_metrics(outcomes: list[Outcome], phrasing: str) -> dict:
         "citation_recall": _mean(bool(o.cited_expected) for o in answerable),
         "citation_recall_in_context": _mean(bool(o.cited_expected) for o in in_ctx),
         "json_valid": _mean(o.answer["json_valid"] for o in llm),
+        # how often the model itself says it can answer: a value stuck at 0 or 1 is not a signal (ADR 0015, dev run 2)
+        "model_says_answerable": _mean(bool(o.answer.get("reply_answerable")) for o in llm if o.answer["json_valid"]),
         "refusals": dict(Counter(o.answer["refusal"] for o in group if o.answer["refusal"])),
         "latency_p50_s": round(statistics.median(lat), 2) if lat else None,
         "latency_max_s": lat[-1] if lat else None,
@@ -550,13 +600,21 @@ def answers_digest(outcomes: list[Outcome]) -> str:
     return hashlib.md5(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
 
 
-def report(outcomes: list[Outcome], fp: dict, key: str, subset: list[str] | None = None) -> dict:
+def metrics_by_decision(outcomes: list[Outcome]) -> dict:
+    return {rule: {g: group_metrics([rescore(o, rule) for o in outcomes], g) for g in GROUPS} for rule in DECISIONS}
+
+
+def report(outcomes: list[Outcome], fp: dict, key: str, subset: list[str] | None = None,
+           decision: str | None = None) -> dict:
+    decision = decision or DECISION
+    by_decision = metrics_by_decision(outcomes)
     return {
         "gen_version": GEN_VERSION, "fingerprint_key": key,
-        "variant": (fp.get("llm") or {}).get("variant"), "subset": subset,
+        "variant": (fp.get("llm") or {}).get("variant"), "subset": subset, "decision": decision,
         "measured_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "fingerprint": fp, "answers_digest": answers_digest(outcomes),
-        "metrics": {g: group_metrics(outcomes, g) for g in GROUPS},
+        "metrics": by_decision[decision],
+        "metrics_by_decision": by_decision,
         "calibration": calibration(outcomes),
         "outcomes": [asdict(o) | {"refused": o.refused, "refusal_correct": o.refusal_correct} for o in outcomes],
     }
@@ -574,7 +632,13 @@ def summary_line(rep: dict) -> str:
     parts.append(f"tokens/word {c['measured_median']} measured vs {c['estimate_tokens_per_word']} estimated"
                  + (f" ({c['cache_suspect']} cache-suspect)" if c["cache_suspect"] else "")
                  + f"; prompt {c['prompt_eval_rate_median']} tok/s, answer {c['eval_rate_median']} tok/s")
-    return f"[{rep.get('variant') or 'baseline'}] " + " | ".join(parts) + f" | digest {rep['answers_digest']}"
+    other = [f"{rule}: " + ", ".join(f"{g} refusal_acc {fmt(m[g]['refusal_accuracy'])} cit_recall "
+                                     f"{fmt(m[g]['citation_recall'])}" for g in m)
+             for rule, m in (rep.get("metrics_by_decision") or {}).items() if rule != rep.get("decision")]
+    says = "/".join(fmt(m.get("model_says_answerable")) for m in rep["metrics"].values())
+    return (f"[{rep.get('variant') or 'baseline'}, decision {rep.get('decision')}] " + " | ".join(parts)
+            + f" | model says answerable {says}" + (f" | under {'; '.join(other)}" if other else "")
+            + f" | digest {rep['answers_digest']}")
 
 
 # --------------------------------------------------------------------------- what is being generated
@@ -595,9 +659,10 @@ def fingerprint(cur, llm: LLM, golden_path: Path, k: int, spec: PromptSpec | Non
 
 # --------------------------------------------------------------------------- the step
 def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases: set[str] | None = None,
-        force: bool = False, dev: bool = False, variant: str | None = None) -> int:
+        force: bool = False, dev: bool = False, variant: str | None = None, decision: str | None = None) -> int:
     step = current_step()
-    spec = prompt_spec(variant)
+    spec, decision = prompt_spec(variant), decision or DECISION
+    decide(None, True, True, decision)                         # an unknown rule fails before an hour of generation
     golden = load_golden(golden_path)
     extra = set(cases or ())
     if dev:
@@ -630,11 +695,12 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
             return EXIT_SKIPPED
 
     log_event(logger, "lc214_gen_started", f"model {llm.model}@{fp['llm']['digest']} variant {spec.name} prompt "
-              f"{fp['llm']['prompt_version']} fingerprint {key}" + (f" subset {len(cases)} cases" if cases else ""),
+              f"{fp['llm']['prompt_version']} decision {decision} fingerprint {key}"
+              + (f" subset {len(cases)} cases" if cases else ""),
               fingerprint=key, model=llm.model, variant=spec.name)
     t0 = time.monotonic()
-    outcomes = run_golden(golden, rt.PgStore(cur), encode, llm, cases, spec=spec)
-    rep = report(outcomes, fp, key, sorted(cases) if cases else None)
+    outcomes = run_golden(golden, rt.PgStore(cur), encode, llm, cases, spec=spec, decision=decision)
+    rep = report(outcomes, fp, key, sorted(cases) if cases else None, decision)
     line = summary_line(rep)
     log_event(logger, "lc214_gen_measured", line, fingerprint=key, digest=rep["answers_digest"], variant=spec.name,
               duration_s=round(time.monotonic() - t0, 1),
@@ -643,12 +709,86 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
     for g in GROUPS:
         step.set(**{f"{g}_{m}": v for m, v in rep["metrics"][g].items() if isinstance(v, (int, float))})
     step.set(tokens_per_word=rep["calibration"]["measured_median"])
-    step.label(variant=spec.name)
+    step.label(variant=spec.name, decision=decision)
     step.add(rows_in=len(outcomes), rows_out=sum(not o.refused for o in outcomes))
 
     if report_key:
         lake.put_json(report_key, rep)
         log_event(logger, "lc214_gen_report_written", lake.url(report_key), fingerprint=key)
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- re-deciding recorded replies
+def rescore_table(rep: dict) -> list[str]:
+    """A report's replies under every decision rule: what would have been shown, without calling the LLM again."""
+    outcomes = [outcome_from_dict(d) for d in rep["outcomes"]]
+
+    def fmt(v):
+        return "-" if v is None else f"{v:.3f}"
+
+    head = (f"{rep.get('variant') or 'baseline'} | fingerprint {rep.get('fingerprint_key')} | "
+            f"{len(outcomes)} phrasings | measured {rep.get('measured_at')} | digest {rep.get('answers_digest')}")
+    lines = [head]
+    for rule in DECISIONS:
+        for g in GROUPS:
+            m = group_metrics([rescore(o, rule) for o in outcomes], g)
+            if not m["n"]:
+                continue
+            lines.append(f"  {rule:<9} {g:<6} n={m['n']:<2} refusal_acc {fmt(m['refusal_accuracy'])} "
+                         f"(false refusals {m['false_refusals']}, false answers {m['false_answers']}) "
+                         f"cit_validity {fmt(m['citation_validity'])} cit_recall {fmt(m['citation_recall'])} "
+                         f"(in context {fmt(m['citation_recall_in_context'])}) model says answerable "
+                         f"{fmt(m['model_says_answerable'])}")
+    return lines
+
+
+def rescore_detail(rep: dict, rule: str) -> list[str]:
+    out = []
+    for d in rep["outcomes"]:
+        o = rescore(outcome_from_dict(d), rule)
+        a = o.answer
+        verdict = "ANSWER" if a["answerable"] else f"REFUSE ({a['refusal']})"
+        ok = "ok " if o.refusal_correct else "BAD"
+        valid = sorted({p for c in a.get("citations") or [] if c["status"] == "valid" for p in c["ids"]})
+        out.append(f"  {ok} {o.case}/{o.phrasing}: {verdict} expected {_ids(o.expected)} cited {_ids(o.cited_expected)}"
+                   f" valid {_ids(valid)} (in context {len(o.in_context)}/{len(o.expected)}) | "
+                   f'model ({a.get("reply_answerable")}): "{_short(a.get("reply_answer") or "", 160)}"')
+    return out
+
+
+def _ids(ids: list[str]) -> str:
+    return "[" + ", ".join(full_label(p) for p in ids) + "]" if ids else "[]"
+
+
+def report_keys(lake, refs: list[str]) -> list[str]:
+    """A ref is a lake key, its s3:// / file:// URL, or `dev` (every dev report of the current law version)."""
+    from pipelines.rag.lc214.lake import k_manifest, k_silver
+
+    keys = []
+    for ref in refs:
+        if ref == "dev":
+            prefix = k_silver(lake.get_json(k_manifest())["current"], "answers/dev")
+            keys += [k for k in lake.keys(prefix) if k.endswith(".json")]
+        elif ref.startswith("s3://"):
+            keys.append(ref.removeprefix("s3://"))
+        elif ref.startswith("file://") and hasattr(lake, "root"):
+            keys.append("/".join(os.path.relpath(ref.removeprefix("file://"), lake.root).split(os.sep)))
+        else:
+            keys.append(ref)
+    return keys
+
+
+def run_rescore(lake, refs: list[str], detail: str | None = None, out: Callable[[str], None] = print) -> int:
+    keys = report_keys(lake, refs)
+    if not keys:
+        raise GenError("lc214_gen_rescore_empty", f"no report found for {refs}")
+    for key in keys:
+        rep = lake.get_json(key)
+        if not rep or "outcomes" not in rep:
+            raise GenError("lc214_gen_rescore_not_a_report", f"{key} is not an lc06 report")
+        out("\n".join(rescore_table(rep)))
+        if detail:
+            out("\n".join(rescore_detail(rep, detail)))
     return EXIT_OK
 
 
@@ -670,13 +810,27 @@ def main(argv=None) -> int:
                     "answers/dev/, never skipped)")
     ap.add_argument("--variant", default=None, help=f"prompt variant (LC214_GEN_VARIANT, default {VARIANT}): "
                     f"{', '.join(VARIANTS)}, composed with '+'")
+    ap.add_argument("--decision", default=None, help=f"who decides 'não consta' after the reply (LC214_GEN_DECISION, "
+                    f"default {DECISION}): {', '.join(DECISIONS)}")
+    ap.add_argument("--rescore", nargs="+", metavar="REPORT", help="re-decide recorded replies under every decision "
+                    "rule, without the LLM: lake keys, s3:// URLs, or 'dev' (every dev report of the current law)")
+    ap.add_argument("--detail", default=None, choices=sorted(DECISIONS), help="with --rescore: one line per phrasing "
+                    "under this rule")
     ap.add_argument("--force", action="store_true", help="generate even when the report for this fingerprint exists")
     ap.add_argument("--context", action="store_true", help="single question: also print the context sent")
     ap.add_argument("--lake", default=None, help="'s3' (default, LC214_LAKE), file:///dir, or 'none' (no report)")
     ap.add_argument("--golden-path", default=str(GOLDEN_PATH))
     args = ap.parse_args(argv)
+    if args.rescore:                                           # read-only: no Postgres, no models, no Ollama
+        from pipelines.rag.lc214.lake import LakeError, lake_from_env
+        try:
+            return run_rescore(lake_from_env(None if args.lake in (None, "none") else args.lake), args.rescore,
+                               args.detail)
+        except (GenError, LakeError) as exc:
+            log_event(logger, exc.event, str(exc), level=40)
+            return EXIT_FAILED
     if bool(args.question) == args.golden:
-        ap.error("give a question or --golden")
+        ap.error("give a question or --golden (or --rescore)")
     try:
         from pipelines.commons.ai.embeddings import encode_query, load_model
         from pipelines.rag.lc214.lake import LakeError, lake_from_env
@@ -691,14 +845,15 @@ def main(argv=None) -> int:
                 if args.golden:
                     lake = None if args.lake == "none" else lake_from_env(args.lake)
                     return run(cur, encode, llm, lake, Path(args.golden_path), set(args.case), args.force, args.dev,
-                               args.variant)
-                a = answer(args.question, rt.PgStore(cur), encode, llm, spec=prompt_spec(args.variant))
+                               args.variant, args.decision)
+                a = answer(args.question, rt.PgStore(cur), encode, llm, spec=prompt_spec(args.variant),
+                           decision=args.decision)
                 if args.context:
                     print(rt.retrieve(args.question, rt.PgStore(cur), encode).context() + "\n")
         finally:
             conn.close()
         print(json.dumps(a.public(), ensure_ascii=False, indent=2))
-        print(f"variant={prompt_spec(args.variant).name} route={a.route} refusal={a.refusal} blocks={a.blocks} citations="
+        print(f"variant={prompt_spec(args.variant).name} decision={args.decision or DECISION} route={a.route} refusal={a.refusal} blocks={a.blocks} citations="
               f"{[(c['text'], c['status']) for c in a.citations]}\n"
               f"latency={a.latency_s}s (load {a.load_s}s, prompt {a.prompt_eval_s}s at {a.prompt_eval_rate} tok/s, "
               f"answer {a.eval_s}s) prompt_eval_count={a.prompt_eval_count} (estimate {a.prompt_tokens_estimate}) "

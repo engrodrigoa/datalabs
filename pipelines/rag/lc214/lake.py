@@ -80,6 +80,10 @@ class Lake:
     def exists(self, key: str) -> bool:
         raise NotImplementedError
 
+    def keys(self, prefix: str) -> list[str]:
+        """Every key under `prefix` (sorted): reading a folder of reports, e.g. answers/dev/."""
+        raise NotImplementedError
+
     def url(self, key: str) -> str:
         raise NotImplementedError
 
@@ -133,6 +137,18 @@ class LocalLake(Lake):
     def exists(self, key):
         return os.path.exists(self._path(key))
 
+    def keys(self, prefix):
+        base = self._path(prefix)
+        if not os.path.isdir(base):
+            return []
+        out = []
+        for dirpath, _, files in os.walk(base):
+            for f in files:
+                if not f.endswith(".tmp"):                          # write-then-rename temporaries
+                    rel = os.path.relpath(os.path.join(dirpath, f), self.root)
+                    out.append("/".join(rel.split(os.sep)))
+        return sorted(out)
+
     def url(self, key):
         return "file://" + self._path(key)
 
@@ -179,6 +195,13 @@ class S3Lake(Lake):
             return True
         except LakeMissing:
             return False
+
+    def keys(self, prefix):
+        bucket, path = self._split(prefix.rstrip("/") + "/")
+        out = []
+        for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=path):
+            out += [f"{bucket}/{o['Key']}" for o in page.get("Contents") or []]
+        return sorted(out)
 
     def url(self, key):
         return f"s3://{key}"

@@ -114,6 +114,28 @@ tokens per word.
     default in a commit of its own, after the full run confirms it. Failing both H1 and H2 means `llama3.2:1b`
     cannot do this task. Then the LLM comparison stops being a later project and becomes the next step.
 
+**H1 and H2 (2026-10-20, dev subset, 11 phrasings each).** Neither moved refusal accuracy (fiscal 0.286, formal
+0.000, like the baseline). Both changed what the model wrote. `verdict_last` wrote real sentences (content-02
+explains adquirente and destinatário) but hardly cited, and still ended in `false`. `answer_default` cited valid
+provisions (fiscal citation validity 0.50 → 0.77; content-02/fiscal: 3 valid citations, with 3 of 3 expected in the
+context) and still said `false`. Across 33 replies under 3 prompts, `answerable` was `false` every time. Warning
+signs about the model itself: under `verdict_last` it invented a DIFAL calculation for `no_answer-02` (no citation,
+so barrier 3 would have stopped it), it wrote full provision texts and "Capítulo III" into the citation fields,
+and two replies looped into `num_predict`.
+
+12. **The decision is separate from the generation; a constant flag does not decide.** `LC214_GEN_DECISION`:
+    `model` (barrier 2 obeys `answerable`, then barrier 3) or `citations` (`answerable` is recorded but not obeyed,
+    and a reply with at least one valid citation is shown). One function (`decide`) applies the rule, live and
+    offline. The rule changes nothing the model writes, so it is not in the generation fingerprint. Every report
+    scores BOTH rules (`metrics_by_decision`), plus `model_says_answerable`, the share of replies where the model
+    claims it can answer (a value stuck at 0 or 1 is not a signal). `--rescore <reports | dev>` re-decides recorded
+    replies with no LLM, Postgres or embedding model: the experiments already paid for answer the question. The
+    principle: with a small model, trust what can be checked (a citation resolved against the context) over what
+    the model says about itself. The risk it brings is a cited reply that does not answer the question, or answers
+    it wrongly. `citation_recall` (the EXPECTED provision cited) measures the first part. Only a human read
+    measures the second, and no metric here replaces it. The default stays `model` until the rescore and that read
+    agree. Then `citations` becomes the default in a commit of its own.
+
 **Consequences.** The RAG answers end to end: question → router → retrieval → cited JSON or "não consta".
 Every refusal names its barrier. The first numbers will be low (1B model), and that is accepted: the gate of
 step 6b catches drops, not levels, like lc05. Next: (6b) run in the lab, verify the digest is stable across two

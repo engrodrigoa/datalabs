@@ -118,6 +118,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   1 formal cases. CPU-bound: WSL needs every core (`.wslconfig processors`). Iterate prompts on `--golden --dev`.
   Prompt changes are named variants (`LC214_GEN_VARIANT`: baseline | verdict_last | answer_default, `+` composes),
   part of the fingerprint; dev runs land in `answers/dev/`. First dev run: refusal collapse (11/11 refused).
+  The decision rule (`LC214_GEN_DECISION`: model | citations) is NOT in the fingerprint: every report scores both,
+  `lc06_generate --rescore dev [--detail citations]` re-decides recorded replies without the LLM. The 1B's
+  `answerable` was false in 33/33 dev replies (uncalibrated): prefer the checkable citation over the model's flag.
 
 ## Development rules
 
