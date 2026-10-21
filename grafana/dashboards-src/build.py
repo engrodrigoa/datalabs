@@ -882,7 +882,7 @@ def rag_lc214() -> Board:
 
     def last(step_filter, expr):
         """expr over the metrics of the latest finished run of a gate (NULL until a run records it)."""
-        return (f"SELECT {expr} FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs "
+        return (f"SELECT {expr} FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs "
                 f"WHERE {step_filter} ORDER BY started_at DESC LIMIT 1) l")
 
     def f(key):
@@ -922,18 +922,24 @@ def rag_lc214() -> Board:
 
     b.row("1 · Veredito da última execução")
     # a stat panel does not show a text field: the verdict is a number with value mappings
+    # 1 = passed the gate; 0 = the gate (or the step) failed; 2 = killed from outside (SIGTERM/SIGKILL: a stop, a
+    # restart, the OOM killer): says nothing about quality, so it must not read as a failed gate
     verdict = [{"type": "value", "options": {"1": {"text": "✔ de pé", "color": GOOD, "index": 0},
-                                              "0": {"text": "✖ reprovou", "color": CRITICAL, "index": 1}}},
+                                              "0": {"text": "✖ reprovou", "color": CRITICAL, "index": 1},
+                                              "2": {"text": "⏸ interrompido", "color": SERIOUS, "index": 2}}},
                {"type": "special", "options": {"match": "null", "result": {"text": "sem execução", "color": NEUTRAL,
-                                                                           "index": 2}}}]
+                                                                           "index": 3}}}]
+    verdict_sql = "CASE WHEN status = 'success' THEN 1 WHEN exit_code IN (137, 143) THEN 2 ELSE 0 END"
     waiting = [{"type": "special", "options": {"match": "null", "result": {
         "text": "aguardando 1ª execução", "color": NEUTRAL, "index": 0}}}]
-    b.add(stat("Gate de retrieval (lc05)", last(ev, "(status = 'success')::int"), mappings=verdict,
+    b.add(stat("Gate de retrieval (lc05)", last(ev, verdict_sql), mappings=verdict,
                thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
-               desc="Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão."), 4, 4)
-    b.add(stat("Gate de respostas (lc06)", last(gen, "(status = 'success')::int"), mappings=verdict,
+               desc="Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão ou erro do "
+                    "passo; interrompido = processo morto de fora (SIGTERM), sem relação com a qualidade."), 4, 4)
+    b.add(stat("Gate de respostas (lc06)", last(gen, verdict_sql), mappings=verdict,
                thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
-               desc="Último resultado do generate_answers (subconjunto dev, ADR 0015)."), 4, 4)
+               desc="Último resultado do generate_answers (subconjunto dev, ADR 0015). Interrompido = processo morto "
+                    "de fora (SIGTERM): rode de novo, a qualidade não foi medida."), 4, 4)
     steps_margin = [{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 0}]
     ret_keys = [f"{g}_{m}" for g in ("fiscal", "formal") for m in ("success_at_k", "mrr", "context_recall")]
     b.add(stat("Folga mínima · retrieval", last(ev, margin(ret_keys)), unit="percentunit", decimals=1,

@@ -79,7 +79,7 @@
     {
       "type": "stat",
       "title": "Gate de retrieval (lc05)",
-      "description": "Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão.",
+      "description": "Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão ou erro do passo; interrompido = processo morto de fora (SIGTERM), sem relação com a qualidade.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -94,7 +94,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (status = 'success')::int FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT CASE WHEN status = 'success' THEN 1 WHEN exit_code IN (137, 143) THEN 2 ELSE 0 END FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -129,6 +129,11 @@
                   "text": "✖ reprovou",
                   "color": "red",
                   "index": 1
+                },
+                "2": {
+                  "text": "⏸ interrompido",
+                  "color": "orange",
+                  "index": 2
                 }
               }
             },
@@ -139,7 +144,7 @@
                 "result": {
                   "text": "sem execução",
                   "color": "text",
-                  "index": 2
+                  "index": 3
                 }
               }
             }
@@ -175,7 +180,7 @@
     {
       "type": "stat",
       "title": "Gate de respostas (lc06)",
-      "description": "Último resultado do generate_answers (subconjunto dev, ADR 0015).",
+      "description": "Último resultado do generate_answers (subconjunto dev, ADR 0015). Interrompido = processo morto de fora (SIGTERM): rode de novo, a qualidade não foi medida.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -190,7 +195,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT (status = 'success')::int FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT CASE WHEN status = 'success' THEN 1 WHEN exit_code IN (137, 143) THEN 2 ELSE 0 END FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -225,6 +230,11 @@
                   "text": "✖ reprovou",
                   "color": "red",
                   "index": 1
+                },
+                "2": {
+                  "text": "⏸ interrompido",
+                  "color": "orange",
+                  "index": 2
                 }
               }
             },
@@ -235,7 +245,7 @@
                 "result": {
                   "text": "sem execução",
                   "color": "text",
-                  "index": 2
+                  "index": 3
                 }
               }
             }
@@ -286,7 +296,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT LEAST((m->>'fiscal_success_at_k')::float - (m->>'floor_fiscal_success_at_k')::float, (m->>'fiscal_mrr')::float - (m->>'floor_fiscal_mrr')::float, (m->>'fiscal_context_recall')::float - (m->>'floor_fiscal_context_recall')::float, (m->>'formal_success_at_k')::float - (m->>'floor_formal_success_at_k')::float, (m->>'formal_mrr')::float - (m->>'floor_formal_mrr')::float, (m->>'formal_context_recall')::float - (m->>'floor_formal_context_recall')::float) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT LEAST((m->>'fiscal_success_at_k')::float - (m->>'floor_fiscal_success_at_k')::float, (m->>'fiscal_mrr')::float - (m->>'floor_fiscal_mrr')::float, (m->>'fiscal_context_recall')::float - (m->>'floor_fiscal_context_recall')::float, (m->>'formal_success_at_k')::float - (m->>'floor_formal_success_at_k')::float, (m->>'formal_mrr')::float - (m->>'floor_formal_mrr')::float, (m->>'formal_context_recall')::float - (m->>'floor_formal_context_recall')::float) FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'evaluate_retrieval' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -368,7 +378,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT LEAST((m->>'fiscal_refusal_accuracy')::float - (m->>'floor_fiscal_refusal_accuracy')::float, (m->>'fiscal_citation_recall')::float - (m->>'floor_fiscal_citation_recall')::float, (m->>'formal_refusal_accuracy')::float - (m->>'floor_formal_refusal_accuracy')::float, (m->>'formal_citation_recall')::float - (m->>'floor_formal_citation_recall')::float) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT LEAST((m->>'fiscal_refusal_accuracy')::float - (m->>'floor_fiscal_refusal_accuracy')::float, (m->>'fiscal_citation_recall')::float - (m->>'floor_fiscal_citation_recall')::float, (m->>'formal_refusal_accuracy')::float - (m->>'floor_formal_refusal_accuracy')::float, (m->>'formal_citation_recall')::float - (m->>'floor_formal_citation_recall')::float) FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
@@ -450,7 +460,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE((m->>'fiscal_false_answers')::float, 0) + COALESCE((m->>'formal_false_answers')::float, 0) FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
+          "rawSql": "SELECT COALESCE((m->>'fiscal_false_answers')::float, 0) + COALESCE((m->>'formal_false_answers')::float, 0) FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status IN ('success','failed') ORDER BY started_at DESC LIMIT 1) l"
         }
       ],
       "fieldConfig": {
