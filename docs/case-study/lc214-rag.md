@@ -237,8 +237,11 @@ especificamente..."), não **confiabilidade** (nada mostrado foi inventado).
 - **Drift contra a baseline: 0 flips, 0 mudanças de citação esperada, 0/11 textos reescritos.** Esta execução
   reproduziu a baseline **byte a byte**. Na noite anterior, dois runs concorrentes tinham sido iniciados por engano e
   mortos: o run seguinte reescreveu 11/11 textos. A hipótese é contaminação do Ollama por requisições paralelas
-  (cache/lote), não indeterminismo do modelo. **Não está provada** (uma observação de cada lado); por isso o gate é
-  tolerante e o drift fica registrado.
+  (cache/lote), não indeterminismo do modelo. Uma terceira execução isolada (23:32 UTC, a primeira lida no board)
+  também veio com 0 flips e 0/11 reescritos, e a folga do gate de respostas (14,3% = 1 de 7 frases fiscais) foi
+  **prevista antes da execução** a partir da baseline. Três execuções isoladas concordam; a única divergente veio
+  depois de concorrência. Ainda **não é prova** da causa: o teste que provaria é deliberado (duas execuções
+  concorrentes, depois uma isolada). Por isso o gate continua tolerante e o drift registrado.
 
 ## 6. Observabilidade: onde cada pergunta é respondida
 
