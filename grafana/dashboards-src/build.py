@@ -906,13 +906,20 @@ def rag_lc214() -> Board:
     def f2(key):
         return f"(metrics->>'{key}')::float"
 
-    def ts(title, pairs, step_filter, desc, unit="percentunit"):
+    def ts(title, pairs, step_filter, desc, unit="percentunit", soft_max=None):
+        # Runs are weekly and sparse: points always shown (two runs minutes apart draw a zero-length line), no
+        # fill (a fill under one point is a vertical stripe to zero). Floors keep their points too, smaller:
+        # a floor that is not visible cannot answer "is the gate standing?".
         p = timeseries(title, [series(step_filter, pairs)], unit=unit, desc=desc, min_zero=True,
                        overrides=[{"matcher": {"id": "byRegexp", "options": ".* · floor"},
                                    "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
-                                                  {"id": "custom.showPoints", "value": "never"},
-                                                  {"id": "custom.fillOpacity", "value": 0}]}])
-        p["fieldConfig"]["defaults"]["custom"]["showPoints"] = "always"
+                                                  {"id": "custom.pointSize", "value": 5}]}])
+        custom = p["fieldConfig"]["defaults"]["custom"]
+        custom.update(showPoints="always", fillOpacity=0)
+        if soft_max is None and unit == "percentunit":
+            soft_max = 1
+        if soft_max is not None:
+            custom["axisSoftMax"] = soft_max
         return p
 
     b.add(text("**How to read.** Solid line = the run's metric; dashed = the gate floor "
@@ -973,7 +980,9 @@ def rag_lc214() -> Board:
               ORDER BY step, started_at DESC) s
         ORDER BY array_position(ARRAY['extract_source','parse_dispositivos','build_chunks','load_postgres',
                                       'embed_chunks','golden_contract','evaluate_retrieval','generate_answers'], s.step)""",
-        desc="skipped (exit 99) = the output was already up to date for this input and code version; not a failure."), 12, 9)
+        desc="skipped (exit 99) = the output was already up to date for this input and code version; not a failure.",
+        overrides=[{"matcher": {"id": "byName", "options": c}, "properties": [{"id": "custom.minWidth", "value": 150}]}
+                   for c in ("started", "last_success")]), 12, 9)
     b.add(table("Health checks (latest round)", """
         SELECT check_name AS check, check_type AS type, status, severity AS severity,
                ROUND(observed_value::numeric, 3) AS observed, LEFT(message, 70) AS message
@@ -1036,7 +1045,7 @@ def rag_lc214() -> Board:
              [("verdict flips", "verdict_flips", None), ("texts reworded", "text_changed", None),
               ("expected citation changed", "cited_expected_changed", None)], gen,
              "A record, not a gate. Stable verdict + reworded text = non-reproducible wording; "
-             "a verdict flip = behaviour changed.", unit="none"), 12, 7)
+             "a verdict flip = behaviour changed.", unit="none", soft_max=11), 12, 7)
     b.add(ts("Latency per phrasing (s)",
              [(f"{g} p50", f"{g}_latency_p50_s", None) for g in ("fiscal", "formal")]
              + [(f"{g} max", f"{g}_latency_max_s", None) for g in ("fiscal", "formal")], gen,
@@ -1048,10 +1057,11 @@ def rag_lc214() -> Board:
         SELECT started_at AS started, status, ROUND(duration_s::numeric) AS duration_s, metrics->>'variant' AS variant,
                metrics->>'decision' AS rule, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_refusal_acc,
                (metrics->>'formal_citation_recall')::float AS formal_cit_recall,
-               (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS error
+               (metrics->>'verdict_flips')::int AS flips, exit_code, LEFT(error_message, 60) AS error
         FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running'
           AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20""",
-        desc="Includes skipped runs (--once: same fingerprint, nothing to generate)."), 12, 7)
+        desc="Includes skipped runs (--once: same fingerprint, nothing to generate). exit_code 143 = killed from "
+             "outside (interrupted), 1 = the gate or the step failed."), 12, 7)
     return b
 
 

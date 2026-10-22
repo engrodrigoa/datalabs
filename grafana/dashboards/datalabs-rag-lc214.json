@@ -718,6 +718,30 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "started"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_success"
+            },
+            "properties": [
+              {
+                "id": "custom.minWidth",
+                "value": 150
+              }
+            ]
           }
         ]
       },
@@ -1147,7 +1171,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1159,7 +1183,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1194,12 +1219,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1251,7 +1272,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1263,7 +1284,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1298,12 +1320,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1355,7 +1373,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1367,7 +1385,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1402,12 +1421,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1459,7 +1474,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1471,7 +1486,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1506,12 +1522,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1563,7 +1575,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1575,7 +1587,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1610,12 +1623,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1680,7 +1689,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1692,7 +1701,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1727,12 +1737,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1784,7 +1790,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1796,7 +1802,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1831,12 +1838,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1888,7 +1891,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -1900,7 +1903,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -1935,12 +1939,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -1992,7 +1992,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -2039,12 +2039,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -2096,7 +2092,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -2108,7 +2104,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 1
           },
           "color": {
             "mode": "palette-classic"
@@ -2143,12 +2140,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -2213,7 +2206,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -2225,7 +2218,8 @@
               "group": "A"
             },
             "barAlignment": 0,
-            "axisSoftMin": 0
+            "axisSoftMin": 0,
+            "axisSoftMax": 11
           },
           "color": {
             "mode": "palette-classic"
@@ -2260,12 +2254,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -2317,7 +2307,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -2364,12 +2354,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -2421,7 +2407,7 @@
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "pointSize": 8,
             "showPoints": "always",
             "spanNulls": true,
@@ -2468,12 +2454,8 @@
                 }
               },
               {
-                "id": "custom.showPoints",
-                "value": "never"
-              },
-              {
-                "id": "custom.fillOpacity",
-                "value": 0
+                "id": "custom.pointSize",
+                "value": 5
               }
             ]
           }
@@ -2501,7 +2483,7 @@
     {
       "type": "table",
       "title": "Answer gate runs",
-      "description": "Includes skipped runs (--once: same fingerprint, nothing to generate).",
+      "description": "Includes skipped runs (--once: same fingerprint, nothing to generate). exit_code 143 = killed from outside (interrupted), 1 = the gate or the step failed.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "dw"
@@ -2516,7 +2498,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT started_at AS started, status, ROUND(duration_s::numeric) AS duration_s, metrics->>'variant' AS variant, metrics->>'decision' AS rule, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_refusal_acc, (metrics->>'formal_citation_recall')::float AS formal_cit_recall, (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS error FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running' AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20"
+          "rawSql": "SELECT started_at AS started, status, ROUND(duration_s::numeric) AS duration_s, metrics->>'variant' AS variant, metrics->>'decision' AS rule, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_refusal_acc, (metrics->>'formal_citation_recall')::float AS formal_cit_recall, (metrics->>'verdict_flips')::int AS flips, exit_code, LEFT(error_message, 60) AS error FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running' AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20"
         }
       ],
       "fieldConfig": {
