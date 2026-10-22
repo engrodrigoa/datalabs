@@ -872,8 +872,8 @@ def anp_produto() -> Board:
 # =====================================================================================================
 def rag_lc214() -> Board:
     b = Board("datalabs-rag-lc214", "DataLabs · RAG LC 214",
-              "RAG da LC 214/2025: contrato dos dados, gate de retrieval (lc05), gate de respostas (lc06), drift e custo. "
-              "Toda série vem de audit.pipeline_step_runs; o piso de cada gate é gravado pelo próprio passo.",
+              "LC 214/2025 RAG: data contract, retrieval gate (lc05), answer gate (lc06), drift and cost. "
+              "Every series comes from audit.pipeline_step_runs; each gate records its own floor.",
               ["datalabs", "rag", "lc214", "observability"], time_from="now-30d")
     b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"}]
 
@@ -882,7 +882,7 @@ def rag_lc214() -> Board:
 
     def last(step_filter, expr):
         """expr over the metrics of the latest finished run of a gate (NULL until a run records it)."""
-        return (f"SELECT {expr} FROM (SELECT metrics AS m, status FROM audit.pipeline_step_runs "
+        return (f"SELECT {expr} FROM (SELECT metrics AS m, status, exit_code FROM audit.pipeline_step_runs "
                 f"WHERE {step_filter} ORDER BY started_at DESC LIMIT 1) l")
 
     def f(key):
@@ -898,7 +898,7 @@ def rag_lc214() -> Board:
             parts.append(f"SELECT started_at AS time, '{label}' AS metric, {f2(key)} AS value "
                          f"FROM audit.pipeline_step_runs WHERE {step_filter} AND metrics ? '{key}' AND $__timeFilter(started_at)")
             if floor:
-                parts.append(f"SELECT started_at AS time, '{label} · piso' AS metric, {f2(floor)} AS value "
+                parts.append(f"SELECT started_at AS time, '{label} · floor' AS metric, {f2(floor)} AS value "
                              f"FROM audit.pipeline_step_runs WHERE {step_filter} AND metrics ? '{floor}' "
                              f"AND $__timeFilter(started_at)")
         return sql_target(" UNION ALL ".join(parts) + " ORDER BY 1", fmt="time_series")
@@ -906,146 +906,162 @@ def rag_lc214() -> Board:
     def f2(key):
         return f"(metrics->>'{key}')::float"
 
-    def ts(title, pairs, step_filter, desc, unit="percentunit"):
+    def ts(title, pairs, step_filter, desc, unit="percentunit", soft_max=None):
+        # Runs are weekly and sparse: points always shown (two runs minutes apart draw a zero-length line), no
+        # fill (a fill under one point is a vertical stripe to zero). Floors keep their points too, smaller:
+        # a floor that is not visible cannot answer "is the gate standing?".
         p = timeseries(title, [series(step_filter, pairs)], unit=unit, desc=desc, min_zero=True,
-                       overrides=[{"matcher": {"id": "byRegexp", "options": ".* · piso"},
+                       overrides=[{"matcher": {"id": "byRegexp", "options": ".* · floor"},
                                    "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
-                                                  {"id": "custom.showPoints", "value": "never"},
-                                                  {"id": "custom.fillOpacity", "value": 0}]}])
-        p["fieldConfig"]["defaults"]["custom"]["showPoints"] = "always"
+                                                  {"id": "custom.pointSize", "value": 5}]}])
+        custom = p["fieldConfig"]["defaults"]["custom"]
+        custom.update(showPoints="always", fillOpacity=0)
+        if soft_max is None and unit == "percentunit":
+            soft_max = 1
+        if soft_max is not None:
+            custom["axisSoftMax"] = soft_max
         return p
 
-    b.add(text("**Como ler.** Linha cheia = métrica da execução; tracejada = piso do gate "
-               "(baseline − tolerância de 1 caso). Gate de pé = a linha cheia não cruza a tracejada. "
-               "*Folga* = a menor distância até o piso. Redação do modelo muda entre execuções; veredito não "
-               "(drift de texto é registro, não falha).", "Leitura"), 24, 3)
+    b.add(text("**How to read.** Solid line = the run's metric; dashed = the gate floor "
+               "(baseline − a tolerance of 1 case). Gate standing = the solid line does not cross the dashed one. "
+               "*Margin* = the smallest distance to the floor. The model's wording changes between runs; its verdict "
+               "does not (text drift is recorded, not a failure).", "Reading guide"), 24, 3)
 
-    b.row("1 · Veredito da última execução")
+    b.row("1 · Verdict of the latest run")
     # a stat panel does not show a text field: the verdict is a number with value mappings
-    verdict = [{"type": "value", "options": {"1": {"text": "✔ de pé", "color": GOOD, "index": 0},
-                                              "0": {"text": "✖ reprovou", "color": CRITICAL, "index": 1}}},
-               {"type": "special", "options": {"match": "null", "result": {"text": "sem execução", "color": NEUTRAL,
-                                                                           "index": 2}}}]
+    # 1 = passed the gate; 0 = the gate (or the step) failed; 2 = killed from outside (SIGTERM/SIGKILL: a stop, a
+    # restart, the OOM killer): says nothing about quality, so it must not read as a failed gate
+    verdict = [{"type": "value", "options": {"1": {"text": "✔ passing", "color": GOOD, "index": 0},
+                                              "0": {"text": "✖ failed", "color": CRITICAL, "index": 1},
+                                              "2": {"text": "⏸ interrupted", "color": SERIOUS, "index": 2}}},
+               {"type": "special", "options": {"match": "null", "result": {"text": "no run yet", "color": NEUTRAL,
+                                                                           "index": 3}}}]
+    verdict_sql = "CASE WHEN status = 'success' THEN 1 WHEN exit_code IN (137, 143) THEN 2 ELSE 0 END"
     waiting = [{"type": "special", "options": {"match": "null", "result": {
-        "text": "aguardando 1ª execução", "color": NEUTRAL, "index": 0}}}]
-    b.add(stat("Gate de retrieval (lc05)", last(ev, "(status = 'success')::int"), mappings=verdict,
+        "text": "awaiting first run", "color": NEUTRAL, "index": 0}}}]
+    b.add(stat("Retrieval gate (lc05)", last(ev, verdict_sql), mappings=verdict,
                thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
-               desc="Último resultado do evaluate_retrieval: de pé = dentro do piso; reprovou = regressão."), 4, 4)
-    b.add(stat("Gate de respostas (lc06)", last(gen, "(status = 'success')::int"), mappings=verdict,
+               desc="Latest evaluate_retrieval result: passing = within the floor; failed = regression or step error; "
+                    "interrupted = process killed from outside (SIGTERM), unrelated to quality."), 4, 4)
+    b.add(stat("Answer gate (lc06)", last(gen, verdict_sql), mappings=verdict,
                thresholds=[{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 1}],
-               desc="Último resultado do generate_answers (subconjunto dev, ADR 0015)."), 4, 4)
+               desc="Latest generate_answers result (dev subset, ADR 0015). Interrupted = process killed from outside "
+                    "(SIGTERM): run it again, quality was not measured."), 4, 4)
     steps_margin = [{"color": CRITICAL, "value": None}, {"color": GOOD, "value": 0}]
     ret_keys = [f"{g}_{m}" for g in ("fiscal", "formal") for m in ("success_at_k", "mrr", "context_recall")]
-    b.add(stat("Folga mínima · retrieval", last(ev, margin(ret_keys)), unit="percentunit", decimals=1,
+    b.add(stat("Minimum margin · retrieval", last(ev, margin(ret_keys)), unit="percentunit", decimals=1,
                thresholds=steps_margin, mappings=waiting,
-               desc="Menor (métrica − piso) entre success@k, MRR e context_recall. Negativo = regressão. "
-                    "Uma métrica exatamente na baseline tem folga de 1 caso (a tolerância): é o repouso, não alerta. "
-                    "Vazio até a primeira execução que grava os pisos."), 4, 4)
+               desc="Smallest (metric − floor) across success@k, MRR and context_recall. Negative = regression. "
+                    "A metric exactly on its baseline has a margin of 1 case (the tolerance): that is rest, not an alert. "
+                    "Empty until the first run that records the floors."), 4, 4)
     gen_keys = [f"{g}_{m}" for g in ("fiscal", "formal") for m in ("refusal_accuracy", "citation_recall")]
-    b.add(stat("Folga mínima · respostas", last(gen, margin(gen_keys)), unit="percentunit", decimals=1,
+    b.add(stat("Minimum margin · answers", last(gen, margin(gen_keys)), unit="percentunit", decimals=1,
                thresholds=steps_margin, mappings=waiting,
-               desc="Menor (métrica − piso) entre refusal accuracy e citation recall, por grupo. Na baseline, a "
-                    "folga é a tolerância de 1 caso (14 p.p. no grupo fiscal, 25 no formal)."), 4, 4)
-    b.add(stat("Respostas indevidas (false answers)",
+               desc="Smallest (metric − floor) across refusal accuracy and citation recall, per group. On the baseline the "
+                    "margin is the tolerance of 1 case (14 pp in the fiscal group, 25 in the formal one)."), 4, 4)
+    b.add(stat("False answers",
                last(gen, f"COALESCE({f('fiscal_false_answers')}, 0) + COALESCE({f('formal_false_answers')}, 0)"),
                thresholds=ZERO_GOOD, decimals=0, mappings=waiting,
-               desc="Resposta mostrada a pergunta sem resposta na lei. É o erro que as 3 barreiras existem para "
-                    "impedir: teto = 0, sem tolerância."), 4, 4)
-    b.add(stat("Checks de dados (última rodada)", """
-        SELECT COUNT(*) FILTER (WHERE status NOT IN ('pass','skipped')) AS falhas FROM audit.data_quality_checks
+               desc="An answer shown for a question the law does not answer. The error the 3 barriers exist to stop: "
+                    "ceiling = 0, no tolerance."), 4, 4)
+    b.add(stat("Data checks (latest round)", """
+        SELECT COUNT(*) FILTER (WHERE status NOT IN ('pass','skipped')) AS failures FROM audit.data_quality_checks
         WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks
                                                      WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)""",
-               thresholds=ZERO_GOOD, decimals=0, desc="Health checks lc214 que não passaram na última rodada."), 4, 4)
+               thresholds=ZERO_GOOD, decimals=0, desc="lc214 health checks that did not pass in the latest round."), 4, 4)
 
-    b.row("2 · Contrato dos dados (lc01 → lc04): cada passo, o que entregou")
-    b.add(table("Último estado de cada passo", """
-        SELECT s.step AS passo, s.status, s.started_at AS inicio, ROUND(s.duration_s::numeric) AS duracao_s,
-               s.rows_in AS entrada, s.rows_out AS saida,
+    b.row("2 · Data contract (lc01 → lc04): what each step delivered")
+    b.add(table("Latest state of each step", """
+        SELECT s.step AS step, s.status, s.started_at AS started, ROUND(s.duration_s::numeric) AS duration_s,
+               s.rows_in AS rows_in, s.rows_out AS rows_out,
                (SELECT MAX(started_at) FROM audit.pipeline_step_runs x
-                WHERE x.pipeline = 'lc214' AND x.step = s.step AND x.status = 'success') AS ultimo_sucesso
+                WHERE x.pipeline = 'lc214' AND x.step = s.step AND x.status = 'success') AS last_success
         FROM (SELECT DISTINCT ON (step) * FROM audit.pipeline_step_runs WHERE pipeline = 'lc214'
               ORDER BY step, started_at DESC) s
         ORDER BY array_position(ARRAY['extract_source','parse_dispositivos','build_chunks','load_postgres',
                                       'embed_chunks','golden_contract','evaluate_retrieval','generate_answers'], s.step)""",
-        desc="skipped (exit 99) = a saída já estava atualizada para esta entrada e versão de código; não é falha."), 12, 9)
-    b.add(table("Health checks (última rodada)", """
-        SELECT check_name AS check, check_type AS tipo, status, severity AS severidade,
-               ROUND(observed_value::numeric, 3) AS observado, LEFT(message, 70) AS mensagem
+        desc="skipped (exit 99) = the output was already up to date for this input and code version; not a failure.",
+        overrides=[{"matcher": {"id": "byName", "options": c}, "properties": [{"id": "custom.minWidth", "value": 150}]}
+                   for c in ("started", "last_success")]), 12, 9)
+    b.add(table("Health checks (latest round)", """
+        SELECT check_name AS check, check_type AS type, status, severity AS severity,
+               ROUND(observed_value::numeric, 3) AS observed, LEFT(message, 70) AS message
         FROM audit.data_quality_checks
         WHERE pipeline = 'lc214' AND check_run_id = (SELECT check_run_id FROM audit.data_quality_checks
                                                      WHERE pipeline = 'lc214' ORDER BY checked_at DESC LIMIT 1)
         ORDER BY check_name""",
-        desc="Paridade lei × serving, versão única, paridade chunks × vetores, mesma lei nos vetores, volume e frescor.",
+        desc="Law × serving parity, single version, chunks × vectors parity, same law in the vectors, volume and freshness.",
         overrides=[{"matcher": {"id": "byName", "options": "check"}, "properties": [{"id": "custom.width", "value": 250}]},
-                   {"matcher": {"id": "byName", "options": "mensagem"}, "properties": [{"id": "custom.minWidth", "value": 260}]}]),
+                   {"matcher": {"id": "byName", "options": "message"}, "properties": [{"id": "custom.minWidth", "value": 260}]}]),
         12, 9)
-    b.add(timeseries("Volumes: dispositivos, chunks", [sql_target("""
+    b.add(timeseries("Volumes: provisions, chunks", [sql_target("""
         SELECT started_at AS time, step AS metric, rows_out::float AS value FROM audit.pipeline_step_runs
         WHERE pipeline = 'lc214' AND step IN ('parse_dispositivos','build_chunks') AND status = 'success'
           AND $__timeFilter(started_at) ORDER BY 1""", fmt="time_series")], draw="points",
-        desc="Provisões parseadas (≥ 4.000 pelo check) e chunks. Uma emenda da lei move estes números; "
-             "uma queda sem emenda é parser quebrado."), 12, 7)
-    b.add(table("Roteamento e auto-citações (golden contract)", """
-        SELECT started_at AS inicio, status, rows_in AS casos, (metrics->>'routing_accuracy')::float AS roteamento,
-               (metrics->>'self_ref_rate')::float AS auto_citacoes
+        desc="Parsed provisions (≥ 4,000 by the check) and chunks. An amendment moves these numbers; "
+             "a drop with no amendment is a broken parser."), 12, 7)
+    b.add(table("Routing and self-citations (golden contract)", """
+        SELECT started_at AS started, status, rows_in AS cases, (metrics->>'routing_accuracy')::float AS routing,
+               (metrics->>'self_ref_rate')::float AS self_citations
         FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'golden_contract'
           AND status IN ('success','failed') AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 10""",
-        desc="Os rótulos do golden set ainda valem para a versão atual da lei? Roteamento exige 100%; "
-             "auto-citações resolvidas ≥ 99%."), 12, 7)
+        desc="Do the golden set labels still hold for the current law version? Routing must be 100%; "
+             "resolved self-citations ≥ 99%."), 12, 7)
 
-    b.row("3 · Gate de retrieval (lc05): a resposta certa chega ao contexto?")
-    for title, key, desc in (("Success@k", "success_at_k", "Todas as provisões esperadas no top-k. Gated."),
-                             ("MRR", "mrr", "Posição do 1º acerto (média do inverso do rank). Gated."),
+    b.row("3 · Retrieval gate (lc05): does the right provision reach the context?")
+    for title, key, desc in (("Success@k", "success_at_k", "Every expected provision in the top-k. Gated."),
+                             ("MRR", "mrr", "Position of the first hit (mean of the inverse rank). Gated."),
                              ("Context recall", "context_recall",
-                              "Provisões esperadas no contexto montado para o LLM (orçamento de tokens). Gated.")):
+                              "Expected provisions in the context built for the LLM (token budget). Gated.")):
         pairs = [(g, f"{g}_{key}", f"floor_{g}_{key}") for g in ("fiscal", "formal")]
         b.add(ts(title, pairs, ev, desc), 8, 8)
-    b.add(ts("Lacuna fiscal × formal (paired gap)", [("gap", "paired_gap", None)], ev,
-             "Diferença de success@k entre a pergunta formal e a mesma pergunta em vocabulário fiscal. "
-             "Mede o vocabulário que o retriever não cobre; informativo, não gated."), 12, 7)
-    b.add(ts("Hit@k e Recall@k (informativos)",
+    b.add(ts("Fiscal × formal gap (paired)", [("gap", "paired_gap", None)], ev,
+             "success@k of the formal phrasing minus the same question in fiscal vocabulary. "
+             "Measures the vocabulary the retriever does not cover; informational, not gated."), 12, 7)
+    b.add(ts("Hit@k and Recall@k (informational)",
              [(f"{g} {m}", f"{g}_{m}", None) for g in ("fiscal", "formal") for m in ("hit_at_k", "recall_at_k")], ev,
-             "Não gated: ajudam a explicar uma queda de success@k."), 12, 7)
+             "Not gated: they help explain a drop in success@k."), 12, 7)
 
-    b.row("4 · Gate de respostas (lc06): responde certo, recusa quando deve, cita o que existe?")
+    b.row("4 · Answer gate (lc06): answers right, refuses when it should, cites what exists?")
     b.add(ts("Refusal accuracy",
              [(g, f"{g}_refusal_accuracy", f"floor_{g}_refusal_accuracy") for g in ("fiscal", "formal")], gen,
-             "Acerto do veredito: responder quando há resposta e recusar quando não há. Gated."), 8, 8)
+             "Verdict accuracy: answer when the law has an answer, refuse when it has not. Gated."), 8, 8)
     b.add(ts("Citation recall",
              [(g, f"{g}_citation_recall", f"floor_{g}_citation_recall") for g in ("fiscal", "formal")], gen,
-             "Das respostas esperadas, quantas citam a provisão esperada. Gated."), 8, 8)
+             "Of the expected answers, how many cite the expected provision. Gated."), 8, 8)
     b.add(ts("Citation validity", [(g, f"{g}_citation_validity", None) for g in ("fiscal", "formal")], gen,
-             "Citações que existem na lei E estavam no contexto mostrado. Abaixo de 100% = o modelo citou o que "
-             "não viu."), 8, 8)
-    b.add(ts("Respostas indevidas e recusas indevidas",
+             "Citations that exist in the law AND were in the context shown. Below 100% = the model cited what "
+             "it did not see."), 8, 8)
+    b.add(ts("False answers and false refusals",
              [(f"{g} {k}", f"{g}_{k}", None) for g in ("fiscal", "formal") for k in ("false_answers", "false_refusals")],
-             gen, "false_answers: teto 0 (gate estrito). false_refusals: o custo de ser conservador: onde a "
-                   "qualidade está perdendo hoje.", unit="none"), 12, 7)
-    b.add(ts("Veredito do modelo × decisão final",
+             gen, "false_answers: ceiling 0 (strict gate). false_refusals: the cost of being conservative, "
+                   "where quality is being lost today.", unit="none"), 12, 7)
+    b.add(ts("Share of replies the model says it can answer",
              [(f"{g} model_says_answerable", f"{g}_model_says_answerable", None) for g in ("fiscal", "formal")], gen,
-             "Quanto o modelo diz que é respondível, antes das barreiras. Muito baixo = o modelo recusa tudo."), 12, 7)
+             "How often the model claims it can answer, before the barriers. Stuck near 0 = the model refuses everything."), 12, 7)
 
-    b.row("5 · Drift e custo")
-    b.add(ts("Drift desde o baseline",
-             [("flips de veredito", "verdict_flips", None), ("textos reescritos", "text_changed", None),
-              ("citação esperada mudou", "cited_expected_changed", None)], gen,
-             "Registro, não gate. Veredito estável + texto reescrito = redação não reproduzível; "
-             "flip de veredito = comportamento mudou.", unit="none"), 12, 7)
-    b.add(ts("Latência por frase (s)",
+    b.row("5 · Drift and cost")
+    b.add(ts("Drift since the baseline",
+             [("verdict flips", "verdict_flips", None), ("texts reworded", "text_changed", None),
+              ("expected citation changed", "cited_expected_changed", None)], gen,
+             "A record, not a gate. Stable verdict + reworded text = non-reproducible wording; "
+             "a verdict flip = behaviour changed.", unit="none", soft_max=11), 12, 7)
+    b.add(ts("Latency per phrasing (s)",
              [(f"{g} p50", f"{g}_latency_p50_s", None) for g in ("fiscal", "formal")]
-             + [(f"{g} máx", f"{g}_latency_max_s", None) for g in ("fiscal", "formal")], gen,
-             "CPU, qwen2.5:3b, num_ctx 6144. Orçamento do DAG: 90 min para 11 frases.", unit="s"), 12, 7)
-    b.add(ts("Tokens por palavra (calibração do orçamento)", [("medido", "tokens_per_word", None)], gen,
-             "O retriever estima 1,7 token/palavra; o lc06 mede com prompt_eval_count. Estimativa abaixo do medido "
-             "= contexto estourando o num_ctx.", unit="none"), 12, 7)
-    b.add(table("Execuções do gate de respostas", """
-        SELECT started_at AS inicio, status, ROUND(duration_s::numeric) AS duracao_s, metrics->>'variant' AS variante,
-               metrics->>'decision' AS regra, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_recusa,
+             + [(f"{g} max", f"{g}_latency_max_s", None) for g in ("fiscal", "formal")], gen,
+             "CPU, qwen2.5:3b, num_ctx 6144. DAG budget: 90 min for 11 phrasings.", unit="s"), 12, 7)
+    b.add(ts("Tokens per word (budget calibration)", [("measured", "tokens_per_word", None)], gen,
+             "The retriever estimates 1.7 tokens/word; lc06 measures it with prompt_eval_count. An estimate below "
+             "the measured value = context overflowing num_ctx.", unit="none"), 12, 7)
+    b.add(table("Answer gate runs", """
+        SELECT started_at AS started, status, ROUND(duration_s::numeric) AS duration_s, metrics->>'variant' AS variant,
+               metrics->>'decision' AS rule, (metrics->>'fiscal_refusal_accuracy')::float AS fiscal_refusal_acc,
                (metrics->>'formal_citation_recall')::float AS formal_cit_recall,
-               (metrics->>'verdict_flips')::int AS flips, LEFT(error_message, 60) AS erro
+               (metrics->>'verdict_flips')::int AS flips, exit_code, LEFT(error_message, 60) AS error
         FROM audit.pipeline_step_runs WHERE pipeline = 'lc214' AND step = 'generate_answers' AND status <> 'running'
           AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20""",
-        desc="Inclui execuções skipped (--once: mesma impressão digital, nada a gerar)."), 12, 7)
+        desc="Includes skipped runs (--once: same fingerprint, nothing to generate). exit_code 143 = killed from "
+             "outside (interrupted), 1 = the gate or the step failed."), 12, 7)
     return b
 
 

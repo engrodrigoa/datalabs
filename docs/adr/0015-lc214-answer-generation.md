@@ -176,6 +176,11 @@ subset reproduced the baseline (written the same day by a clean run): 0 verdict 
 the divergent one followed two concurrent runs. That makes contamination by parallel requests (prompt cache / batching)
 the likelier cause than the model itself. One observation on each side is a hypothesis, not a proof, and the tolerant
 gate stays: it does not break if the hypothesis fails, and the drift record would show it.
+A third isolated run (2026-10-21 23:32 UTC, the first with the RAG board) matched too: 0 verdict flips, 0 of 11 texts
+reworded, 0 expected-citation changes, and the answer-gate margin the board showed (14.3% = 1 of 7 fiscal phrasings)
+was the one predicted from the baseline before the run. Three isolated runs agree with each other; the only divergent
+run followed concurrent requests. Still not a proof of the cause: a deliberate test (two concurrent runs, then one
+alone) would make it one.
 
 14. **A tolerant gate with a full record.** `verdict_digest` hashes only the verdicts, and the text digest stays as
     information. The DAG runs the dev subset with `--once --gate` (exit 99 when this fingerprint's dev answers exist).
