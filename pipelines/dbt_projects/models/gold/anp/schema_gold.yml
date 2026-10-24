@@ -70,3 +70,51 @@ models:
         data_tests: [not_null]
       - name: preco_medio
         data_tests: [not_null]
+
+  - name: ag_anp_preco_posto_atual
+    description: "Último preço de cada posto × produto (serving da matriz do dashboard Streamlit)."
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [id_posto_sk, id_produto_sk]
+    columns:
+      - name: valor_venda
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "> 0"
+      - name: data_coleta
+        data_tests: [not_null]
+      - name: data_coleta_anterior
+        description: "NULL quando o posto só tem uma coleta do produto."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "< data_coleta"
+              config:
+                where: "data_coleta_anterior IS NOT NULL"
+      - name: uf
+        data_tests: [not_null]
+      - name: municipio
+        data_tests: [not_null]
+      - name: bairro
+        data_tests: [not_null]
+
+  - name: ag_anp_preco_municipio_diario
+    description: "Preço por dia de coleta × município × produto (serving da linha histórica do dashboard)."
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [data_coleta, uf, municipio, produto]
+    columns:
+      - name: qtd_postos
+        description: "Σ qtd_postos = linhas da fato: reconcilia com ft_anp_combustiveis."
+        data_tests: [not_null]
+      - name: soma_valor_venda
+        data_tests: [not_null]
+      - name: preco_min
+        data_tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "<= preco_max"

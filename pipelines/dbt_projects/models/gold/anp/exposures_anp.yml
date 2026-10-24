@@ -1,0 +1,17 @@
+version: 2
+
+exposures:
+  - name: painel_precos_combustiveis_streamlit
+    label: Preço dos combustíveis (Streamlit)
+    type: dashboard
+    maturity: low
+    url: http://localhost:8501
+    description: >
+      Camada de analytics da ANP (apps/anp_dashboard): matriz UF → município → bairro → posto com o
+      último preço de cada posto e a linha histórica por dia de coleta até o nível de município.
+      Lê só as marts de serving, como o role read-only anp_app_ro.
+    depends_on:
+      - ref('ag_anp_preco_posto_atual')
+      - ref('ag_anp_preco_municipio_diario')
+    owner:
+      name: Rodrigo
