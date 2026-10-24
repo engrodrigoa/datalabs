@@ -9,6 +9,7 @@ Real data: the dag_dbt_anp scrapers download it from gov.br/anp.
 """
 import argparse
 import datetime as dt
+import math
 import random
 from pathlib import Path
 
@@ -21,16 +22,29 @@ HEADER = ("Regiao - Sigla;Estado - Sigla;Municipio;Revenda;CNPJ da Revenda;Nome 
           "Bairro;Cep;Produto;Data da Coleta;Valor de Venda;Valor de Compra;Unidade de Medida;Bandeira")
 
 
+# Neighbourhoods for the dashboard's city -> bairro drill-down. Chosen by the station index (not by
+# the rng), so the random sequence -- and every CNPJ, city and brand -- stays the same as before.
+BAIRROS = ["CENTRO", "SETOR SUL", "JARDIM AMERICA", "VILA NOVA", "SETOR OESTE"]
+
+
 def stations(rng: random.Random):
     out = []
     for uf in UFS:
         for i in range(40 if uf == "GO" else 25):
             cnpj = f"{rng.randint(10, 99)}.{rng.randint(100, 999)}.{rng.randint(100, 999)}/0001-{rng.randint(10, 99)}"
             city = rng.choice(CITIES_GO) if uf == "GO" else rng.choice([f"CAPITAL {uf}", f"INTERIOR {uf}"])
-            out.append((uf, city, f"POSTO {uf} {i} LTDA", cnpj, rng.choice(BRANDS)))
+            out.append((uf, city, f"POSTO {uf} {i} LTDA", cnpj, rng.choice(BRANDS), BAIRROS[i % len(BAIRROS)]))
     # a fixed station used by the RAG golden set
-    out.append(("GO", "ANAPOLIS", "POSTO SAO FRANCISCO LTDA", "25.080.920/0001-98", "IPIRANGA"))
+    out.append(("GO", "ANAPOLIS", "POSTO SAO FRANCISCO LTDA", "25.080.920/0001-98", "IPIRANGA", "CENTRO"))
     return out
+
+
+def price_for(base: float, product: str, day: dt.date, station_idx: int, noise: float) -> float:
+    """Station level (fixed, cheap or expensive) x slow market trend x small daily noise.
+    Deterministic apart from `noise` (the same rng draw as before, now scaled to +-2%)."""
+    station_level = 0.93 + 0.14 * ((station_idx * 37) % 100) / 100
+    trend = 1 + 0.03 * math.sin((day.toordinal() + 7 * len(product)) / 15)
+    return base * station_level * trend * (1 + (noise - 1) * 0.2)
 
 
 def write(path: Path, start: dt.date, days: int, rng: random.Random, sts) -> int:
@@ -42,13 +56,14 @@ def write(path: Path, start: dt.date, days: int, rng: random.Random, sts) -> int
             day = start + dt.timedelta(days=d)
             if day.weekday() > 4:
                 continue
-            for uf, city, name, cnpj, brand in sts:
+            for idx, (uf, city, name, cnpj, brand, bairro) in enumerate(sts):
                 for product, base in PRODUCTS.items():
                     if rng.random() < 0.35:
                         continue
-                    price = f"{base * rng.uniform(0.9, 1.1):.2f}".replace(".", ",")
+                    value = price_for(base, product, day, idx, rng.uniform(0.9, 1.1))
+                    price = f"{value:.2f}".replace(".", ",")
                     region = "CO" if uf in ("GO", "DF", "MT", "MS") else "NE"
-                    f.write(f"{region};{uf};{city};{name};{cnpj};RUA A;100;;CENTRO;75000-000;{product};"
+                    f.write(f"{region};{uf};{city};{name};{cnpj};RUA A;100;;{bairro};75000-000;{product};"
                             f"{day:%d/%m/%Y};{price};;R$ / litro;{brand}\n")
                     rows += 1
     return rows
