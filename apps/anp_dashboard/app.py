@@ -75,7 +75,9 @@ try:
     postos = postos_df()
 except Exception as exc:  # no role/password, stack down, marts not built yet
     st.error(f"Não foi possível ler a gold da ANP: {exc}")
-    st.info("Suba o lab (`make up`), rode o `dag_dbt_anp` (ou `make demo-offline`) e confira `ANP_APP_DB_PASSWORD`.")
+    st.info("Confira: lab no ar (`make up`); marts construídas (`dag_dbt_anp`); `ANP_APP_DB_PASSWORD` no `.env` "
+            "aplicado com `make db-bootstrap`; host = `ANP_APP_DB_HOST` (padrão `localhost`, a porta publicada do "
+            "Postgres; o nome `postgres` só resolve dentro da rede do Docker).")
     st.stop()
 
 if postos.is_empty():

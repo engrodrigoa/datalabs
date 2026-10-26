@@ -4,7 +4,9 @@ Analytics layer over the ANP gold ([ADR 0016](../../docs/adr/0016-anp-streamlit-
 
 ```bash
 make env && docker compose up -d postgres && make db-bootstrap   # once: creates ANP_APP_DB_PASSWORD + role anp_app_ro
-make demo-offline        # or the real dag_dbt_anp: builds the two serving marts
+make dbt-parse            # new models -> Cosmos manifest
+# builds the two serving marts: trigger dag_dbt_anp (real data) or, ONLY on a database without real
+# ANP loads, make demo-offline (synthetic; refused over real loads, see scripts/anp_sample_guard.py)
 make dashboard-anp       # creates .venv-anp on first run, then http://localhost:8501
 ```
 
@@ -12,7 +14,7 @@ make dashboard-anp       # creates .venv-anp on first run, then http://localhost
 |---|---|
 | `app.py` | layout only: sidebar filters (UF → cidade → bairro, bandeira, busca, janela), product cards, tabs |
 | `logic.py` | pure Polars: filters, recency window, KPIs, matrix pivot, exact weekly roll-up (tested in `tests/test_anp_dashboard.py`) |
-| `data.py` | the only SQL, bind parameters, role `anp_app_ro` (`ANP_APP_DB_*`, falls back to `DB_*`) |
+| `data.py` | the only SQL, bind parameters, role `anp_app_ro` (`ANP_APP_DB_*`; host `localhost` by default, port/db fall back to `DB_PORT`/`DB_DB`) |
 | `.streamlit/config.toml` | theme (palette of the reference site) |
 
 | Tab | Source | Grain |

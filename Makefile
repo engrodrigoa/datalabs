@@ -125,7 +125,8 @@ models-import: ## restore ./hf_cache.tgz into the hf_cache volume (then set HF_H
 	docker volume create datalabs_hf_cache >/dev/null
 	docker run --rm -v datalabs_hf_cache:/c -v "$(CURDIR)":/in:ro alpine:3.20 sh -c "tar xzf /in/hf_cache.tgz -C /c && chown -R $$(id -u):0 /c"
 
-sample-data: ## offline synthetic ANP files (no internet needed)
+sample-data: ## offline synthetic ANP files (no internet needed; refused over real ANP loads unless FORCE=1)
+	$(AF) env ANP_SAMPLE_FORCE=$(FORCE) python /opt/airflow/scripts/anp_sample_guard.py
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp
 
 nfe-quickstart: up ## NF-e do zero: tabelas Elementary, 2000 notas, despausa e dispara o dag_nfe

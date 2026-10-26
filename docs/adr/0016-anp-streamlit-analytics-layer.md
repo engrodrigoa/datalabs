@@ -26,7 +26,7 @@ per click, and the Grafana role (`grafana_ro`) reads every schema, which a publi
    `grants={'select': ['anp_app_ro']}` in the models: re-applied on every build, so a rebuilt table never loses it
    and no other gold table is readable (CI asserts `permission denied` on the fact).
 3. **The app is decoupled from the pipelines.** Own venv (`make dashboard-anp`, `apps/anp_dashboard/requirements.txt`,
-   Streamlit 1.66.1), own config (`ANP_APP_DB_*`, falling back to `DB_*`), no import of `pipelines.commons`.
+   Streamlit 1.66.1), own config (`ANP_APP_DB_*`; host defaults to `localhost`, never `DB_HOST`, which is the container name `postgres` for the services; port/database fall back to `DB_PORT`/`DB_DB`), no import of `pipelines.commons`.
    Transforms are pure Polars in `logic.py` (unit-tested in CI without Streamlit); `data.py` holds the only SQL,
    with bind parameters for every UI value; `app.py` is layout only.
 4. **Visual contract.** Palette from the reference site (surface `#0f0f13`/`#17171d`, accent `#1d9e75`); product

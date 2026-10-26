@@ -128,3 +128,31 @@ def test_anp_app_ro_cannot_read_outside_the_serving_marts(engine):
     with pytest.raises(ProgrammingError, match="permission denied"):
         with engine.connect() as conn:
             conn.execute(text("SELECT 1 FROM gold.ft_anp_combustiveis LIMIT 1"))
+
+
+# ------------------------------------------------------------------ configuration and the sample guard
+def test_app_host_ignores_the_container_side_db_host(monkeypatch):
+    from apps.anp_dashboard import data
+    monkeypatch.setattr(data, "_load_dotenv", lambda: None)
+    monkeypatch.setenv("ANP_APP_DB_PASSWORD", "x")
+    monkeypatch.setenv("DB_HOST", "postgres")          # what the services see inside the compose network
+    monkeypatch.delenv("ANP_APP_DB_HOST", raising=False)
+    monkeypatch.setenv("DB_PORT", "5433")
+    url = data.db_url()
+    assert (url.host, url.port, url.username) == ("localhost", 5433, "anp_app_ro")
+    monkeypatch.setenv("ANP_APP_DB_HOST", "lambda4")
+    assert data.db_url().host == "lambda4"
+
+
+def test_sample_guard_refuses_over_real_loads_unless_forced():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "scripts" / "anp_sample_guard.py"
+    spec = importlib.util.spec_from_file_location("anp_sample_guard", path)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert guard.decide(0, 0, force=False)[0] is True
+    ok, msg = guard.decide(9, 0, force=False)
+    assert ok is False and "REPLACE the real weekly load" in msg
+    assert guard.decide(0, 3, force=False)[0] is False
+    assert guard.decide(9, 3, force=True)[0] is True

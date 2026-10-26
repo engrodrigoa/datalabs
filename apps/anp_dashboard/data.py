@@ -3,8 +3,10 @@ Data access of the ANP dashboard: reads ONLY the gold serving marts, as the read
 
 Configuration (env > repo .env > defaults), on purpose independent of pipelines/commons so the app can
 later be deployed on its own:
-  ANP_APP_DB_HOST (DB_HOST, localhost)   ANP_APP_DB_PORT (DB_PORT, 5432)   ANP_APP_DB_NAME (DB_DB, datalab)
+  ANP_APP_DB_HOST (localhost)            ANP_APP_DB_PORT (DB_PORT, 5432)   ANP_APP_DB_NAME (DB_DB, datalab)
   ANP_APP_DB_USER (anp_app_ro)           ANP_APP_DB_PASSWORD (required)
+The host does NOT fall back to DB_HOST: in this repo DB_HOST is often the container-side name ("postgres",
+compose network), which the app, running on the host, cannot resolve. DB_PORT is the published host port.
 Every value that comes from the UI is a bind parameter (CLAUDE.md: SQL injection rule).
 """
 from __future__ import annotations
@@ -60,7 +62,7 @@ def db_url() -> URL:
         "postgresql+psycopg2",
         username=os.getenv("ANP_APP_DB_USER", "anp_app_ro"),
         password=password,
-        host=os.getenv("ANP_APP_DB_HOST") or os.getenv("DB_HOST") or "localhost",
+        host=os.getenv("ANP_APP_DB_HOST") or "localhost",
         port=int(os.getenv("ANP_APP_DB_PORT") or os.getenv("DB_PORT") or 5432),
         database=os.getenv("ANP_APP_DB_NAME") or os.getenv("DB_DB") or "datalab",
     )
