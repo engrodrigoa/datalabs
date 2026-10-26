@@ -22,7 +22,7 @@ from sqlalchemy.engine import URL, Engine
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SQL_POSTOS = """
-SELECT uf, municipio, bairro, revenda, bandeira, cnpj, endereco, produto,
+SELECT uf, municipio, bairro, revenda, bandeira, cnpj, endereco, produto, unidade_de_medida,
        data_coleta, valor_venda, data_coleta_anterior, valor_venda_anterior, variacao,
        _source_loaded_at
 FROM gold.ag_anp_preco_posto_atual

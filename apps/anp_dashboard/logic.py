@@ -37,6 +37,58 @@ def rotulo(produto: str) -> str:
     return " ".join(w if w in {"GNV", "GLP", "S10", "S50", "S500"} else w.title() for w in produto.split())
 
 
+def unidade_curta(unidade: str | None) -> str:
+    """ANP unit text -> what follows 'R$/': 'R$ / litro' -> 'litro', 'R$ / 13 kg' -> '13 kg' (GLP bottle),
+    'R$ / m³' -> 'm³' (GNV). Missing -> 'litro', the unit of every liquid fuel."""
+    if not unidade or "/" not in unidade:
+        return "litro"
+    return unidade.split("/", 1)[1].strip() or "litro"
+
+
+def unidades(postos: pl.DataFrame) -> dict[str, str]:
+    """Product -> short unit, read from the data (gold.dm_produtos), never hard-coded."""
+    if postos.is_empty() or "unidade_de_medida" not in postos.columns:
+        return {}
+    pares = postos.group_by("produto").agg(pl.col("unidade_de_medida").drop_nulls().mode().first())
+    return {p: unidade_curta(u) for p, u in pares.iter_rows()}
+
+
+def casas_decimais(unidade: str) -> int:
+    """Pump prices are quoted to 3 decimals per litre; a 13 kg bottle or a m³ to 2."""
+    return 3 if unidade == "litro" else 2
+
+
+def agrupar_por_unidade(produtos, unidade_de: dict[str, str]) -> list[tuple[str, list[str]]]:
+    """Split a product selection by unit, in product order: one chart per unit (one y-axis each),
+    so R$ 113 per GLP bottle never shares a scale with R$ 4 per litre of ethanol."""
+    grupos: dict[str, list[str]] = {}
+    for p in ordenar_produtos(produtos):
+        grupos.setdefault(unidade_de.get(p, "litro"), []).append(p)
+    return list(grupos.items())
+
+
+SEM_PRECO = "—"
+
+
+def precos_como_texto(df: pl.DataFrame, casas_por_coluna: dict[str, int]) -> pl.DataFrame:
+    """Display copy of the matrix: 'R$ 6,290' (pt-BR) and '—' when the station does not sell the product.
+
+    Streamlit 1.66 draws a null cell as 'None' and has no placeholder option, so the price columns go as text.
+    Text sorts lexically when the reader clicks a header, so the integer part is left-padded with spaces to the
+    column's widest value: lexical order == numeric order ('R$  89,99' < 'R$ 112,21')."""
+    out = df
+    for col, casas in casas_por_coluna.items():
+        valores = df[col].drop_nulls()
+        largura = len(str(int(valores.max()))) if valores.len() else 1
+
+        def fmt(v: float, casas=casas, largura=largura) -> str:
+            inteiro, _, frac = f"{v:.{casas}f}".partition(".")
+            return f"R$ {inteiro.rjust(largura)},{frac}"
+
+        out = out.with_columns(pl.col(col).map_elements(fmt, return_dtype=pl.Utf8).fill_null(SEM_PRECO))
+    return out
+
+
 def cor_produto(produto: str) -> str:
     return CORES[PRODUTOS.index(produto)] if produto in PRODUTOS else COR_OUTROS
 

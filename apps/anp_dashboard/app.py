@@ -37,6 +37,7 @@ st.markdown("""
 .dl-card .preco { color: var(--text-1); font-size: 1.7rem; font-weight: 700; line-height: 1.2; margin-top: 4px; }
 .dl-card .un { color: var(--text-3); font-size: .75rem; }
 .dl-card .faixa { color: var(--text-2); font-size: .8rem; margin-top: 6px; }
+.dl-card .faixa span { white-space: nowrap; }
 .dl-card .rodape { color: var(--text-3); font-size: .75rem; margin-top: 4px; }
 .dl-up { color: var(--up); } .dl-down { color: var(--down); }
 .dl-badge { display:inline-block; border:1px solid rgba(29,158,117,.35); background: rgba(29,158,117,.08);
@@ -53,6 +54,44 @@ def brl(v, casas: int = 3) -> str:
 
 def dmy(d) -> str:
     return d.strftime("%d/%m/%Y") if d else "—"
+
+
+def grafico(h: pl.DataFrame, prods: list[str], unidade: str, gran: str):
+    """One unit = one y-axis. Min-max band only when a single series is drawn."""
+    pdf = h.with_columns(pl.col("data_coleta").cast(pl.Datetime)).to_pandas()  # Altair speaks pandas
+    dominio = logic.ordenar_produtos(prods)
+    casas = logic.casas_decimais(unidade)
+    cor = alt.Color("produto:N", title=None, scale=alt.Scale(
+        domain=dominio, range=[logic.cor_produto(p) for p in dominio]),
+        legend=alt.Legend(orient="top", labelColor="#e8e8f0") if len(dominio) > 1 else None)
+    x = alt.X("data_coleta:T", title=None, axis=alt.Axis(format="%d/%m", labelColor="#8888a0",
+                                                         gridColor="#2a2a35", domainColor="#2a2a35"))
+    y = alt.Y("preco_medio:Q", title=f"R$/{unidade}", scale=alt.Scale(zero=False),
+              axis=alt.Axis(labelColor="#8888a0", titleColor="#8888a0", gridColor="#2a2a35",
+                            domainColor="#2a2a35", format=f".{min(casas, 2)}f"))
+    base = alt.Chart(pdf).encode(x=x)
+    camadas = []
+    if len(dominio) == 1:  # one series: min-max band behind the average, like the reference site
+        camadas.append(base.mark_area(opacity=0.14).encode(y="preco_min:Q", y2="preco_max:Q", color=cor))
+    linhas = base.mark_line(strokeWidth=2, interpolate="monotone",
+                            point=alt.OverlayMarkDef(size=18, filled=True) if gran == "Semana" else False
+                            ).encode(y=y, color=cor)
+    hover = alt.selection_point(fields=["data_coleta"], nearest=True, on="pointerover", empty=False)
+    rotulo_data = "Semana de" if gran == "Semana" else "Data"
+    pontos = base.mark_point(size=70, filled=True, stroke="#17171d", strokeWidth=2).encode(
+        y="preco_medio:Q", color=cor,
+        opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+        tooltip=[alt.Tooltip("data_coleta:T", title=rotulo_data, format="%d/%m/%Y"),
+                 alt.Tooltip("produto:N", title="Produto"),
+                 alt.Tooltip("preco_medio:Q", title="Média", format=f".{casas}f"),
+                 alt.Tooltip("preco_min:Q", title="Mín", format=f".{casas}f"),
+                 alt.Tooltip("preco_max:Q", title="Máx", format=f".{casas}f"),
+                 alt.Tooltip("qtd_postos:Q", title="Coletas")]).add_params(hover)
+    regua = base.mark_rule(color="#5a5a70").encode(
+        opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(hover)
+    camadas += [linhas, regua, pontos]
+    return (alt.layer(*camadas).properties(height=340, background="transparent")
+            .configure_view(stroke=None).configure_legend(symbolType="stroke"))
 
 
 # ------------------------------------------------------------------ data (cached)
@@ -86,6 +125,15 @@ if postos.is_empty():
 
 ref = logic.data_referencia(postos)
 produtos_todos = logic.ordenar_produtos(postos["produto"].unique().to_list())
+unidade_de = logic.unidades(postos)            # GLP is quoted per 13 kg bottle, GNV per m³
+
+
+def un(p: str) -> str:
+    return unidade_de.get(p, "litro")
+
+
+def preco(p: str, v) -> str:
+    return brl(v, logic.casas_decimais(un(p)))
 
 # ------------------------------------------------------------------ filters (sidebar, cascading)
 with st.sidebar:
@@ -136,13 +184,15 @@ for r in k.iter_rows(named=True):
     var_html = ""
     if var is not None and abs(var) >= 0.0005:
         cls, seta = ("dl-up", "▲") if var > 0 else ("dl-down", "▼")
-        var_html = f" · <span class='{cls}'>{seta} {brl(abs(var))}</span>"
+        var_html = f" · <span class='{cls}'>{seta} {preco(r['produto'], abs(var))}</span>"
     cards.append(
         f"<div class='dl-card{' sel' if r['produto'] == produto else ''}'>"
         f"<div class='nome'><span class='dot' style='background:{logic.cor_produto(r['produto'])}'></span>"
         f"{html.escape(r['produto'])}</div>"
-        f"<div class='preco'>{brl(r['preco_medio']).replace('R$ ', '')}</div><div class='un'>R$/litro · média</div>"
-        f"<div class='faixa'>Mín {brl(r['preco_min'])} · Máx {brl(r['preco_max'])}</div>"
+        f"<div class='preco'>{preco(r['produto'], r['preco_medio']).replace('R$ ', '')}</div>"
+        f"<div class='un'>R$/{html.escape(un(r['produto']))} · média</div>"
+        f"<div class='faixa'><span>Mín {preco(r['produto'], r['preco_min'])}</span> · "
+        f"<span>Máx {preco(r['produto'], r['preco_max'])}</span></div>"
         f"<div class='rodape'>{r['qtd_postos']} postos{var_html}</div></div>")
 if cards:
     st.markdown(f"<div class='dl-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
@@ -166,15 +216,24 @@ with aba_matriz:
         cfg = {c: st.column_config.TextColumn(rotulos[c]) for c in logic.NIVEIS[nivel]}
         cfg["qtd_postos"] = st.column_config.NumberColumn("Postos", format="%d")
         cfg["ultima_coleta"] = st.column_config.DateColumn("Última coleta", format="DD/MM/YYYY")
-        for p in logic.ordenar_produtos([c for c in m.columns if c in produtos_todos]):
-            cfg[p] = st.column_config.NumberColumn(logic.rotulo(p), format="R$ %.3f")
+        cols_prod = logic.ordenar_produtos([c for c in m.columns if c in produtos_todos])
+        for p in cols_prod:
+            sufixo = "" if un(p) == "litro" else f" (R$/{un(p)})"
+            cfg[p] = st.column_config.TextColumn(logic.rotulo(p) + sufixo, alignment="right")
+        exibicao = logic.precos_como_texto(m, {p: logic.casas_decimais(un(p)) for p in cols_prod})
         if "vs_media_cidade" in m.columns:
-            cfg["vs_media_cidade"] = st.column_config.NumberColumn(
-                f"vs média ({logic.rotulo(produto)})", format="%+.1f%%",
+            cfg["vs_media_cidade"] = st.column_config.Column(
+                f"vs média ({logic.rotulo(produto)})",
                 help="Preço do posto contra a média da cidade no combustível principal.")
-        st.dataframe(m, column_config=cfg, hide_index=True, width="stretch", height=min(560, 38 + 35 * m.height))
+        # numeric column kept numeric (sorts right); the Styler only draws it in pt-BR ("+6,4%")
+        tabela = exibicao.to_pandas().style.format(
+            {c: (lambda v: f"{v:+.1f}%".replace(".", ",")) for c in ["vs_media_cidade"] if c in exibicao.columns},
+            na_rep=logic.SEM_PRECO)
+        st.dataframe(tabela, column_config=cfg, hide_index=True, width="stretch",
+                     height=min(560, 38 + 35 * m.height))
         st.caption(f"{m.height:,} linhas · média do último preço de cada posto · ordenado pelo mais barato em "
-                   f"{logic.rotulo(produto)} · clique no cabeçalho para reordenar".replace(",", "."))
+                   f"{logic.rotulo(produto)} · — = posto sem esse combustível na janela · clique no cabeçalho "
+                   "para reordenar".replace(",", "."))
         st.download_button("Baixar CSV", m.write_csv(), file_name=f"anp_matriz_{nivel.lower()}_{ref}.csv",
                            mime="text/csv")
 
@@ -183,7 +242,13 @@ with aba_hist:
     escopo = municipio.title() + f" — {uf}" if municipio else (uf or "Brasil")
     c1, c2, c3 = st.columns([3, 1.3, 1.3])
     sel = c1.multiselect("Combustíveis", produtos_todos, default=[produto], max_selections=4)
-    gran = c2.segmented_control("Granularidade", ["Dia", "Semana"], default="Dia", key="gran") or "Dia"
+    # Semana by default: ANP surveys a different group of stations on each weekday (measured, GO ethanol, 180 days:
+    # 1,687 collections on Mondays at R$ 4.299 vs 25 on Fridays at R$ 3.856), so the DAILY average mostly shows
+    # which stations were surveyed that day, not a price change.
+    gran = c2.segmented_control("Granularidade", ["Semana", "Dia"], default="Semana", key="gran",
+                                help="Dia mostra também qual grupo de postos a ANP coletou naquele dia "
+                                     "(segunda tem muito mais coletas que sexta): use para auditar, não para "
+                                     "ler tendência.") or "Semana"
     periodo = c3.selectbox("Período", ["90 dias", "180 dias", "1 ano", "Tudo"], index=1)
     dias = {"90 dias": 90, "180 dias": 180, "1 ano": 365, "Tudo": 365 * 30}[periodo]
     if bairro or busca or bandeiras:
@@ -197,39 +262,17 @@ with aba_hist:
             st.info("Sem histórico para esse escopo.")
         else:
             st.markdown(f"**Preço médio por {'dia de coleta' if gran == 'Dia' else 'semana'} — {escopo}**")
-            pdf = h.with_columns(pl.col("data_coleta").cast(pl.Datetime)).to_pandas()  # Altair speaks pandas
-            dominio = [p for p in logic.ordenar_produtos(sel)]
-            cor = alt.Color("produto:N", title=None, scale=alt.Scale(
-                domain=dominio, range=[logic.cor_produto(p) for p in dominio]),
-                legend=alt.Legend(orient="top", labelColor="#e8e8f0") if len(sel) > 1 else None)
-            x = alt.X("data_coleta:T", title=None, axis=alt.Axis(format="%d/%m", labelColor="#8888a0",
-                                                                 gridColor="#2a2a35", domainColor="#2a2a35"))
-            y = alt.Y("preco_medio:Q", title="R$/litro", scale=alt.Scale(zero=False),
-                      axis=alt.Axis(labelColor="#8888a0", titleColor="#8888a0", gridColor="#2a2a35",
-                                    domainColor="#2a2a35", format=".2f"))
-            base = alt.Chart(pdf).encode(x=x)
-            camadas = []
-            if len(sel) == 1:  # one series: min-max band behind the average, like the reference site
-                camadas.append(base.mark_area(opacity=0.14).encode(
-                    y="preco_min:Q", y2="preco_max:Q", color=cor))
-            linhas = base.mark_line(strokeWidth=2, interpolate="monotone").encode(y=y, color=cor)
-            hover = alt.selection_point(fields=["data_coleta"], nearest=True, on="pointerover", empty=False)
-            pontos = base.mark_point(size=70, filled=True, stroke="#17171d", strokeWidth=2).encode(
-                y="preco_medio:Q", color=cor,
-                opacity=alt.condition(hover, alt.value(1), alt.value(0)),
-                tooltip=[alt.Tooltip("data_coleta:T", title="Data", format="%d/%m/%Y"),
-                         alt.Tooltip("produto:N", title="Produto"),
-                         alt.Tooltip("preco_medio:Q", title="Média", format=".3f"),
-                         alt.Tooltip("preco_min:Q", title="Mín", format=".3f"),
-                         alt.Tooltip("preco_max:Q", title="Máx", format=".3f"),
-                         alt.Tooltip("qtd_postos:Q", title="Coletas")]).add_params(hover)
-            regua = base.mark_rule(color="#5a5a70").encode(
-                opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(hover)
-            camadas += [linhas, regua, pontos]
-            chart = (alt.layer(*camadas).properties(height=380, background="transparent")
-                     .configure_view(stroke=None).configure_legend(symbolType="stroke"))
-            st.altair_chart(chart, width="stretch")
+            grupos = logic.agrupar_por_unidade(sel, unidade_de)
+            if len(grupos) > 1:
+                st.caption("Unidades diferentes (ex.: GLP por botijão de 13 kg) ficam em gráficos separados: "
+                           "um eixo por unidade.")
+            for unidade, prods in grupos:
+                parte = h.filter(pl.col("produto").is_in(prods))
+                if parte.is_empty():
+                    continue
+                st.altair_chart(grafico(parte, prods, unidade, gran), width="stretch")
 
+            dominio = logic.ordenar_produtos(sel)
             resumo = (h.group_by("produto").agg(pl.col("preco_medio").first().alias("inicio"),
                                                  pl.col("preco_medio").last().alias("fim"))
                       .with_columns(((pl.col("fim") / pl.col("inicio") - 1) * 100).alias("pct"))
@@ -237,8 +280,8 @@ with aba_hist:
                                                              return_dtype=pl.Int32)))
             cols = st.columns(len(resumo))
             for col, r in zip(cols, resumo.iter_rows(named=True)):
-                col.metric(logic.rotulo(r["produto"]), brl(r["fim"]), f"{r['pct']:+.1f}% no período",
-                           delta_color="inverse")
+                col.metric(logic.rotulo(r["produto"]), preco(r["produto"], r["fim"]),
+                           f"{r['pct']:+.1f}% no período".replace(".", ","), delta_color="inverse")
             with st.expander("Ver dados da série"):
                 st.dataframe(h.select(["data_coleta", "produto", "preco_medio", "preco_min", "preco_max",
                                        "qtd_postos"]), hide_index=True, width="stretch")
@@ -255,8 +298,10 @@ with aba_dados:
         "- **Último preço por posto**: a ANP coleta cada posto num dia diferente da semana; a matriz usa a coleta "
         "mais recente de cada posto × combustível, limitada pela *janela de recência*.\n"
         "- **Média** = média simples dos postos (cada posto pesa 1), não ponderada por volume vendido.\n"
-        "- **Histórico**: média das coletas do dia (ou semana) no escopo, somadas exatamente a partir do "
-        "município (`soma / quantidade`), nunca média de médias.\n"
+        "- **Histórico**: média das coletas da semana (ou do dia) no escopo, somadas exatamente a partir do "
+        "município (`soma / quantidade`), nunca média de médias. A ANP coleta grupos diferentes de postos em cada "
+        "dia útil, então a série **diária** oscila com a composição da amostra; a semanal é a leitura de tendência.\n"
+        "- **Unidades** vêm da ANP: combustíveis líquidos em R$/litro, GLP por botijão de 13 kg, GNV por m³.\n"
         "- **Linhagem**: `bronze.anp_landing_*` → `silver.anp_combustivel` → `gold.ft_anp_combustiveis` → "
         "`gold.ag_anp_preco_posto_atual` / `gold.ag_anp_preco_municipio_diario` (dbt, testes de reconciliação "
         "com a fato).\n"

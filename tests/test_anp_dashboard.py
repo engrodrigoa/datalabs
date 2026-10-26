@@ -156,3 +156,26 @@ def test_sample_guard_refuses_over_real_loads_unless_forced():
     assert ok is False and "REPLACE the real weekly load" in msg
     assert guard.decide(0, 3, force=False)[0] is False
     assert guard.decide(9, 3, force=True)[0] is True
+
+
+def test_units_come_from_the_data_and_split_the_history_charts():
+    assert logic.unidade_curta("R$ / litro") == "litro"
+    assert logic.unidade_curta("R$ / 13 kg") == "13 kg"
+    assert logic.unidade_curta("R$ / m³") == "m³"
+    assert logic.unidade_curta(None) == "litro"
+    postos = pl.DataFrame({"produto": ["GLP", "GLP", "ETANOL", "GASOLINA"],
+                           "unidade_de_medida": ["R$ / 13 kg", None, "R$ / litro", "R$ / litro"]})
+    un = logic.unidades(postos)
+    assert un == {"GLP": "13 kg", "ETANOL": "litro", "GASOLINA": "litro"}
+    assert logic.casas_decimais("litro") == 3 and logic.casas_decimais("13 kg") == 2
+    assert logic.agrupar_por_unidade(["GLP", "ETANOL", "GASOLINA"], un) == [
+        ("litro", ["GASOLINA", "ETANOL"]), ("13 kg", ["GLP"])]
+
+
+def test_price_text_sorts_like_the_numbers_and_shows_a_dash_for_missing():
+    df = pl.DataFrame({"GLP": [112.21, 89.99, None, 138.0], "ETANOL": [4.06, None, 3.9, 4.5]})
+    txt = logic.precos_como_texto(df, {"GLP": 2, "ETANOL": 3})
+    assert txt["GLP"].to_list() == ["R$ 112,21", "R$  89,99", "—", "R$ 138,00"]
+    assert txt["ETANOL"].to_list() == ["R$ 4,060", "—", "R$ 3,900", "R$ 4,500"]
+    presentes = [v for v in txt["GLP"].to_list() if v != logic.SEM_PRECO]
+    assert sorted(presentes) == ["R$  89,99", "R$ 112,21", "R$ 138,00"]        # lexical == numeric

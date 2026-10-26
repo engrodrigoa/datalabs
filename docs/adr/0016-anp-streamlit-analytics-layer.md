@@ -31,10 +31,19 @@ per click, and the Grafana role (`grafana_ro`) reads every schema, which a publi
    with bind parameters for every UI value; `app.py` is layout only.
 4. **Visual contract.** Palette from the reference site (surface `#0f0f13`/`#17171d`, accent `#1d9e75`); product
    colours follow the product, never its rank (fixed order in `logic.PRODUTOS`, validated for a dark surface:
-   adjacent CVD ΔE ≥ 8.4, contrast ≥ 3:1). One y-axis, min–max band only for a single series.
+   adjacent CVD ΔE ≥ 8.4, contrast ≥ 3:1). One y-axis per chart: a selection that mixes units (GLP per 13 kg
+   bottle, GNV per m³, liquids per litre, read from `dm_produtos.unidade_de_medida`) is split into one chart per
+   unit. Min–max band only for a single series. Missing price = `—` (Streamlit 1.66 has no null placeholder, so the
+   price columns are text, integer part space-padded so that the header sort stays numeric).
+5. **History defaults to weeks, not days.** ANP surveys a different group of stations on each weekday. Measured on
+   the lab (GO, ethanol, last 180 days, 2026-10-25): Monday 1,687 collections at R$ 4.299, Tuesday 1,172 at 4.270,
+   Wednesday 574 at 4.167, Thursday 549 at 4.088, Friday 25 at 3.856, no weekend. The daily mean moves with
+   the sample's composition (a weekly saw-tooth on the chart), not with prices. The daily view stays available,
+   labelled as an audit view.
 
-**Consequences.** Two more tables per ANP build (synthetic sample: 2,764 and 13,214 rows, ~1-2 MB; real data
-estimated at ~140k and a few hundred thousand). New models need `make dbt-parse`. An existing volume needs
+**Consequences.** Two more tables per ANP build. Measured on the lab with real data (2026-10-25, fact 810,292
+rows): `ag_anp_preco_posto_atual` 37,311 rows (the app loads it whole), `ag_anp_preco_municipio_diario` 143,206
+(synthetic sample: 2,764 and 13,214). New models need `make dbt-parse`. An existing volume needs
 `make env` (adds `ANP_APP_DB_PASSWORD`), `docker compose up -d postgres` (new env var) and `make db-bootstrap`.
 Not decided yet: how it is published (Streamlit Community Cloud cannot reach the lab Postgres; options are a
 Parquet snapshot of the two marts exported by the DAG, or a hosted read replica), and whether the app becomes a
