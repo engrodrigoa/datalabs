@@ -164,6 +164,12 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * **Schema drift:** files are validated against the expected contract. A file with missing columns is rejected (and alerted), and extra columns are dropped with a warning.
 * **History preserved:** the weekly file keeps the same name every week, so each load is keyed by survey reference instead of being overwritten.
 * Gold: `ft_anp_combustiveis`, `dm_postos`, `dm_produtos`, with tests and Elementary volume/freshness/column anomaly monitors.
+* Serving marts for the analytics app: `ag_anp_preco_posto_atual` (latest price per station × product) and
+  `ag_anp_preco_municipio_diario` (day × city × product, exact roll-ups), reconciled with the fact by tests.
+* **Analytics app** (`make dashboard-anp`, http://localhost:8501): Streamlit matrix UF → city → bairro → station
+  with the latest price per station inside a recency window, product cards, and the price line by collection
+  day down to the city. Reads only the two marts, as the read-only role `anp_app_ro`
+  ([ADR 0016](docs/adr/0016-anp-streamlit-analytics-layer.md)).
 
 ### 🏢 RFB — CNPJ open data (`dag_rfb` → `dag_rfb_dw_dbt`)
 
@@ -335,13 +341,14 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 
 ```text
 airflow/dags/                 DAGs (ANP, RFB, RFB dbt, RAG, setup, observability health)
+apps/anp_dashboard/           Streamlit analytics app over the ANP serving marts (own venv: make dashboard-anp)
 pipelines/
   anp/  rfb/  rag/anp/        ingestion + AI scripts
   commons/                    logger (JSON), env, S3, Postgres COPY, RAG router
   observability/              runner, step tracker, checks (+ checks.yml), alerting, Airflow callbacks
   dbt_projects/               dbt project: staging · silver · gold, Elementary, profiles via env vars
 infra/
-  postgres/init/              bootstrap (airflow DB, grafana_ro) + idempotent DDL (single source of truth)
+  postgres/init/              bootstrap (airflow DB, grafana_ro, anp_app_ro) + idempotent DDL (single source of truth)
   promtail/  prometheus/      log pipeline, StatsD mapping, scrape config
 grafana/
   provisioning/               datasources (fixed UIDs) + dashboard provider
@@ -358,7 +365,7 @@ scripts/                      sample data generator
 
 1. **lint + unit tests**: ruff, pytest (runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail), and dashboards regenerated from code with no diff allowed.
 2. **compose**: `docker compose config` for the default, AI and GPU variants.
-3. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, and **every Grafana SQL query executed as `grafana_ro`**.
+3. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
 
 ## Engineering decisions
 

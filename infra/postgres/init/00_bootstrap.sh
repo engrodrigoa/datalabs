@@ -20,6 +20,21 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<-EOSQL
     END IF;
   END
   \$\$;
+
+  -- Read-only role of the ANP Streamlit dashboard (apps/anp_dashboard). It always exists, because the dbt
+  -- serving marts grant it SELECT on every build; it can LOG IN only when ANP_APP_DB_PASSWORD is set.
+  DO \$\$
+  BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anp_app_ro') THEN
+      CREATE ROLE anp_app_ro NOLOGIN;
+    END IF;
+    IF '${ANP_APP_DB_PASSWORD:-}' <> '' THEN
+      ALTER ROLE anp_app_ro LOGIN PASSWORD '${ANP_APP_DB_PASSWORD:-}';
+    ELSE
+      ALTER ROLE anp_app_ro NOLOGIN;
+    END IF;
+  END
+  \$\$;
 EOSQL
 
 # Schemas/tables of the DW (same files the setup DAG re-applies idempotently)
@@ -41,6 +56,9 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     END LOOP;
   END
   \$\$;
+  -- anp_app_ro: schema usage only; table SELECT comes from the dbt grants on the two serving marts
+  GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO anp_app_ro;
+  GRANT USAGE ON SCHEMA gold TO anp_app_ro;
 EOSQL
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname airflow <<-EOSQL

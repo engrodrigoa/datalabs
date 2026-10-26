@@ -61,7 +61,7 @@ jobs:
       - name: bootstrap database (same script as the container entrypoint)
         run: |
           sudo apt-get install -y -qq postgresql-client
-          PGHOST=localhost POSTGRES_USER=datalab POSTGRES_DB=datalab GRAFANA_DB_PASSWORD=ro \
+          PGHOST=localhost POSTGRES_USER=datalab POSTGRES_DB=datalab GRAFANA_DB_PASSWORD=ro ANP_APP_DB_PASSWORD=ro \
           INIT_SQL_DIR=infra/postgres/init/sql bash infra/postgres/init/00_bootstrap.sh
       - name: land sample ANP files through the observability runner
         run: |
@@ -103,3 +103,7 @@ jobs:
         env:
           DASHBOARD_SQL_DSN_DW: postgresql://grafana_ro:ro@localhost:5432/datalab
         run: pytest tests/test_dashboards_sql.py
+      - name: ANP Streamlit app SQL runs as anp_app_ro (least privilege)
+        env:
+          ANP_APP_SQL_DSN: postgresql://anp_app_ro:ro@localhost:5432/datalab
+        run: pytest tests/test_anp_dashboard.py

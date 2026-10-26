@@ -1,0 +1,6 @@
+# ANP dashboard (apps/anp_dashboard): its own venv, never installed in the Airflow image.
+streamlit==1.66.1          # brings altair (charts) and pandas (Altair's input)
+polars>=1.20,<2
+sqlalchemy>=2,<3
+psycopg2-binary>=2.9
+python-dotenv>=1

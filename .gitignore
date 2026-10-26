@@ -1,6 +1,7 @@
 # secrets / local env
 .env
 .venv/
+.venv-*/
 .dbt/
 .vscode/
 __pycache__/

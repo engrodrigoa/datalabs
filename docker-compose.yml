@@ -78,6 +78,8 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_DB}
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+      # ANP Streamlit dashboard read-only role (empty -> role stays NOLOGIN)
+      ANP_APP_DB_PASSWORD: ${ANP_APP_DB_PASSWORD:-}
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:

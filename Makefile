@@ -11,7 +11,7 @@ help: ## list targets
 env: ## create .env with random passwords (keeps an existing one, adds missing Airflow keys)
 	@test -f .env && echo ".env already exists" || ( \
 	  cp .env.example .env && \
-	  for k in DB_PASSWORD GRAFANA_DB_PASSWORD AIRFLOW_ADMIN_PASSWORD MINIO_ROOT_PASSWORD GRAFANA_ADMIN_PASSWORD; do \
+	  for k in DB_PASSWORD GRAFANA_DB_PASSWORD ANP_APP_DB_PASSWORD AIRFLOW_ADMIN_PASSWORD MINIO_ROOT_PASSWORD GRAFANA_ADMIN_PASSWORD; do \
 	    v=$$(openssl rand -hex 12); sed -i.bak "s|^$$k=.*|$$k=$$v|" .env; done && \
 	  sed -i.bak "s|^MINIO_SECRET_KEY=.*|MINIO_SECRET_KEY=$$(grep ^MINIO_ROOT_PASSWORD= .env | cut -d= -f2)|" .env && \
 	  sed -i.bak "s|^AIRFLOW_UID=.*|AIRFLOW_UID=$$(id -u)|" .env && rm -f .env.bak && \
@@ -26,6 +26,14 @@ env: ## create .env with random passwords (keeps an existing one, adds missing A
 	    if grep -qE "^$$k=" .env; then sed -i.bak "s|^$$k=.*|$$k=$$v|" .env && rm -f .env.bak; \
 	    else [ -n "$$(tail -c1 .env)" ] && echo >> .env; echo "$$k=$$v" >> .env; fi; \
 	    echo "$$k generated in .env (recreate Airflow to apply: docker compose up -d)";; \
+	  esac; done
+	@# Keys added after a .env was created: generated once when missing or a placeholder, never rotated.
+	@for k in ANP_APP_DB_PASSWORD; do \
+	  cur=$$(grep -E "^$$k=" .env | cut -d= -f2-); \
+	  case "$$cur" in ""|change-me*) v=$$(openssl rand -hex 12); \
+	    if grep -qE "^$$k=" .env; then sed -i.bak "s|^$$k=.*|$$k=$$v|" .env && rm -f .env.bak; \
+	    else [ -n "$$(tail -c1 .env)" ] && echo >> .env; echo "$$k=$$v" >> .env; fi; \
+	    echo "$$k generated in .env (apply: docker compose up -d postgres && make db-bootstrap)";; \
 	  esac; done
 
 creds: ## logins for THIS machine (from .env; passwords are random per machine)
@@ -117,7 +125,8 @@ models-import: ## restore ./hf_cache.tgz into the hf_cache volume (then set HF_H
 	docker volume create datalabs_hf_cache >/dev/null
 	docker run --rm -v datalabs_hf_cache:/c -v "$(CURDIR)":/in:ro alpine:3.20 sh -c "tar xzf /in/hf_cache.tgz -C /c && chown -R $$(id -u):0 /c"
 
-sample-data: ## offline synthetic ANP files (no internet needed)
+sample-data: ## offline synthetic ANP files (no internet needed; refused over real ANP loads unless FORCE=1)
+	$(AF) env ANP_SAMPLE_FORCE=$(FORCE) python /opt/airflow/scripts/anp_sample_guard.py
 	$(AF) python /opt/airflow/scripts/generate_sample_anp.py /mnt/datasource/anp
 
 nfe-quickstart: up ## NF-e do zero: tabelas Elementary, 2000 notas, despausa e dispara o dag_nfe
@@ -143,6 +152,14 @@ nfe-backfill: ## NF-e: histórico jan-set/2026 (5000 notas) para popular o DW
 	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 5000 \
 	  --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
 
+ANP_APP_VENV ?= .venv-anp
+dashboard-anp-install: ## create the ANP dashboard venv (Streamlit; separate from the Airflow image)
+	python3 -m venv $(ANP_APP_VENV) && $(ANP_APP_VENV)/bin/pip install -q -r apps/anp_dashboard/requirements.txt
+
+dashboard-anp: ## run the ANP Streamlit dashboard on http://localhost:8501 (reads the gold as anp_app_ro)
+	@test -x $(ANP_APP_VENV)/bin/streamlit || $(MAKE) --no-print-directory dashboard-anp-install
+	cd apps/anp_dashboard && ../../$(ANP_APP_VENV)/bin/streamlit run app.py --server.port 8501
+
 test: ## unit tests
 	pytest
 
@@ -155,4 +172,5 @@ urls:
 	@echo "  Grafana     http://localhost:3000   (DataLabs · Pipeline Health · NF-e: /d/datalabs-nfe)"
 	@echo "  S3 (Silo)   http://localhost:9091"
 	@echo "  Prometheus  http://localhost:9090"
+	@echo "  ANP app     http://localhost:8501   (make dashboard-anp)"
 	@echo "  logins: make creds"

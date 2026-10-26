@@ -23,6 +23,7 @@ work there (the runbooks show the `docker compose exec -T airflow-scheduler ...`
 | Processing | Polars 1.x + PyArrow, single node (ADR 0002) |
 | Storage | Postgres 15 + pgvector (`pg_data` volume, `shm_size: 1g`), Silo (community MinIO fork, pinned by digest, ADR 0004) |
 | AI | sentence-transformers on CPU torch, `intfloat/multilingual-e5-small` (384 dims), Ollama `llama3.2:1b` (profile `ai`) |
+| Analytics app | Streamlit 1.66.1 (+ Altair), own venv `.venv-anp`, `apps/anp_dashboard` (ADR 0016) |
 | Observability | Loki 2.9.2 + Promtail 2.9.2 (EOL, ADR 0003), statsd-exporter → Prometheus v2.53.0, Grafana 12.0.0 |
 
 Airflow deps are resolved against the official Airflow constraints; AI deps are installed with every
@@ -39,10 +40,12 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
+- `apps/anp_dashboard/` — Streamlit over `gold.ag_anp_preco_posto_atual` / `ag_anp_preco_municipio_diario` as `anp_app_ro`;
+  `logic.py` pure Polars (tested), `data.py` the only SQL, `app.py` layout
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0015), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0016), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -122,6 +125,11 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   correct text (bar was 3/9), 0 invented; the gap is fiscal vocabulary (literal "não trata especificamente").
   Each gate records the floor it judged against in the step's `metrics` (`floor_<group>_<metric>`,
   `ceiling_<group>_false_answers`), which the RAG dashboard plots against the value. Prompt experiments: `--golden --dev --variant X`. CPU-bound: WSL needs every core (`.wslconfig processors`).
+- **0016 ANP analytics layer (proposed):** two serving marts, one per reader question: latest price per station ×
+  product (no date filter in the model; the app applies a recency window, default 30 days) and day × city × product
+  with `soma_valor_venda` for exact roll-ups (history stops at the city). Role `anp_app_ro` reads only those two,
+  through dbt `grants` re-applied on every build. App decoupled from `pipelines/` (own venv and `ANP_APP_DB_*`).
+  Publishing (Parquet snapshot vs. hosted replica) is open.
 
 ## Development rules
 
@@ -186,7 +194,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **Secrets only in `.env`** (gitignored, together with every `.env.*` except `.env.example`). `make env` generates
   random passwords. Never commit, print, log or paste secret values; never read `.env` to answer a question —
   `.env.example` documents every key. Sensitive keys: `DB_PASSWORD`, `GRAFANA_DB_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`,
-  `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW__CORE__FERNET_KEY` (never regenerate a set Fernet key),
+  `ANP_APP_DB_PASSWORD`, `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW__CORE__FERNET_KEY` (never regenerate a set Fernet key),
   `MINIO_*`, `TELEGRAM_BOT_TOKEN`, `ALERT_WEBHOOK_URL`. `RFB_SHARE_URL` is a public link (configuration, not a secret).
 - `profiles.yml` is committed because it only reads `env_var(...)`. Keep it free of literals.
 - **Least privilege:** Grafana uses the read-only role `grafana_ro`. A new schema that Grafana reads must be added
