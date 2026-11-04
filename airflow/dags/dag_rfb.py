@@ -4,27 +4,24 @@ dag_rfb — Receita Federal (CNPJ open data): WebDAV -> bronze parquet -> silver
 * `ref_month` param (YYYY-MM) replaces the reference month hardcoded in every script.
 * `dev_mode` limits big entities to 500k rows (laptop friendly).
 * Independent entities run in parallel (max_active_tasks bounds memory usage).
-* Emits the `datalabs://landing/rfb` dataset, which triggers dag_rfb_dw_dbt
+* Emits the `datalabs://landing/rfb` asset, which triggers dag_rfb_dw_dbt
   (dbt + Elementary + RFB data health checks run there, after gold is rebuilt).
 """
 import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.datasets import Dataset  # type: ignore
-from airflow.models.param import Param  # type: ignore
-from airflow.operators.empty import EmptyOperator  # type: ignore
-from airflow.operators.python import PythonOperator  # type: ignore
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.empty import EmptyOperator  # type: ignore
+from airflow.providers.standard.operators.python import PythonOperator  # type: ignore
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator  # type: ignore
+from airflow.sdk import DAG, Asset, Param, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pipelines.commons.audit_logger import consolidate_dag_audit_logs
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import observed_script
 
-LANDING_RFB = Dataset("datalabs://landing/rfb")
+LANDING_RFB = Asset("datalabs://landing/rfb")
 
 RFB_ENV = {
     "RFB_REF_MONTH": "{{ params.ref_month }}",

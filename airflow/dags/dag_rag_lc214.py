@@ -25,10 +25,10 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
     (ignore_downstream_trigger_rules=True). lc03 needs the embedding model's tokenizer: without the AI
     image, the token counts would be estimates, and an estimate cannot prove that no chunk is truncated.
 
-Dataset `datalabs://silver/lc214`
+Asset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
     are new chunks. The load and the embedding run in this DAG, right after it; the evaluation (lc05) can be
-    scheduled on the dataset, like dag_rag_anp on datalabs://gold/anp.
+    scheduled on the asset, like dag_rag_anp on datalabs://gold/anp.
 
 Serving load (lc04_load.py, ADR 0011)
     Projects the current version into ai.lc214_dispositivo / ai.lc214_artigo by upsert in one transaction (readers
@@ -81,17 +81,14 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.datasets import Dataset  # type: ignore
-from airflow.models.param import Param  # type: ignore
-from airflow.operators.python import ShortCircuitOperator  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.python import ShortCircuitOperator  # type: ignore
+from airflow.sdk import DAG, Asset, Param, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import health_checks, observed_script
 
-SILVER_LC214 = Dataset("datalabs://silver/lc214")
+SILVER_LC214 = Asset("datalabs://silver/lc214")
 
 FORCE = "{{ '--force' if params.force else '' }}"
 PDF = "{{ ('--pdf ' ~ params.pdf) if params.pdf else '' }}"

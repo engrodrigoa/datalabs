@@ -1,7 +1,7 @@
 # DataLabs — observable data pipelines, from DW to RAG
 
 [![ci](https://github.com/engrodrigoa/datalabs/actions/workflows/ci.yml/badge.svg)](https://github.com/engrodrigoa/datalabs/actions/workflows/ci.yml)
-![Airflow](https://img.shields.io/badge/Airflow-2.9-017CEE?logo=apacheairflow&logoColor=white)
+![Airflow](https://img.shields.io/badge/Airflow-3.3-017CEE?logo=apacheairflow&logoColor=white)
 ![dbt](https://img.shields.io/badge/dbt-1.11%20%2B%20Elementary-FF694B?logo=dbt&logoColor=white)
 ![Polars](https://img.shields.io/badge/Polars-1.x-CD792C?logo=polars&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Postgres-15%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
@@ -42,7 +42,7 @@ flowchart LR
     RFB[Receita Federal<br/>WebDAV ZIPs]
   end
 
-  subgraph Orchestration[Airflow 2.9 + Cosmos]
+  subgraph Orchestration[Airflow 3.3 + Cosmos]
     RUN[observability runner<br/>pipelines.observability.run]
   end
 
@@ -148,7 +148,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * task failure → Airflow callback **after the last retry**
 * partial load (some files failed) → runner
 * failing / warning data checks → checks
-* SLA miss on the ANP DAG
+* missed run deadline on the ANP DAG (3 h from queue; Airflow 3 `DeadlineAlert`, which replaced SLAs, [ADR 0017](docs/adr/0017-airflow-3-migration.md))
 * the final audit task **fails the DAG run** when any task failed (an `ALL_DONE` leaf would otherwise mark the run green), and it does not send an alert of its own
 
 ---
@@ -181,7 +181,7 @@ Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALE
 * Shifted-column detection (`_suspeita_deslocamento`) is tracked as a % metric with a threshold.
 * **Download driven by a file contract** ([ADR 0009](docs/adr/0009-rfb-source-contract.md)): the source stopped listing its folders and answers intermittently under bursts, so the step fetches the 37 files every month must have, with retries and backoff, accepts a local file only if it is a readable ZIP of the announced size, and names the cause when it fails (link rotated, month not published yet, files that never came). The share link is public configuration (`RFB_SHARE_URL`), so a fresh clone needs no manual step.
 * Download → bronze → silver → landing with parallel entities (bounded by `max_active_tasks`), with the `ref_month` parameter set from the UI.
-* Dataset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
+* Asset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
 
 ### 🧾 NF-e — tax reform DW (IBS/CBS/IS) (`dag_nfe`, sensor-driven)
 
@@ -331,7 +331,9 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 | Edited `.env` but nothing changed | `.env` is read when a container is **created** | `docker compose up -d` (recreates the containers whose configuration changed) |
 | `dag_rag_anp` skipped | the image was built without the AI layer | `make up-ai` (by design: the RAG layer is opt-in) |
 | `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
-| Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | webserver and scheduler had no shared `AIRFLOW__WEBSERVER__SECRET_KEY`, so each made its own | `make env` adds it (and `AIRFLOW__CORE__FERNET_KEY`) to an existing `.env`, then `docker compose up -d` |
+| Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | the Airflow containers had no shared `AIRFLOW__API__SECRET_KEY`, so each made its own | `make env` adds it to an existing `.env`, then `docker compose up -d` |
+| Every task fails at start with `403` / `Invalid auth token` from the Execution API | no shared `AIRFLOW__API_AUTH__JWT_SECRET` (an Airflow 2 `.env`): compose stops with `missing in .env, run make env` | `make env` generates the Airflow 3 keys into the existing `.env`, then `docker compose up -d` ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
+| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9 | nothing to drop: `make env && make up`; `airflow-init` migrates it in place, run history included |
 
 </details>
 
@@ -363,9 +365,10 @@ scripts/                      sample data generator
 
 `.github/workflows/ci.yml` runs on every push:
 
-1. **lint + unit tests**: ruff, pytest (runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail), and dashboards regenerated from code with no diff allowed.
+1. **lint + unit tests**: ruff (incl. `AIR3`, the Airflow 3 migration rules), pytest (incl. Airflow 3 guardrails: no logical-date keys in templates, no metadata DB in task code) (runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail), and dashboards regenerated from code with no diff allowed.
 2. **compose**: `docker compose config` for the default, AI and GPU variants.
-3. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
+3. **airflow-dags**: Airflow 3.3.2 with the official constraints parses `airflow/dags` with the dag-processor's DagBag: no import errors or deprecated APIs, observability callbacks on every task, the ANP deadline, the asset wiring, and the run timestamp rendered with and without a logical date.
+4. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
 
 ## Engineering decisions
 
@@ -384,6 +387,8 @@ scripts/                      sample data generator
 * [0013 — LC 214 vector search: exact cosine over an incremental store, context under an LLM budget](docs/adr/0013-lc214-vector-search-and-context.md)
 * [0014 — LC 214 retrieval gate: golden set through the real retriever, thresholds from a committed baseline](docs/adr/0014-lc214-retrieval-evaluation-gate.md)
 * [0015 — LC 214 answer generation: cited JSON from a local LLM, three barriers to "não consta"](docs/adr/0015-lc214-answer-generation.md)
+* [0016 — ANP analytics layer: Streamlit over two gold serving marts, read-only role](docs/adr/0016-anp-streamlit-analytics-layer.md)
+* [0017 — Airflow 3: four components, Execution API, deadlines instead of SLAs](docs/adr/0017-airflow-3-migration.md)
 
 ## Roadmap
 

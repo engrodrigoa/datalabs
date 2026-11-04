@@ -3,6 +3,13 @@ Airflow callbacks shared by every DAG (import and spread `OBS_DEFAULT_ARGS` / `O
 
 They cover what the step runner cannot: dbt/Cosmos tasks, Python operators, sensors,
 timeouts and zombie kills. Alerts fire once per *final* failure (after retries).
+
+Where each one runs in Airflow 3:
+  * task callbacks (failure / retry)  -> the task's own process (Task SDK), right after the attempt
+  * DAG callbacks (failure / success) -> the dag-processor
+  * on_deadline_missed                -> the executor, as a DeadlineAlert SyncCallback (replaces the removed SLAs)
+
+No Airflow import at module level: the guardrail tests import this module without Airflow installed.
 """
 from __future__ import annotations
 
@@ -21,11 +28,24 @@ def _ti_fields(context) -> dict:
         "dag_id": getattr(ti, "dag_id", None),
         "task_id": getattr(ti, "task_id", None),
         "run_id": getattr(dag_run, "run_id", None),
-        # in callbacks ti.try_number already points to the NEXT try (Airflow 2.9); prev_attempted_tries is the one that ran
-        "try": getattr(ti, "prev_attempted_tries", None) or getattr(ti, "try_number", None),
-        "duration_s": round(ti.duration, 1) if getattr(ti, "duration", None) else None,
+        # Airflow 3: try_number is the attempt that just ran (the 2.x "points to the next try" quirk is gone)
+        "try": getattr(ti, "try_number", None),
+        "duration_s": _duration_s(ti),
         "log_url": getattr(ti, "log_url", None),
     }
+
+
+def _duration_s(ti) -> float | None:
+    """The Task SDK instance has no `duration` column: derive it from start_date (end_date is not set yet)."""
+    duration = getattr(ti, "duration", None)
+    if duration:
+        return round(duration, 1)
+    start = getattr(ti, "start_date", None)
+    if start is None:
+        return None
+    from datetime import datetime, timezone
+
+    return round((datetime.now(timezone.utc) - start).total_seconds(), 1)
 
 
 GATE_MESSAGE = "pipeline run finished with failed task"  # raised by audit_logger's final gate
@@ -106,11 +126,23 @@ def on_dag_success(context) -> None:
               duration_s=duration)
 
 
-def on_sla_miss(dag, task_list, blocking_task_list, slas, blocking_tis) -> None:
-    tasks = ", ".join(str(getattr(s, "task_id", s)) for s in (slas or []))
-    log_event(logger, "sla_missed", f"SLA missed on {dag.dag_id}: {tasks}", level=logging.WARNING,
-              dag_id=dag.dag_id, tasks=tasks)
-    send_alert(title=f"SLA missed: {dag.dag_id}", message=f"tasks: {tasks}", severity="warning")
+def on_deadline_missed(context: dict | None = None, **kwargs) -> None:
+    """DeadlineAlert callback: the DAG run did not finish within its deadline (Airflow 3 replacement for SLAs).
+
+    Airflow passes `context={"dag_run": {...API fields...}, "deadline": {"id", "deadline_time"}}` plus the
+    `kwargs` declared in SyncCallback (here: `objective`, a human sentence of what was promised).
+    Event name kept as `sla_missed` so the Loki queries and dashboards built on it keep working.
+    """
+    context = context or {}
+    dag_run = context.get("dag_run") or {}
+    deadline = context.get("deadline") or {}
+    dag_id = dag_run.get("dag_id", "?")
+    objective = kwargs.get("objective", "")
+    log_event(logger, "sla_missed", f"deadline missed on {dag_id}: {objective}", level=logging.WARNING,
+              dag_id=dag_id, run_id=dag_run.get("dag_run_id"), deadline_time=str(deadline.get("deadline_time")),
+              objective=objective)
+    send_alert(title=f"Deadline missed: {dag_id}", severity="warning",
+               message=f"{objective} (run {dag_run.get('dag_run_id')}, deadline {deadline.get('deadline_time')})")
 
 
 OBS_DEFAULT_ARGS = {

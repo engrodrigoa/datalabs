@@ -611,7 +611,7 @@ def disparar_dag(dag_id: str = "dag_nfe") -> None:
         return
     r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     if r.returncode == 0:
-        print(f"{dag_id} disparado -> http://localhost:8080/dags/{dag_id}/grid", flush=True)
+        print(f"{dag_id} disparado -> http://localhost:8080/dags/{dag_id}", flush=True)
     else:
         print(f"--agora falhou ({r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}", flush=True)
         print("as notas estão na inbox: o próximo agendamento (<= 10 min) processa.", flush=True)

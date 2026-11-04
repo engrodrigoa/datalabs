@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
+from airflow.sdk import DAG  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS

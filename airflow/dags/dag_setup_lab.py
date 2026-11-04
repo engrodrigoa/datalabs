@@ -10,10 +10,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator  # type: ignore
 from airflow.providers.postgres.hooks.postgres import PostgresHook  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.python import PythonOperator  # type: ignore
+from airflow.sdk import DAG, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pipelines.commons.audit_logger import consolidate_dag_audit_logs

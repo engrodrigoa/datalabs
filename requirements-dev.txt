@@ -1,6 +1,6 @@
 # Local development / CI (no Airflow needed for unit tests)
 pytest>=8
-ruff>=0.6
+ruff>=0.17          # AIR3 rules (Airflow 3 migration lint, ADR 0017)
 pyyaml
 polars>=1.20,<2
 psycopg2-binary

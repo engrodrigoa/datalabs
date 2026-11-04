@@ -15,5 +15,6 @@ extend-exclude = ["pipelines/dbt_projects/dbt_packages", "*.ipynb"]
 
 [tool.ruff.lint]
 # Start strict on real bugs only (syntax, undefined names); tighten as legacy code is refactored.
-select = ["E9", "F63", "F7", "F82", "F401"]
+# AIR3: Airflow 3 migration rules (removed / moved-to-provider APIs). They need no Airflow install (ADR 0017).
+select = ["E9", "F63", "F7", "F82", "F401", "AIR3"]
 per-file-ignores = { "pipelines/observability/__init__.py" = ["F401"] }

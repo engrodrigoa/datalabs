@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.6
-FROM apache/airflow:2.9.0-python3.12
+FROM apache/airflow:3.3.2-python3.12
 
-ARG AIRFLOW_VERSION=2.9.0
+# Keep in sync with the FROM tag: pip resolves against constraints-${AIRFLOW_VERSION} (ADR 0017)
+ARG AIRFLOW_VERSION=3.3.2
 ARG PYTHON_VERSION=3.12
 USER root
 # poppler-utils: pdftotext -layout for the LC 214 legislation RAG (pipelines/rag/lc214/lc01_extract.py)

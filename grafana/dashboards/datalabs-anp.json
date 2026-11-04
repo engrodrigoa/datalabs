@@ -52,7 +52,7 @@
     {
       "title": "Airflow · dag_dbt_anp",
       "type": "link",
-      "url": "http://localhost:8080/dags/dag_dbt_anp/grid",
+      "url": "http://localhost:8080/dags/dag_dbt_anp",
       "targetBlank": true,
       "icon": "external link"
     }

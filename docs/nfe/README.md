@@ -46,7 +46,7 @@ O que ele faz, em ordem:
 | 4 | `airflow dags unpause dag_nfe` | DAGs nascem pausados no lab (`DAGS_ARE_PAUSED_AT_CREATION`) |
 | 5 | `airflow dags trigger dag_nfe` | 1ª execução imediata (sem esperar o agendamento de 10 min) |
 
-Acompanhe em http://localhost:8080/dags/dag_nfe/grid e veja o resultado em http://localhost:3000/d/datalabs-nfe.
+Acompanhe em http://localhost:8080/dags/dag_nfe e veja o resultado em http://localhost:3000/d/datalabs-nfe.
 
 **Windows (PowerShell, sem `make`):**
 

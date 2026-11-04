@@ -53,9 +53,26 @@ if running promtail; then
   else fail "Promtail sees NO Airflow log file (logs are not reaching Loki)" "$RECREATE  — or no DAG has run yet"; fi
 else fail "promtail is not running"; fi
 
+echo "Airflow 3 components (ADR 0017)"
+for svc in airflow-apiserver airflow-scheduler airflow-dag-processor airflow-triggerer; do
+  if running "$svc"; then ok "$svc running"; else fail "$svc is not running" "docker compose up -d $svc && docker compose logs $svc"; fi
+done
+if running airflow-apiserver; then
+  # one endpoint reports every component's heartbeat; a component can be "Up" yet never heartbeat (e.g. wrong JWT)
+  health=$(docker compose exec -T airflow-apiserver curl -sf http://localhost:8080/api/v2/monitor/health 2>/dev/null)
+  for comp in metadatabase scheduler dag_processor triggerer; do
+    if echo "$health" | grep -qE "\"$comp\":\{\"status\":\"healthy\""; then ok "$comp healthy (api/v2/monitor/health)"
+    else fail "$comp NOT healthy in api/v2/monitor/health" "docker compose logs airflow-${comp//_/-}  (tasks failing with 403: AIRFLOW__API_AUTH__JWT_SECRET must be in .env, run make env)"; fi
+  done
+fi
+if running airflow-dag-processor; then
+  # the dag-processor parses the DAG files in Airflow 3: its bind mount is the one that must not be empty
+  n=$(docker compose exec -T airflow-dag-processor sh -c 'ls /opt/airflow/dags/*.py 2>/dev/null | wc -l' | tr -d '[:space:]')
+  if [ "${n:-0}" -gt 0 ]; then ok "dag-processor sees $n DAG file(s)"
+  else fail "Airflow dags folder is EMPTY in the dag-processor" "docker compose up -d --force-recreate airflow-dag-processor airflow-scheduler airflow-apiserver"; fi
+fi
+
 if running airflow-scheduler; then
-  n=$(docker compose exec -T airflow-scheduler sh -c 'ls /opt/airflow/dags/*.py 2>/dev/null | wc -l' | tr -d '[:space:]')
-  if [ "${n:-0}" -gt 0 ]; then ok "Airflow sees $n DAG file(s)"; else fail "Airflow dags folder is EMPTY" "docker compose up -d --force-recreate airflow-scheduler airflow-webserver"; fi
 
   echo "AI profile"
   if docker compose exec -T airflow-scheduler python -c "import importlib.util,sys; sys.exit(importlib.util.find_spec('sentence_transformers') is None)" 2>/dev/null; then

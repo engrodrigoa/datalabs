@@ -18,7 +18,7 @@ work there (the runbooks show the `docker compose exec -T airflow-scheduler ...`
 
 | Layer | Version / detail |
 |---|---|
-| Orchestration | Airflow 2.9.0 (Python 3.12, LocalExecutor) + astronomer-cosmos 1.15.1 |
+| Orchestration | Airflow 3.3.2 (Python 3.12, LocalExecutor; api-server, scheduler, dag-processor, triggerer — ADR 0017) + astronomer-cosmos 1.15.1 |
 | Transform | dbt-core 1.11.15, dbt-postgres 1.11.0, Elementary 0.25.1 (CLI = package version), isolated venv `/opt/airflow/dbt_venv` |
 | Processing | Polars 1.x + PyArrow, single node (ADR 0002) |
 | Storage | Postgres 15 + pgvector (`pg_data` volume, `shm_size: 1g`), Silo (community MinIO fork, pinned by digest, ADR 0004) |
@@ -31,10 +31,10 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 
 ## Repository map
 
-- `airflow/dags/` — `dag_dbt_anp` (Mon 06:00), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → dataset
+- `airflow/dags/` — `dag_dbt_anp` (Mon 06:00, 3 h run deadline), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → asset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (dataset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
-  gate → lc06 generation; dataset `datalabs://silver/lc214`),
+  (asset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
+  gate → lc06 generation; asset `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
@@ -45,7 +45,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0016), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0017), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -130,6 +130,14 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   with `soma_valor_venda` for exact roll-ups (history stops at the city). Role `anp_app_ro` reads only those two,
   through dbt `grants` re-applied on every build. App decoupled from `pipelines/` (own venv and `ANP_APP_DB_*`).
   Publishing (Parquet snapshot vs. hosted replica) is open.
+- **0017 Airflow 3:** imports from `airflow.sdk` (`DAG`, `Asset`, `Param`, `TriggerRule`) and
+  `airflow.providers.standard` (operators, FileSensor); `ruff` `AIR3` enforces it. Tasks never touch the metadata
+  DB (Execution API only: `ti.get_task_states()`, never `dag_run.get_task_instances()`). Manual / asset /
+  TriggerDagRun runs have no logical date and no `ds`/`ts`/`ts_nodash` keys: templates use `RUN_TS`
+  (`dag_helpers`), never `{{ ts_nodash }}` (guarded by `tests/test_airflow3_guardrails.py`). SLAs are gone:
+  `DAG(deadline=run_deadline(...))` (event `sla_missed`). Task logs are JSON lines; Promtail unpacks them and also
+  ships `logs/dag_processor/` and `logs/executor_callbacks/`. `AIRFLOW__API_AUTH__JWT_SECRET` must be shared by
+  every component (compose refuses to start without it). UI links are `/dags/<dag_id>` (no `/grid` route).
 
 ## Development rules
 
@@ -184,8 +192,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   that every pinned image still exists.
 
 **Tests & CI** (`.github/workflows/ci.yml`, must be green before merge; `image-availability.yml` runs weekly)
-- `ruff check .` (line length 120) and `pytest`; dashboards regenerated with no diff; `docker compose config` for
-  default and AI/GPU variants; data integration on real Postgres + pgvector (ANP landing → dbt + Elementary →
+- `ruff check .` (line length 120, incl. `AIR3`) and `pytest`; dashboards regenerated with no diff; `docker compose config` for
+  default and AI/GPU variants; `airflow-dags` (Airflow 3.3.2 + official constraints, DagBag integrity:
+  `tests/test_dag_integrity.py`); data integration on real Postgres + pgvector (ANP landing → dbt + Elementary →
   NF-e batch → health checks → audit assertions → every Grafana query as `grafana_ro`).
 - New behaviour gets a unit test in `tests/`. New Grafana SQL is covered by `tests/test_dashboards_sql.py`.
 
@@ -194,12 +203,12 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **Secrets only in `.env`** (gitignored, together with every `.env.*` except `.env.example`). `make env` generates
   random passwords. Never commit, print, log or paste secret values; never read `.env` to answer a question —
   `.env.example` documents every key. Sensitive keys: `DB_PASSWORD`, `GRAFANA_DB_PASSWORD`, `AIRFLOW_ADMIN_PASSWORD`,
-  `ANP_APP_DB_PASSWORD`, `AIRFLOW__WEBSERVER__SECRET_KEY`, `AIRFLOW__CORE__FERNET_KEY` (never regenerate a set Fernet key),
+  `ANP_APP_DB_PASSWORD`, `AIRFLOW__API__SECRET_KEY`, `AIRFLOW__API_AUTH__JWT_SECRET`, `AIRFLOW__CORE__FERNET_KEY` (never regenerate a set Fernet key),
   `MINIO_*`, `TELEGRAM_BOT_TOKEN`, `ALERT_WEBHOOK_URL`. `RFB_SHARE_URL` is a public link (configuration, not a secret).
 - `profiles.yml` is committed because it only reads `env_var(...)`. Keep it free of literals.
 - **Least privilege:** Grafana uses the read-only role `grafana_ro`. A new schema that Grafana reads must be added
   to the grant loop in `infra/postgres/init/00_bootstrap.sh`. Airflow metadata stays in its own `airflow` database.
-  `AIRFLOW__WEBSERVER__EXPOSE_CONFIG` stays `false`.
+  `AIRFLOW__API__EXPOSE_CONFIG` stays `false`.
 - **SQL injection:** any value from a user, a question or an LLM is a bind parameter (`text(sql)` + params).
   f-strings in SQL only for trusted config (e.g. `RAG_UF`) or fixed identifiers.
 - **NF-e data is 100% synthetic and fictitious** (`scripts/nfe/gen_nfe.py`). Never add real documents, CNPJs or CPFs.

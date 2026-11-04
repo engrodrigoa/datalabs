@@ -1,12 +1,10 @@
-"""dag_rfb_dw_dbt — RFB DW models (dbt + Cosmos), triggered by the `datalabs://landing/rfb` dataset."""
+"""dag_rfb_dw_dbt — RFB DW models (dbt + Cosmos), triggered by the `datalabs://landing/rfb` asset."""
 import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.datasets import Dataset  # type: ignore
-from airflow.operators.python import PythonOperator  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.python import PythonOperator  # type: ignore
+from airflow.sdk import DAG, Asset, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
@@ -17,7 +15,7 @@ from pipelines.observability.dag_helpers import (
     DBT_BIN, DBT_PROJECT_DIR, dbt_command, dbt_load_config, elementary_report, health_checks, observed_module,
 )
 
-LANDING_RFB = Dataset("datalabs://landing/rfb")
+LANDING_RFB = Asset("datalabs://landing/rfb")
 
 profile_config = ProfileConfig(
     profile_name="datalab",
