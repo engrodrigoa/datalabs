@@ -16,22 +16,23 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.operators.bash import BashOperator  # type: ignore
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator  # type: ignore
-from airflow.sensors.filesystem import FileSensor  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.bash import BashOperator  # type: ignore
+from airflow.providers.standard.sensors.filesystem import FileSensor  # type: ignore
+from airflow.sdk import DAG, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
 from cosmos.constants import TestBehavior  # type: ignore
 
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
-from pipelines.observability.dag_helpers import DBT_BIN, DBT_PROJECT_DIR, dbt_load_config
+from pipelines.observability.dag_helpers import DBT_BIN, DBT_PROJECT_DIR, RUN_TS, dbt_load_config
 
 NFE_DIR = os.getenv("NFE_DIR", "/mnt/datasource/nfe")      # mesmo caminho no Airflow e no Postgres
 MAX_ARQUIVOS_LOTE = int(os.getenv("NFE_MAX_ARQUIVOS_LOTE", "5000"))
-LOTE = "{{ ts_nodash }}"
+# Nome do lote = horário do run. RUN_TS e não {{ ts_nodash }}: no Airflow 3 o run manual (`make nfe-demo`,
+# botão Trigger) não tem logical_date, e ts_nodash nem existe no contexto
+LOTE = RUN_TS
 LOTE_ID = "{{ (ti.xcom_pull(task_ids='ingerir_bronze') or [[0]])[0][0] }}"   # 0 = nenhum lote (no-op)
 
 profile_config = ProfileConfig(
@@ -66,9 +67,9 @@ with DAG(
         poke_interval=30,
         timeout=9 * 60,
         mode="reschedule",
-        # sem arquivos -> run SKIPPED (não é falha). ATENÇÃO (Airflow 2.9): soft_fail transforma
-        # QUALQUER exceção do poke em SKIPPED (ex.: conexão fs_default inexistente). Skip em ~1 s, em vez
-        # de ~9 min, indica erro mascarado: veja o log e a conexão (declarada no docker-compose).
+        # sem arquivos até o timeout -> run SKIPPED (não é falha). No Airflow 3 o soft_fail só converte o
+        # TIMEOUT do sensor em skip; um erro real no poke (ex.: conexão fs_default inexistente) agora FALHA a
+        # task, em vez de virar um skip silencioso como no 2.9.
         soft_fail=True,
     )
 

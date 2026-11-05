@@ -6,30 +6,28 @@ Observability built in:
   * dbt tests + Elementary anomaly tests run per model (Cosmos)  -> schema elementary
   * health checks (freshness, volume, reconciliation) ALWAYS run, even when there was no
     new file to process -> audit.data_quality_checks
-  * task failures / SLA misses alert through pipelines.observability.alerting
+  * task failures / missed run deadline (3 h) alert through pipelines.observability.alerting
 """
 import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.datasets import Dataset  # type: ignore
-from airflow.operators.empty import EmptyOperator  # type: ignore
-from airflow.operators.python import PythonOperator  # type: ignore
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.empty import EmptyOperator  # type: ignore
+from airflow.providers.standard.operators.python import PythonOperator  # type: ignore
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator  # type: ignore
+from airflow.sdk import DAG, Asset, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
 
 from pipelines.commons.audit_logger import consolidate_dag_audit_logs
-from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS, on_sla_miss
+from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import (
     DBT_BIN, DBT_PROJECT_DIR, dbt_command, dbt_load_config, elementary_report, health_checks, observed_module,
-    observed_script,
+    observed_script, run_deadline,
 )
 
-GOLD_ANP = Dataset("datalabs://gold/anp")
+GOLD_ANP = Asset("datalabs://gold/anp")
 
 profile_config = ProfileConfig(
     profile_name="datalab",
@@ -55,7 +53,9 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
-    sla_miss_callback=on_sla_miss,
+    # Airflow 3 replacement for the old `sla=timedelta(hours=3)` on publish_gold: the whole run, from the
+    # moment it is queued, must finish within 3 h or the deadline callback alerts (event `sla_missed`)
+    deadline=run_deadline(timedelta(hours=3), "dag_dbt_anp: ANP gold published within 3 h of the run being queued"),
     tags=["anp", "dbt", "cosmos", "elementary", "observability"],
     **OBS_DAG_CALLBACKS,
 ) as dag:
@@ -95,7 +95,7 @@ with DAG(
                                    load_method=DBT_LOAD["load_method"], should_detach_multiple_parents_tests=True),
     )
 
-    publish_gold = EmptyOperator(task_id="publish_gold", outlets=[GOLD_ANP], sla=timedelta(hours=3))
+    publish_gold = EmptyOperator(task_id="publish_gold", outlets=[GOLD_ANP])
 
     # ---------------------------------------------------------------- observability
     elementary_models = dbt_command("elementary_models", "run --select elementary",

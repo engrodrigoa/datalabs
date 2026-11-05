@@ -1,4 +1,5 @@
 
+import json
 import os
 import re
 import time
@@ -47,25 +48,41 @@ def upload_audit_log_to_minio(local_path: str, dag_id: str, logical_date: dateti
     return f"s3://{BUCKET_AUDIT}/{object_key}"
 
 
+def _run_logical_date(context) -> datetime:
+    """logical_date, or run_after when Airflow 3 leaves it empty (manual / asset / TriggerDagRun runs)."""
+    dag_run = context.get("dag_run")
+    return context.get("logical_date") or getattr(dag_run, "run_after", None) or datetime.now(ZoneInfo("UTC"))
+
+
+def _other_task_states(context) -> dict:
+    """{task_id: state} of every OTHER task in this DAG run.
+
+    Airflow 3 tasks have no metadata-DB access (`dag_run.get_task_instances()` is gone): states come from the
+    Execution API through the Task SDK. Raises when it cannot answer, so the caller decides what "unknown" means.
+    """
+    ti = context.get("ti") or context.get("task_instance")
+    dag_run = context.get("dag_run")
+    run_id = getattr(dag_run, "run_id", None) or context.get("run_id")
+    states = ti.get_task_states(dag_id=dag_run.dag_id, run_ids=[run_id]).get(run_id, {})
+    current_task_id = context["task"].task_id if context.get("task") else None
+    return {task_id: state for task_id, state in states.items() if task_id != current_task_id}
+
+
 def _build_run_summary(context) -> list:
     dag_run = context.get("dag_run")
     if dag_run is None:
         return [" STATUS: UNKNOWN (dag_run not available in context)"]
 
     try:
-        task_instances = dag_run.get_task_instances()
-    except Exception:
-        task_instances = []
+        states = _other_task_states(context)
+    except Exception as exc:  # noqa: BLE001 - the summary is informative; the gate below re-checks and fails loud
+        logger.warning(f"could not read task states for the run summary: {exc}")
+        states = {}
 
-    current_task_id = context["task"].task_id if context.get("task") else None
-
-    total = 0
+    total = len(states)
     by_state = {}
-    for ti in task_instances:
-        if ti.task_id == current_task_id:
-            continue
-        total += 1
-        by_state[ti.state] = by_state.get(ti.state, 0) + 1
+    for state in states.values():
+        by_state[state] = by_state.get(state, 0) + 1
 
     success_count = by_state.get("success", 0)
     failed_count = by_state.get("failed", 0)
@@ -105,6 +122,28 @@ def _build_header(dag_id: str, run_id: str, generated_at: datetime, summary_line
     return lines
 
 
+def render_task_log_line(line: str) -> str:
+    """One Airflow 3 task log line (a JSON object) -> `[ts] LEVEL logger - event` for the human audit trail.
+
+    Lines that are not Airflow's JSON envelope pass through unchanged.
+    """
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return line.rstrip("\n")
+    try:
+        record = json.loads(stripped)
+    except ValueError:
+        return line.rstrip("\n")
+    if not isinstance(record, dict) or "event" not in record:
+        return line.rstrip("\n")
+    ts = str(record.get("timestamp", ""))[:23].replace("T", " ")
+    level = str(record.get("level", "info")).upper()
+    text = f"[{ts}] {level} {record.get('logger', '')} - {record.get('event', '')}"
+    if record.get("error_detail"):
+        text += f"\n{json.dumps(record['error_detail'], ensure_ascii=False, default=str)}"
+    return text
+
+
 def _collect_task_logs(dag_id: str, run_id: str, ts_nodash: str) -> list:
     dag_log_path = os.path.join(AIRFLOW_LOG_DIR, f"dag_id={dag_id}")
     all_logs = glob(os.path.join(dag_log_path, "**", "*.log"), recursive=True)
@@ -121,7 +160,7 @@ def consolidate_dag_audit_logs(context: dict = None, **kwargs):
 
     dag_id = dag_run.dag_id
     run_id = context.get("run_id")
-    logical_date = context.get("logical_date") or context.get("execution_date")
+    logical_date = _run_logical_date(context)
     execution_ts = _format_local_ts(logical_date)
     generated_at = datetime.now(ZoneInfo("UTC")).astimezone(AUDIT_TZ)
 
@@ -152,7 +191,8 @@ def consolidate_dag_audit_logs(context: dict = None, **kwargs):
             audit_file.write(_divider("#") + "\n\n")
             try:
                 with open(log_path, "r", encoding="utf-8") as f:
-                    audit_file.write(f.read())
+                    for line in f:
+                        audit_file.write(render_task_log_line(line) + "\n")
             except Exception as e:
                 audit_file.write(f"[ERROR] >>> Failed to read log for task {task_id}: {e}\n")
 
@@ -194,16 +234,14 @@ def consolidate_dag_audit_logs(context: dict = None, **kwargs):
     # Fail it explicitly so the DAG run, the dashboards and the alerts tell the truth.
     failed = _failed_tasks(context)
     if failed:
-        from airflow.exceptions import AirflowFailException  # type: ignore
+        from airflow.sdk.exceptions import AirflowFailException  # type: ignore
 
         raise AirflowFailException(f"pipeline run finished with failed task(s): {', '.join(failed)}")
 
 
 def _failed_tasks(context) -> list:
-    dag_run = context.get("dag_run")
-    current = context["task"].task_id if context.get("task") else None
-    try:
-        tis = dag_run.get_task_instances() if dag_run else []
-    except Exception:
-        return []
-    return sorted(ti.task_id for ti in tis if ti.task_id != current and ti.state in ("failed", "upstream_failed"))
+    # No try/except on purpose. The Airflow 2 version swallowed lookup errors and returned []: under Airflow 3
+    # (no `get_task_instances()` in tasks) that would have silently turned every failed run green.
+    # If the states cannot be read, this task fails instead (and retries).
+    states = _other_task_states(context)
+    return sorted(task_id for task_id, state in states.items() if state in ("failed", "upstream_failed"))

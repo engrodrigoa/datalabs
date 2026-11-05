@@ -1,12 +1,15 @@
 # Ships Airflow task logs to Loki and turns our structured log lines into queryable fields.
 #
-# Airflow wraps every line a task prints:   [ts] {subprocess.py:93} INFO - <body>
-# <body> written by pipelines/commons/logger.py (LOG_FORMAT=line):
+# Airflow 3 writes every task log line as one JSON object (ADR 0017):
+#     {"timestamp": "...Z", "level": "info", "logger": "airflow.task.hooks...SubprocessHook", "event": "<body>", ...}
+# <body> written by pipelines/commons/logger.py (LOG_FORMAT=line), when a script runs under BashOperator:
 #     WARNING anp_landing_semanal: x.csv rejected | {"event": "schema_drift", "file": "x.csv"}
 # 1) dag_id / run_id / task_id come from the log file PATH (no need to repeat them on every line)
-# 2) regex splits Airflow's prefix, then level / logger / msg / JSON tail from the body
-# 3) json parses the tail (event, pipeline, step); the older LOG_FORMAT=json lines are still parsed
-# 4) only LOW-cardinality fields become labels (run_id is NOT a label: unbounded cardinality)
+# 2) json unpacks Airflow's envelope: timestamp, level, logger, event (= body)
+# 3) regex splits OUR body into level / logger / msg / JSON tail; json parses the tail (event, pipeline, step)
+# 4) level is upper-cased (Airflow 3 writes "info"/"warning"/"error"; dashboards and alerts query ERROR|WARNING)
+# 5) the stored line is the readable body, the timestamp is the task's own, not promtail's read time
+# 6) only LOW-cardinality fields become labels (run_id is NOT a label: unbounded cardinality)
 server:
   http_listen_port: 9080
   grpc_listen_port: 0
@@ -29,11 +32,16 @@ scrape_configs:
       - regex:
           source: filename
           expression: '.*/dag_id=(?P<dag_id>[^/]+)/run_id=(?P<run_id>[^/]+)/task_id=(?P<task_id>[^/]+)/.*'
-      - regex:
-          expression: '^\[(?P<af_ts>[^\]]+)\] \{(?P<af_src>[^}]+)\} (?P<af_level>[A-Z]+) - (?P<body>.*)$'
+      # Airflow's JSON envelope. `af_event` is the line itself: our body for script output, Airflow's message otherwise
+      - json:
+          expressions:
+            af_ts: timestamp
+            af_level: level
+            af_logger: logger
+            af_event: event
       # LOG_FORMAT=line (current):  LEVEL logger: message | {"event": ...}
       - regex:
-          source: body
+          source: af_event
           expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \| (?P<payload>\{.*\}))?$'
       - json:
           source: payload
@@ -43,31 +51,117 @@ scrape_configs:
             step: step
       # LOG_FORMAT=json (older lines): the whole body is the JSON object
       - json:
-          source: body
+          source: af_event
           expressions:
             level: level
             event: event
             pipeline: pipeline
             step: step
+      # our level when the body has one, Airflow's otherwise; upper-cased either way
       - template:
           source: level
-          template: '{{ or .Value .af_level "INFO" }}'
+          template: '{{ ToUpper (or .Value .af_level "INFO") }}'
+      - timestamp:
+          source: af_ts
+          format: RFC3339Nano
+          action_on_failure: skip
       - labels:
           dag_id:
           task_id:
           level:
           event:
           pipeline:
+      # readable line in Grafana (Explore / logs panels), e.g. "airflow.task: INFO ..." instead of raw JSON
+      - template:
+          source: af_line
+          template: '{{ if .af_event }}{{ .af_event }}{{ else }}{{ .Entry }}{{ end }}'
+      - output:
+          source: af_line
 
-  - job_name: airflow_scheduler
+  # Airflow 3: DeadlineAlert callbacks (pipelines/observability/airflow_callbacks.on_deadline_missed, event sla_missed)
+  # run in the executor and log to logs/executor_callbacks/<dag_id>/<run_id>/<callback_id> (no .log extension).
+  # Same JSON envelope and same labels as task logs, so the alert queries cover them without changes.
+  - job_name: airflow_executor_callbacks
     static_configs:
       - targets: [localhost]
         labels:
           job: airflow
-          source: scheduler
-          __path__: /opt/airflow/logs/scheduler/*/*.log
+          source: task
+          task_id: deadline_callback
+          __path__: /opt/airflow/logs/executor_callbacks/*/*/*
     pipeline_stages:
       - regex:
-          expression: '^\[(?P<af_ts>[^\]]+)\] \{(?P<af_src>[^}]+)\} (?P<level>[A-Z]+) - .*$'
+          source: filename
+          expression: '.*/executor_callbacks/(?P<dag_id>[^/]+)/(?P<run_id>[^/]+)/[^/]+$'
+      - json:
+          expressions:
+            af_ts: timestamp
+            af_level: level
+            af_event: event
+      - regex:
+          source: af_event
+          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \| (?P<payload>\{.*\}))?$'
+      - json:
+          source: payload
+          expressions:
+            event: event
+            pipeline: pipeline
+      - template:
+          source: level
+          template: '{{ ToUpper (or .Value .af_level "INFO") }}'
+      - timestamp:
+          source: af_ts
+          format: RFC3339Nano
+          action_on_failure: skip
       - labels:
+          dag_id:
           level:
+          event:
+          pipeline:
+      - template:
+          source: af_line
+          template: '{{ if .af_event }}{{ .af_event }}{{ else }}{{ .Entry }}{{ end }}'
+      - output:
+          source: af_line
+
+  # Airflow 3: DAG parsing moved from the scheduler to the dag-processor (logs/dag_processor/<date>/<bundle>/<file>.log),
+  # also JSON lines. Import errors and DAG-level callbacks (on_dag_failure / on_dag_success) are logged here.
+  - job_name: airflow_dag_processor
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: airflow
+          source: dag_processor
+          __path__: /opt/airflow/logs/dag_processor/*/*/*.log
+    pipeline_stages:
+      - regex:
+          source: filename
+          expression: '.*/dag_processor/[^/]+/[^/]+/(?P<dag_file>[^/]+)\.log$'
+      - json:
+          expressions:
+            af_ts: timestamp
+            af_level: level
+            af_event: event
+      - regex:
+          source: af_event
+          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \| (?P<payload>\{.*\}))?$'
+      - json:
+          source: payload
+          expressions:
+            event: event
+      - template:
+          source: level
+          template: '{{ ToUpper (or .Value .af_level "INFO") }}'
+      - timestamp:
+          source: af_ts
+          format: RFC3339Nano
+          action_on_failure: skip
+      - labels:
+          dag_file:
+          level:
+          event:
+      - template:
+          source: af_line
+          template: '{{ if .af_event }}{{ .af_event }}{{ else }}{{ .Entry }}{{ end }}'
+      - output:
+          source: af_line

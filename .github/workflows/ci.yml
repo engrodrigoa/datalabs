@@ -31,6 +31,50 @@ jobs:
       - run: cp .env.example .env && docker compose config -q
       - run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai config -q
 
+  # DAG integrity on the real Airflow 3 runtime (ADR 0017): same Airflow/provider versions as the image
+  # (official constraints), the dbt manifest Cosmos reads, and the DagBag the dag-processor uses.
+  # Catches import errors, deprecated APIs, missing callbacks and templates that break on runs without a
+  # logical_date - before anything reaches the stack.
+  airflow-dags:
+    runs-on: ubuntu-latest
+    env:
+      AIRFLOW_VERSION: "3.3.2"            # keep in sync with the Dockerfile FROM tag
+      AIRFLOW_HOME: ${{ github.workspace }}/.airflow
+      PYTHONPATH: ${{ github.workspace }}
+      DATALABS_PIPELINES_DIR: ${{ github.workspace }}/pipelines
+      DATALABS_DBT_VENV_BIN: ${{ github.workspace }}/.dbt/bin
+      DBT_MANIFEST_DIR: ${{ github.workspace }}/.dbt-manifest
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_USER: datalab
+      DB_PASSWORD: datalab
+      DB_DB: datalab
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - name: Airflow + pipeline deps (official constraints, like the Dockerfile)
+        run: |
+          pip install "apache-airflow[postgres,fab]==${AIRFLOW_VERSION}" -r requirements.txt pytest \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
+      # Same resolution as the Dockerfile INSTALL_AI layer (base frozen as constraint, sympy/mpmath/networkx free,
+      # CPU torch), metadata only: catches an AI dependency that cannot coexist with the Airflow image before
+      # anyone runs `make up-ai` (it caught transformers 4.x vs the tokenizers pinned by Airflow 3.3.2).
+      - name: AI layer resolves against the Airflow constraints (dry run)
+        run: |
+          TORCH_VERSION=$(sed -n 's/^ARG TORCH_VERSION=//p' Dockerfile)
+          curl -sSf "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt" \
+            | grep -viE '^(sympy|mpmath|networkx)==' > /tmp/ai-constraints.txt
+          pip install --dry-run --quiet -c /tmp/ai-constraints.txt "torch==${TORCH_VERSION}" -r requirements-ai.txt \
+            --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - name: dbt manifest for the Cosmos DAGs (same as airflow-init)
+        run: |
+          python -m venv .dbt && .dbt/bin/pip install -q -r requirements-dbt.txt
+          cd pipelines/dbt_projects
+          ../../.dbt/bin/dbt deps --profiles-dir .
+          ../../.dbt/bin/dbt parse --profiles-dir . --target-path "$DBT_MANIFEST_DIR"
+      - run: pytest tests/test_dag_integrity.py -v
+
   # End-to-end data test: real Postgres + pgvector, sample ANP files, landing through the
   # observability runner, dbt build with Elementary, data health checks, and every Grafana
   # SQL query executed as the read-only role.

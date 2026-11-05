@@ -30,11 +30,12 @@ mappings:
     match_type: regex
     name: airflow_ti_start
     labels: {dag_id: "$1", task_id: "$2"}
-  # DAG file parsing time
-  - match: '^airflow\.dag_processing\.last_duration\.(.+)$'
+  # DAG file parsing time. Airflow 3 inserts the DAG bundle name: last_duration.<bundle>.<file>
+  # (here always "dags-folder"); kept as its own label so dag_file stays the bare file name, as in Airflow 2
+  - match: '^airflow\.dag_processing\.last_duration\.([^.]+)\.(.+)$'
     match_type: regex
     name: airflow_dag_processing_last_duration
-    labels: {dag_file: "$1"}
+    labels: {bundle: "$1", dag_file: "$2"}
   # pools
   - match: '^airflow\.pool\.(open_slots|queued_slots|running_slots|starving_tasks)\.(.+)$'
     match_type: regex

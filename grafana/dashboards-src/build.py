@@ -645,7 +645,7 @@ def anp_produto() -> Board:
               ["datalabs", "anp", "dbt", "rag"], refresh="5m", time_from="now-90d")
     b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"},
                {"title": "Logs explorer", "type": "link", "url": "/d/datalabs-logs", "icon": "doc"},
-               {"title": "Airflow · dag_dbt_anp", "type": "link", "url": "http://localhost:8080/dags/dag_dbt_anp/grid",
+               {"title": "Airflow · dag_dbt_anp", "type": "link", "url": "http://localhost:8080/dags/dag_dbt_anp",
                 "targetBlank": True, "icon": "external link"}]
     b.templating.append({
         "name": "uf", "label": "UF", "type": "query", "datasource": DW,

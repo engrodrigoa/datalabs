@@ -18,7 +18,7 @@ env: ## create .env with random passwords (keeps an existing one, adds missing A
 	  echo ".env created (passwords randomised)" && $(MAKE) --no-print-directory creds )
 	@# Airflow keys: generated when missing or a placeholder, so an .env from before they existed gets them too.
 	@# Never regenerated once set: a new FERNET_KEY cannot decrypt what the old one encrypted.
-	@for k in AIRFLOW__WEBSERVER__SECRET_KEY AIRFLOW__CORE__FERNET_KEY; do \
+	@for k in AIRFLOW__API__SECRET_KEY AIRFLOW__API_AUTH__JWT_SECRET AIRFLOW__CORE__FERNET_KEY; do \
 	  cur=$$(grep -E "^$$k=" .env | cut -d= -f2-); \
 	  case "$$cur" in ""|change-me*) \
 	    if [ "$$k" = AIRFLOW__CORE__FERNET_KEY ]; then v=$$(openssl rand -base64 32 | tr '+/' '-_'); \
@@ -63,17 +63,19 @@ up-gpu: env ## + Ollama on an NVIDIA GPU
 	INSTALL_AI=true $(COMPOSE) -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up -d --build
 
 down: ## stop everything (data is kept)
-	$(COMPOSE) --profile ai --profile tools down
+	# --remove-orphans: containers of services no longer in the compose file, e.g. the Airflow 2 airflow_webserver,
+	# which otherwise keeps running and holds port 8080 against airflow-apiserver (ADR 0017)
+	$(COMPOSE) --profile ai --profile tools down --remove-orphans
 
 clean: ## stop and DELETE all local data (Docker volumes: Postgres, MinIO, models, Grafana...)
 	$(COMPOSE) --profile ai --profile tools down -v
-	rm -rf datalake airflow/logs/dag_id=* airflow/logs/scheduler   # datalake/: pre-ADR-0008 bind mounts
+	rm -rf datalake airflow/logs/dag_id=* airflow/logs/scheduler airflow/logs/dag_processor   # datalake/: pre-ADR-0008 bind mounts
 
 ps: ## container status / health
 	$(COMPOSE) ps
 
-logs: ## follow Airflow scheduler logs
-	$(COMPOSE) logs -f airflow-scheduler
+logs: ## follow Airflow scheduler + dag-processor logs
+	$(COMPOSE) logs -f airflow-scheduler airflow-dag-processor
 
 demo: ## run the ANP pipeline end to end (real data from gov.br/anp)
 	$(AF) airflow dags unpause dag_setup_infrastructure
@@ -82,8 +84,8 @@ demo: ## run the ANP pipeline end to end (real data from gov.br/anp)
 	$(AF) airflow dags unpause dag_rag_anp
 	@# unpausing already schedules the latest interval: trigger only if no run shows up (no duplicate run)
 	@for i in 1 2 3 4 5 6; do \
-	  $(AF) airflow dags list-runs -d dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp && break; sleep 5; done; \
-	 if $(AF) airflow dags list-runs -d dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp; then \
+	  $(AF) airflow dags list-runs dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp && break; sleep 5; done; \
+	 if $(AF) airflow dags list-runs dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp; then \
 	   echo "dag_dbt_anp already has a run (scheduled on unpause): not triggering a duplicate"; \
 	 else $(AF) airflow dags trigger dag_dbt_anp; fi
 	@echo "follow it at http://localhost:8080  ·  results at http://localhost:3000"
@@ -137,7 +139,7 @@ nfe-quickstart: up ## NF-e do zero: tabelas Elementary, 2000 notas, despausa e d
 	@until $(AF) airflow dags unpause dag_nfe >/dev/null 2>&1; do sleep 5; done
 	$(AF) airflow dags trigger dag_nfe
 	@echo ""
-	@echo "  acompanhe:  http://localhost:8080/dags/dag_nfe/grid"
+	@echo "  acompanhe:  http://localhost:8080/dags/dag_nfe"
 	@echo "  resultado:  http://localhost:3000/d/datalabs-nfe   (DataLabs · NF-e)"
 
 nfe-demo: ## NF-e: simula a chegada de 500 notas na inbox (o dag_nfe processa em até 10 min)

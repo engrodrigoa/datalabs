@@ -13,16 +13,14 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from airflow import DAG
-from airflow.datasets import Dataset  # type: ignore
-from airflow.operators.bash import BashOperator  # type: ignore
-from airflow.utils.trigger_rule import TriggerRule  # type: ignore
+from airflow.providers.standard.operators.bash import BashOperator  # type: ignore
+from airflow.sdk import DAG, Asset, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEFAULT_ARGS
 from pipelines.observability.dag_helpers import health_checks, observed_script
 
-GOLD_ANP = Dataset("datalabs://gold/anp")
+GOLD_ANP = Asset("datalabs://gold/anp")
 
 with DAG(
     dag_id="dag_rag_anp",
