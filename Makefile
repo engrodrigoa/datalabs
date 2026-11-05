@@ -63,7 +63,9 @@ up-gpu: env ## + Ollama on an NVIDIA GPU
 	INSTALL_AI=true $(COMPOSE) -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up -d --build
 
 down: ## stop everything (data is kept)
-	$(COMPOSE) --profile ai --profile tools down
+	# --remove-orphans: containers of services no longer in the compose file, e.g. the Airflow 2 airflow_webserver,
+	# which otherwise keeps running and holds port 8080 against airflow-apiserver (ADR 0017)
+	$(COMPOSE) --profile ai --profile tools down --remove-orphans
 
 clean: ## stop and DELETE all local data (Docker volumes: Postgres, MinIO, models, Grafana...)
 	$(COMPOSE) --profile ai --profile tools down -v

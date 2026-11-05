@@ -333,7 +333,8 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 | `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
 | Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | the Airflow containers had no shared `AIRFLOW__API__SECRET_KEY`, so each made its own | `make env` adds it to an existing `.env`, then `docker compose up -d` |
 | Every task fails at start with `403` / `Invalid auth token` from the Execution API | no shared `AIRFLOW__API_AUTH__JWT_SECRET` (an Airflow 2 `.env`): compose stops with `missing in .env, run make env` | `make env` generates the Airflow 3 keys into the existing `.env`, then `docker compose up -d` ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
-| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9 | nothing to drop: `make env && make up`; `airflow-init` migrates it in place, run history included |
+| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9; the old `airflow_webserver` container still holds port 8080 | `make down` first (removes the orphaned webserver), then `sudo rm -rf airflow/logs/dag_id=* airflow/logs/scheduler` (Airflow 2 logs, written by the container user), then `make env && make up`. Nothing to drop: `airflow-init` migrates the DB in place, run history included |
+| `make up`: `Bind for 0.0.0.0:8080 failed: port is already allocated` | the Airflow 2 `airflow_webserver` container is still running (no longer in the compose file, so `up` does not touch it) | `make down` (it runs `down --remove-orphans`), then `make up` |
 
 </details>
 
