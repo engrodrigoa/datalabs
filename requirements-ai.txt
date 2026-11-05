@@ -1,2 +1,6 @@
 # Installed only with INSTALL_AI=true (torch CPU wheel is installed first by the Dockerfile)
-sentence-transformers>=3.0,<5
+# >=5: the Airflow 3.3.2 image ships tokenizers 0.23.2, and every transformers 4.x needs tokenizers<=0.23.0,
+# so sentence-transformers <5 (-> transformers <5) cannot resolve against the frozen base (ADR 0017).
+# 5.x/6.x -> transformers 5 (needs torch>=2.6). The CI job airflow-dags dry-runs this file against the
+# Airflow constraints, so a conflict fails the PR instead of `make up`.
+sentence-transformers>=5,<7

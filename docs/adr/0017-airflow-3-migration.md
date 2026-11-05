@@ -41,13 +41,22 @@ and two of them fail *silently*.
    `info`/`error`; dashboards query `ERROR|WARNING`), keeps the task's timestamp and stores the readable body.
    Two new log sources are shipped: `logs/dag_processor/` (was `logs/scheduler/`) and `logs/executor_callbacks/`,
    where deadline callbacks write. The human audit trail renders the JSON back to `[ts] LEVEL logger - msg`.
-9. **Metrics.** Every StatsD family the dashboards use is still emitted. Only
+9. **AI layer: sentence-transformers 5/6.** The Dockerfile freezes every base package as a constraint for the
+   `INSTALL_AI` layer. The Airflow 3.3.2 image ships `tokenizers` 0.23.2, while all of transformers 4.x needs
+   `tokenizers<=0.23.0`; `sentence-transformers<5` pins transformers 4, so the build was impossible (pip blamed
+   numpy while backtracking). `sentence-transformers>=5,<7` → transformers 5 (torch ≥ 2.6; the image has 2.8.0).
+   The call sites (`SentenceTransformer(name)`, `encode(..., normalize_embeddings=True)`) are unchanged in the
+   6.x API. The CI job dry-runs the AI layer against the Airflow constraints.
+   Embeddings already stored in pgvector were made by transformers 4: same weights and tokenizer, so the
+   vectors are expected to match within float error; checked by comparing both images before reusing them,
+   otherwise re-embed (lc04 / rag01).
+10. **Metrics.** Every StatsD family the dashboards use is still emitted. Only
    `dag_processing.last_duration` gained the bundle name (`.dags-folder.`); the mapping turns it into a `bundle`
    label so `dag_file` keeps the bare file name.
-10. **In-place upgrade, no volume to drop.** `airflow-init` runs `db migrate`, which takes an Airflow 2.9 metadata
+11. **In-place upgrade, no volume to drop.** `airflow-init` runs `db migrate`, which takes an Airflow 2.9 metadata
     DB to 3.3.2 in place, run history included. The Grafana queries on the metadata DB (`dag_run`,
     `task_instance`) need no change.
-11. **Guardrails in CI.** `AIR3` is part of `ruff check .`; `tests/test_airflow3_guardrails.py` (no Airflow)
+12. **Guardrails in CI.** `AIR3` is part of `ruff check .`; `tests/test_airflow3_guardrails.py` (no Airflow)
     rejects logical-date keys in templates and metadata-DB access in task code; the `airflow-dags` job installs
     Airflow 3.3.2 with the official constraints and parses the DAGs with the dag-processor's DagBag (import
     errors, deprecated APIs, callbacks on every task, the ANP deadline, the asset wiring, `RUN_TS` rendered with
