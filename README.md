@@ -23,12 +23,12 @@ metrics, per-step volumes, and data health checks, all in Grafana.
 
 | Area | Evidence in this repo |
 |---|---|
-| **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 5 dashboards as code, alerting to Telegram/Slack/Discord |
+| **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 6 dashboards as code, alerting to Telegram/Slack/Discord |
 | **Data quality** | dbt tests + **Elementary anomaly detection** (volume, freshness, column) + config-driven **freshness / volume / reconciliation** checks across layers |
 | **Reliability** | idempotent and resumable loads (a re-run skips what already landed), late-arriving data handled, schema-drift detection, honest exit codes (no "green with no data") |
 | **AI data engineering** | **incremental embeddings** (deterministic chunk ids, set-difference sync) → pgvector (HNSW), SQL-vs-vector query router, **golden-set evaluation as a quality gate** in the DAG |
 | **Performance engineering** | bottlenecks measured, fixed and recorded in ADRs: stateful services on Docker volumes (health checks 7 min → 2 s), Cosmos from a pre-built dbt manifest, RFB read as a stream from the ZIP (~35 s per file instead of extracting multi-GB CSVs at ~3 MB/s) |
-| **DataOps** | CI runs lint, unit tests, a real Postgres + dbt build + checks, and executes every Grafana query; pinned images; one-command setup |
+| **DataOps** | CI runs lint, unit tests, a real Postgres + dbt build + checks, executes every Grafana query, and parses every DAG on the real Airflow 3 runtime; pinned images checked weekly; one-command setup; a major upgrade (Airflow 2.9 → 3.3) done in place, with its breaking changes turned into CI guardrails ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
 | **Data modeling** | medallion layers (landing → staging → silver → gold), star schemas for ANP and RFB, incremental models |
 
 ---
@@ -40,6 +40,8 @@ flowchart LR
   subgraph Sources
     ANP[gov.br/anp<br/>weekly + monthly CSV]
     RFB[Receita Federal<br/>WebDAV ZIPs]
+    NFE[NF-e XML<br/>simulated issuer → inbox]
+    LAW[LC 214/2025<br/>PDF, versioned by sha256]
   end
 
   subgraph Orchestration[Airflow 3.3 + Cosmos]
@@ -47,9 +49,9 @@ flowchart LR
   end
 
   subgraph Storage
-    MINIO[(MinIO S3<br/>bronze/silver parquet)]
-    PG[(Postgres 15<br/>landing · stg · silver · gold)]
-    VEC[(pgvector<br/>ai.rag_context_anp)]
+    MINIO[(S3 · Silo<br/>bronze/silver parquet · LC 214 lake)]
+    PG[(Postgres 15<br/>landing · stg · silver · gold · ctrl)]
+    VEC[(pgvector<br/>ai.rag_context_anp · ai.lc214_chunk)]
   end
 
   subgraph Transform[dbt + Elementary]
@@ -58,8 +60,10 @@ flowchart LR
 
   ANP --> RUN --> PG
   RFB --> RUN --> MINIO --> PG
+  NFE -- FileSensor · batch · pg_read_file --> PG
   PG --> DBT --> PG
   PG -- gold --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[SQL/vector router<br/>+ Ollama LLM]
+  LAW --> RUN --> MINIO -- provisions · chunks --> EMB
 
   subgraph Observability
     LOKI[Loki] --- GRAF[Grafana]
@@ -83,7 +87,7 @@ flowchart LR
 
 | Signal | How it is produced | Where it lives | Question it answers |
 |---|---|---|---|
-| **Logs** | every script logs JSON events (`event=file_loaded`, `schema_drift_missing_columns`, `step_finished`…) with `dag_id/run_id/task_id` attached automatically | Loki (Promtail parses the JSON) | *What happened, exactly?* |
+| **Logs** | every script logs a readable line with a JSON tail (`event=file_loaded`, `schema_drift_missing_columns`, `step_finished`…), with `dag_id/run_id/task_id` attached automatically; Airflow 3 wraps each task log line in its own JSON envelope | Loki (Promtail unpacks Airflow's envelope, then parses our line into `level`/`event`/`pipeline` labels) | *What happened, exactly?* |
 | **Metrics** | Airflow StatsD → `statsd-exporter` (labelled by `dag_id`/`task_id`) | Prometheus | *Is the platform healthy?* scheduler heartbeat, queue, p95 task duration, import errors |
 | **Step facts** | the runner wraps every script and records status, duration, rows in/out/rejected, files ok/failed | `audit.pipeline_step_runs` | *How much data moved, and is it normal?* (baseline = median of the last 10 runs) |
 | **Data health** | dbt tests + Elementary anomalies at build time; `checks.yml` on a schedule | `elementary.*`, `audit.data_quality_checks` | *Is the data fresh, complete and consistent between layers?* |
@@ -271,7 +275,7 @@ make doctor    # checks the running stack for silent failures (empty bind mounts
 | Service | URL | |
 |---|---|---|
 | Grafana | http://localhost:3000 | home = *DataLabs · Pipeline Health* |
-| Airflow | http://localhost:8080 | DAGs start paused |
+| Airflow | http://localhost:8080 | DAGs start paused · the UI follows the browser language (*User → Select Language* to change it) |
 | S3 console (Silo, MinIO-compatible) | http://localhost:9091 | |
 | Prometheus | http://localhost:9090 | |
 
@@ -333,7 +337,8 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 | `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
 | Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | the Airflow containers had no shared `AIRFLOW__API__SECRET_KEY`, so each made its own | `make env` adds it to an existing `.env`, then `docker compose up -d` |
 | Every task fails at start with `403` / `Invalid auth token` from the Execution API | no shared `AIRFLOW__API_AUTH__JWT_SECRET` (an Airflow 2 `.env`): compose stops with `missing in .env, run make env` | `make env` generates the Airflow 3 keys into the existing `.env`, then `docker compose up -d` ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
-| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9; the old `airflow_webserver` container still holds port 8080 | `make down` first (removes the orphaned webserver), then `sudo rm -rf airflow/logs/dag_id=* airflow/logs/scheduler` (Airflow 2 logs, written by the container user), then `make env && make up`. Nothing to drop: `airflow-init` migrates the DB in place, run history included |
+| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9; the old `airflow_webserver` container still holds port 8080 | `make down` first (removes the orphaned webserver), then `sudo rm -rf airflow/logs/dag_id=* airflow/logs/scheduler` (Airflow 2 logs, written by the container user), then `make env && make up`. Nothing to drop: `airflow-init` migrates the DB in place, run history included. A run left *running* by the old stack blocks DAGs with `max_active_runs=1` (e.g. `dag_nfe`): mark it failed in the UI |
+| AI build fails: `ResolutionImpossible`, `sentence-transformers ... depends on numpy<2.0.0` | pip blames numpy while backtracking; the real conflict is `tokenizers` pinned by the Airflow image vs. transformers 4.x | already fixed: `sentence-transformers>=5` (ADR 0017, decision 9); the CI dry-runs the AI layer against the Airflow constraints |
 | `make up`: `Bind for 0.0.0.0:8080 failed: port is already allocated` | the Airflow 2 `airflow_webserver` container is still running (no longer in the compose file, so `up` does not touch it) | `make down` (it runs `down --remove-orphans`), then `make up` |
 
 </details>
@@ -343,12 +348,13 @@ make up && make demo-offline   # synthetic ANP files (real layout) -> landing ->
 ## Repository layout
 
 ```text
-airflow/dags/                 DAGs (ANP, RFB, RFB dbt, RAG, setup, observability health)
+airflow/dags/                 DAGs (ANP, RFB, RFB dbt, NF-e, RAG ANP, RAG LC 214, setup, observability health)
 apps/anp_dashboard/           Streamlit analytics app over the ANP serving marts (own venv: make dashboard-anp)
 pipelines/
-  anp/  rfb/  rag/anp/        ingestion + AI scripts
-  commons/                    logger (JSON), env, S3, Postgres COPY, RAG router
-  observability/              runner, step tracker, checks (+ checks.yml), alerting, Airflow callbacks
+  anp/  rfb/                  ingestion scripts
+  rag/anp/  rag/lc214/        RAG pipelines: chunks, embeddings, routers, evaluation gates, answer generation
+  commons/                    logger, env, S3, Postgres COPY, embeddings, audit trail
+  observability/              runner, step tracker, checks (+ checks.yml), alerting, Airflow callbacks, DAG helpers
   dbt_projects/               dbt project: staging · silver · gold, Elementary, profiles via env vars
 infra/
   postgres/init/              bootstrap (airflow DB, grafana_ro, anp_app_ro) + idempotent DDL (single source of truth)
@@ -356,20 +362,23 @@ infra/
 grafana/
   provisioning/               datasources (fixed UIDs) + dashboard provider
   dashboards-src/build.py     dashboards as code  ->  grafana/dashboards/*.json
-tests/                        unit tests + dashboard SQL validation
+tests/                        unit tests, Airflow 3 guardrails, DAG integrity, dashboard SQL validation
 docs/adr/                     architecture decision records
-docs/nfe/  docs/runbook-rebuild.md   NF-e design notes · rebuild-from-zero runbook
-scripts/                      sample data generator
+docs/case-study/  docs/nfe/   LC 214 RAG study guide (pt-BR) · NF-e design notes
+docs/runbook-rebuild.md       rebuild-from-zero runbook
+scripts/                      preflight, doctor, NF-e source simulator, ANP sample data, WSL setup
 ```
 
 ## Testing & CI
 
-`.github/workflows/ci.yml` runs on every push:
+`.github/workflows/ci.yml` runs on every push to `master` and on every pull request:
 
-1. **lint + unit tests**: ruff (incl. `AIR3`, the Airflow 3 migration rules), pytest (incl. Airflow 3 guardrails: no logical-date keys in templates, no metadata DB in task code) (runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail), and dashboards regenerated from code with no diff allowed.
+1. **lint + unit tests**: ruff (incl. `AIR3`, the Airflow 3 migration rules); pytest: runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail, and the Airflow 3 guardrails (no logical-date keys in templates, no metadata DB in task code); dashboards regenerated from code with no diff allowed.
 2. **compose**: `docker compose config` for the default, AI and GPU variants.
-3. **airflow-dags**: Airflow 3.3.2 with the official constraints parses `airflow/dags` with the dag-processor's DagBag: no import errors or deprecated APIs, observability callbacks on every task, the ANP deadline, the asset wiring, and the run timestamp rendered with and without a logical date.
+3. **airflow-dags**: Airflow 3.3.2 with the official constraints parses `airflow/dags` with the dag-processor's DagBag: no import errors or deprecated APIs, observability callbacks on every task, the ANP deadline, the asset wiring, and the run timestamp rendered with and without a logical date. It also dry-runs the AI layer (CPU torch + sentence-transformers) against the same constraints.
 4. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
+
+`.github/workflows/image-availability.yml` checks every Monday that each pinned image still exists in its registry (MinIO's disappearance is why, [ADR 0004](docs/adr/0004-object-storage.md)).
 
 ## Engineering decisions
 
@@ -404,7 +413,7 @@ scripts/                      sample data generator
 - [ ] RFB download that tolerates an unavailable source when the month is already complete on disk
 - [ ] OpenLineage → Marquez lineage across Airflow and dbt
 - [ ] Data contracts published from dbt (`contract: enforced`) for the gold layer
-- [ ] Airflow 3 migration
+- [x] Airflow 3 migration: 3.3.2, in place, history kept ([ADR 0017](docs/adr/0017-airflow-3-migration.md))
 - [ ] Public read-only demo (Streamlit over a gold snapshot)
 
 **Scale (dedicated server)**
