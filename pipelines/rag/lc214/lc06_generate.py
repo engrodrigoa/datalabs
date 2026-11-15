@@ -76,6 +76,7 @@ import yaml
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
+from pipelines.commons.ai.llm_usage import from_ollama, record_llm_call  # noqa: E402
 from pipelines.commons.logger import get_logger, log_event  # noqa: E402
 from pipelines.observability import current_step  # noqa: E402
 from pipelines.rag.lc214 import retriever as rt  # noqa: E402
@@ -98,6 +99,7 @@ GEN_TOLERANCE_CASES = float(os.getenv("LC214_GEN_TOLERANCE_CASES", "1"))
 GATED_GEN = ("refusal_accuracy", "citation_recall")      # plus false_answers, with no tolerance (see gen_gate)
 GROUPS = ("fiscal", "formal")
 EXIT_OK, EXIT_FAILED, EXIT_SKIPPED = 0, 1, 99
+USAGE_APP = "lc214_generate"        # ai.llm_call.app: one row per LLM request, tokens as reported (ADR 0018)
 
 REFUSAL = "Não há informações suficientes na LC 214/2025 para responder a esta pergunta."
 
@@ -248,6 +250,7 @@ class OllamaClient:
         import requests
 
         self.requests, self.url, self.model, self.timeout = requests, url, model, timeout
+        self.model_digest: str | None = None              # set by digest(), recorded with every call's usage
         self.base = url.split("/api/")[0]
 
     def _call(self, method: str, path_or_url: str, **kw):
@@ -265,7 +268,8 @@ class OllamaClient:
         names = {self.model, self.model if ":" in self.model else f"{self.model}:latest"}
         for m in self._call("GET", "/api/tags").get("models") or []:
             if m.get("name") in names or m.get("model") in names:
-                return str(m.get("digest", ""))[:12]
+                self.model_digest = str(m.get("digest", ""))[:12]
+                return self.model_digest
         raise GenError("lc214_gen_model_missing", f"Ollama has no model {self.model}: pull it with "
                        "`docker compose --profile ai up ollama-pull` (LC214_GEN_MODEL)")
 
@@ -434,7 +438,7 @@ def _seconds(ns) -> float | None:
 
 def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]], llm: LLM,
            index: Index | None = None, k: int = rt.TOP_K, spec: PromptSpec | None = None,
-           decision: str | None = None) -> Answer:
+           decision: str | None = None, tags: dict | None = None) -> Answer:
     spec, decision = spec or prompt_spec(), decision or DECISION
     index = index or Index(store.ids())
     r = rt.retrieve(question, store, encode, index=index, k=k)
@@ -457,9 +461,15 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     prompt = build_prompt(question, r)
     a.prompt_words = len((spec.system + "\n" + prompt).split())
     a.prompt_tokens_estimate = rt.llm_tokens(spec.system + "\n" + prompt)
+    options = llm_options()
     t0 = time.monotonic()
-    resp = llm.generate(spec.system, prompt, spec.schema, llm_options())
+    resp = llm.generate(spec.system, prompt, spec.schema, options)
     a.latency_s = round(time.monotonic() - t0, 2)
+    # usage per call (ADR 0018): best-effort, never fails the answer; the prompt is kept as a hash, not as text
+    record_llm_call(from_ollama(resp, app=USAGE_APP, model=llm.model, prompt=prompt, system=spec.system,
+                                latency_s=a.latency_s, model_digest=getattr(llm, "model_digest", None),
+                                route=r.plan.route, num_ctx=options.get("num_ctx"),
+                                tags={"variant": spec.name, "intent": r.plan.intent, **(tags or {})}))
     a.llm_called = True
     a.done_reason = resp.get("done_reason")
     a.prompt_eval_count, a.eval_count = resp.get("prompt_eval_count"), resp.get("eval_count")
@@ -557,7 +567,8 @@ def run_golden(golden: dict, store: rt.Store, encode, llm: LLM, cases: set[str] 
             for p, q in (c.get("questions") or {}).items()]
     out = []
     for n, (case, phrasing, question) in enumerate(todo, 1):
-        a = answer(str(question), store, encode, llm, index=index, k=k, spec=spec, decision=decision)
+        a = answer(str(question), store, encode, llm, index=index, k=k, spec=spec, decision=decision,
+                   tags={"case": case["id"], "phrasing": phrasing})
         o = outcome(case, phrasing, a)
         out.append(o)
         progress(progress_line(n, len(todo), o, a))
@@ -791,6 +802,10 @@ def run(cur, encode, llm: LLM, lake=None, golden_path: Path = GOLDEN_PATH, cases
     for g in GROUPS:
         step.set(**{f"{g}_{m}": v for m, v in rep["metrics"][g].items() if isinstance(v, (int, float))})
     step.set(tokens_per_word=rep["calibration"]["measured_median"])
+    called = [o.answer for o in outcomes if o.answer.get("llm_called")]
+    # the observability side of ai.llm_call (ADR 0018): calls made here vs rows recorded (check llm_usage_recorded)
+    step.set(llm_calls=len(called), llm_prompt_tokens=sum(x["prompt_eval_count"] or 0 for x in called),
+             llm_completion_tokens=sum(x["eval_count"] or 0 for x in called))
     step.label(variant=spec.name, decision=decision)
     step.add(rows_in=len(outcomes), rows_out=sum(not o.refused for o in outcomes))
 
