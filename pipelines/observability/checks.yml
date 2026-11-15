@@ -264,6 +264,72 @@ checks:
         (SELECT COUNT(DISTINCT (embedding_model, chunker_version)) FROM ai.lc214_chunk))
     max: 1
 
+  # ------------------------------------------------------------------ LLM usage per call (ai.llm_call, ADR 0018)
+  - name: llm_usage_recorded
+    pipeline: lc214
+    requires: ai
+    dataset: ai.llm_call
+    type: reconciliation
+    # observability of the metric itself: every call lc06 made (step metric llm_calls) has its row. The write is
+    # best-effort (ADR 0001), so a lost row is not an error of the answers: it is caught here, not in the pipeline.
+    # 0 = 0 before the first generation that records usage.
+    left_label: calls_made
+    query: >
+      SELECT COALESCE((SELECT (metrics->>'llm_calls')::int FROM audit.pipeline_step_runs
+                       WHERE pipeline = 'lc214' AND step = 'generate_answers' AND metrics ? 'llm_calls'
+                       ORDER BY started_at DESC LIMIT 1), 0)
+    right_label: calls_recorded
+    compare_query: >
+      SELECT COUNT(*) FROM ai.llm_call
+      WHERE step_run_id = (SELECT step_run_id FROM audit.pipeline_step_runs
+                           WHERE pipeline = 'lc214' AND step = 'generate_answers' AND metrics ? 'llm_calls'
+                           ORDER BY started_at DESC LIMIT 1)
+    tolerance_pct: 0
+
+  - name: llm_usage_estimated_calls
+    pipeline: lc214
+    requires: ai
+    dataset: ai.llm_call
+    type: threshold
+    severity: warn
+    # Ollama reports prompt_eval_count on every completed call: an `estimated` row means the response came without
+    # usage (server upgrade, a proxy, another provider) and the token numbers stopped being the truth
+    query: >
+      SELECT COUNT(*) FROM ai.llm_call
+      WHERE token_method = 'estimated' AND called_at >= now() - interval '30 days'
+    max: 0
+
+  - name: llm_prompt_fills_context
+    pipeline: lc214
+    requires: ai
+    dataset: ai.llm_call
+    type: threshold
+    severity: warn
+    # a prompt that reaches num_ctx was truncated by the server before the model read it: the context budget
+    # (retriever, words x tokens-per-word) under-estimated it
+    query: >
+      SELECT COUNT(*) FROM ai.llm_call
+      WHERE num_ctx IS NOT NULL AND prompt_tokens_reported >= num_ctx AND called_at >= now() - interval '30 days'
+    max: 0
+
+  - name: llm_token_estimate_drift
+    pipeline: lc214
+    requires: ai
+    dataset: ai.llm_call
+    type: threshold
+    severity: warn
+    # median relative error of the words x tokens-per-word estimate against the reported count (30 days). The
+    # retriever budgets context with that estimate: above 25% its margin (LC214_BUDGET_MARGIN 0.2) no longer
+    # covers it. Ratios below 1 token/word are a cached prefix (ADR 0015), not tokenization: left out.
+    # 0 when there is nothing to compare yet.
+    query: >
+      SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY abs(prompt_tokens_estimate::numeric / prompt_tokens_reported - 1)), 0)
+      FROM ai.llm_call
+      WHERE prompt_tokens_reported > 0 AND prompt_tokens_reported >= prompt_words
+        AND called_at >= now() - interval '30 days'
+    max: 0.25
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs

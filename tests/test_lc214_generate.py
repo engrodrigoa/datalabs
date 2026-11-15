@@ -119,6 +119,20 @@ def test_a_grounded_answer_is_shown_with_its_citations():
     assert a.prompt_eval_count == 410 and a.tokens_per_word == round(410 / a.prompt_words, 3)
 
 
+def test_each_llm_call_records_its_usage_and_the_routes_without_llm_record_none(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gen, "record_llm_call", calls.append)
+    a, llm = _answer()
+    assert len(calls) == 1
+    c = calls[0]
+    assert (c.app, c.model, c.token_method, c.prompt_tokens) == ("lc214_generate", "llama3.2:1b", "reported", 410)
+    assert c.prompt_tokens_estimate == a.prompt_tokens_estimate and c.route == a.route
+    assert c.num_ctx == rt.NUM_CTX and c.tags["variant"] == gen.prompt_spec().name
+    assert llm.calls[0]["prompt"] not in str(c.row())                  # the prompt itself is never stored
+    gen.answer("o que diz o art. 1?", FakeStore(), encode, FakeLLM())      # route sql: answered by lookup
+    assert len(calls) == 1
+
+
 def test_the_call_is_repeatable_and_does_not_cut_the_context():
     _, llm = _answer()
     opts = llm.calls[0]["options"]

@@ -240,6 +240,7 @@ An auditor's question is answered from the law or refused, and every refusal nam
 * **Two gates, one rule:** thresholds are a committed baseline minus a tolerance **in cases** (1 case = 3-4 pp at lc05), improvements never fail and raising the baseline is a deliberate commit; a missing baseline fails the run.
 * **Three barriers to "não consta":** nothing to ground on (no LLM call), the model's own `answerable`, and a citation check against the provisions the context actually showed (valid | outside_context | not_found | foreign).
 * **What failed, in the open:** the small model refuses fiscal phrasings with "o contexto não trata especificamente": the auditor's vocabulary against the law's ([ADR 0015](docs/adr/0015-lc214-answer-generation.md), "Where it stands").
+* **Tokens per prompt:** every LLM call (LC 214 generation and the ANP assistant) is one row in `ai.llm_call` with the tokens the model reported, the words × tokens-per-word estimate next to it, and the prompt kept only as a hash. Four checks watch it: lost writes, calls without the model's count, prompts truncated at `num_ctx`, and the drift of the estimate the retriever budgets with ([ADR 0018](docs/adr/0018-llm-usage-per-call.md)).
 * Study guide, step by step with the metric and the failure mode of each step: [case study (pt-BR)](docs/case-study/lc214-rag.md). Board: **DataLabs · RAG LC 214**.
 
 ---
@@ -399,6 +400,7 @@ scripts/                      preflight, doctor, NF-e source simulator, ANP samp
 * [0015 — LC 214 answer generation: cited JSON from a local LLM, three barriers to "não consta"](docs/adr/0015-lc214-answer-generation.md)
 * [0016 — ANP analytics layer: Streamlit over two gold serving marts, read-only role](docs/adr/0016-anp-streamlit-analytics-layer.md)
 * [0017 — Airflow 3: four components, Execution API, deadlines instead of SLAs](docs/adr/0017-airflow-3-migration.md)
+* [0018 — LLM usage per call: one row per prompt, tokens as the model reported them](docs/adr/0018-llm-usage-per-call.md)
 
 ## Roadmap
 

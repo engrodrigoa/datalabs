@@ -37,7 +37,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   gate → lc06 generation; asset `datalabs://silver/lc214`),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
-- `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync)
+- `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync, `llm_usage`)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
 - `apps/anp_dashboard/` — Streamlit over `gold.ag_anp_preco_posto_atual` / `ag_anp_preco_municipio_diario` as `anp_app_ro`;
@@ -45,7 +45,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0017), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0018), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -138,6 +138,13 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `DAG(deadline=run_deadline(...))` (event `sla_missed`). Task logs are JSON lines; Promtail unpacks them and also
   ships `logs/dag_processor/` and `logs/executor_callbacks/`. `AIRFLOW__API_AUTH__JWT_SECRET` must be shared by
   every component (compose refuses to start without it). UI links are `/dags/<dag_id>` (no `/grid` route).
+- **0018 LLM usage per call:** every LLM request goes through `pipelines/commons/ai/llm_usage.py` (`from_ollama` +
+  `record_llm_call`) into `ai.llm_call`: one row per request, `prompt_tokens` = the model's `prompt_eval_count`
+  (`token_method=reported`), else words × tokens-per-word (`estimated`); the estimate is kept on every row. Prompt
+  and reply are never stored (sha256 + size only). Best-effort write on its own connection; linked to the runner's
+  `step_run_id`. Consumers: lc06 (`lc214_generate`), the ANP assistant (`anp_assistant`). A new LLM call site
+  records through the same module. Checks `llm_usage_recorded`, `llm_usage_estimated_calls`,
+  `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board row 6. No cost (local LLM, no price dimension yet).
 
 ## Development rules
 
@@ -166,7 +173,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 22 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 26 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty
@@ -250,7 +257,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   law's vocabulary (content-03: "matriz/filial" vs "estabelecimentos do mesmo contribuinte"), measured by lc05.
 - LC 214 generation (ADR 0015): below its bar (2/9 vs 3/9, fiscal phrasings refused as "não trata
   especificamente"). Next: a fiscal -> legal glossary (retrieval and generation), labelled context lines; the full
-  golden run (~3.5 h) on the lambda server. Calibrate `LC214_LLM_TOKENS_PER_WORD` (1.79 llama / 1.83 qwen measured).
+  golden run (~3.5 h) on the lambda server. Calibrate `LC214_LLM_TOKENS_PER_WORD` (1.79 llama / 1.83 qwen measured;
+  now measured per call in `ai.llm_call`, check `llm_token_estimate_drift`).
 - Dedicated lambda server: full RFB load with reference history (SCD2 by snapshot diff).
 - Fresh-machine test (2026-10-12): `blocked` events for `dag_setup_infrastructure` in the Airflow audit log, cause unknown.
   Same day: RFB, ANP and NF-e ran end to end on a clean clone (RFB dev_mode: download 21 min, `dag_rfb_dw_dbt` 5m18s,

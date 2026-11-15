@@ -1,9 +1,8 @@
 import os
 import sys
+import time
 import requests
 from warnings import filterwarnings
-
-from sentence_transformers import SentenceTransformer
 
 filterwarnings("ignore")
 
@@ -12,6 +11,7 @@ filterwarnings("ignore")
 # ==========================================
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
+from pipelines.commons.ai.llm_usage import from_ollama, record_llm_call
 from pipelines.commons.dw_client import get_sqla_engine, test_pg_connection
 from pipelines.commons.logger import get_logger
 from pipelines.commons.ai.embeddings import MODEL_NAME as EMBEDDING_MODEL
@@ -28,6 +28,7 @@ MODELO_EMBEDDING = EMBEDDING_MODEL   # one model for writing and querying (pipel
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 TOP_K = 5
+USAGE_APP = "anp_assistant"   # ai.llm_call.app: tokens por chamada ao LLM (ADR 0018)
 
 PROMPT_TEMPLATE = """Você é um assistente que responde perguntas sobre preços de combustíveis em Goiás,
 com base EXCLUSIVAMENTE no contexto abaixo, extraído da base da ANP.
@@ -60,12 +61,17 @@ def montar_contexto(resultados) -> str:
     return "\n".join(linhas)
 
 
-def perguntar_llm(pergunta: str, contexto: str) -> str:
+def perguntar_llm(pergunta: str, contexto: str, metodo: str | None = None) -> str:
     prompt = PROMPT_TEMPLATE.format(contexto=contexto, pergunta=pergunta)
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
+    t0 = time.monotonic()
     resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
     resp.raise_for_status()
-    return resp.json()["response"].strip()
+    body = resp.json()
+    # uso por chamada (ADR 0018): tokens reportados pelo Ollama; o prompt fica só como hash. Best-effort.
+    record_llm_call(from_ollama(body, app=USAGE_APP, model=OLLAMA_MODEL, prompt=prompt,
+                                latency_s=time.monotonic() - t0, route=metodo))
+    return body["response"].strip()
 
 
 # ==========================================
@@ -75,6 +81,8 @@ def main():
     test_pg_connection()
     engine = get_sqla_engine()
     dims = carregar_dimensoes(engine)
+
+    from sentence_transformers import SentenceTransformer   # pesado: só no assistente, não no import (testes)
 
     logger.info(f"Carregando modelo de embeddings: {MODELO_EMBEDDING}")
     modelo_ia = SentenceTransformer(MODELO_EMBEDDING)
@@ -107,7 +115,7 @@ def main():
 
         logger.info("Gerando resposta com Ollama...")
         try:
-            resposta = perguntar_llm(pergunta, contexto)
+            resposta = perguntar_llm(pergunta, contexto, metodo)
         except requests.exceptions.RequestException as e:
             logger.error(f"Falha ao chamar o Ollama: {e}")
             print("\n Não consegui falar com o Ollama. Ele está rodando em localhost:11434?")

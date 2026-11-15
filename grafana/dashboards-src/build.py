@@ -872,8 +872,9 @@ def anp_produto() -> Board:
 # =====================================================================================================
 def rag_lc214() -> Board:
     b = Board("datalabs-rag-lc214", "DataLabs · RAG LC 214",
-              "LC 214/2025 RAG: data contract, retrieval gate (lc05), answer gate (lc06), drift and cost. "
-              "Every series comes from audit.pipeline_step_runs; each gate records its own floor.",
+              "LC 214/2025 RAG: data contract, retrieval gate (lc05), answer gate (lc06), drift and cost, LLM usage per "
+              "call. Gate series come from audit.pipeline_step_runs (each gate records its own floor); token usage "
+              "from ai.llm_call.",
               ["datalabs", "rag", "lc214", "observability"], time_from="now-30d")
     b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"}]
 
@@ -1062,6 +1063,58 @@ def rag_lc214() -> Board:
           AND $__timeFilter(started_at) ORDER BY started_at DESC LIMIT 20""",
         desc="Includes skipped runs (--once: same fingerprint, nothing to generate). exit_code 143 = killed from "
              "outside (interrupted), 1 = the gate or the step failed."), 12, 7)
+
+    # ADR 0018: one row per LLM request (lc06 + the ANP assistant), tokens as the model reported them
+    b.row("6 · LLM usage per call (ai.llm_call): tokens per prompt, every app")
+    calls = "FROM ai.llm_call WHERE $__timeFilter(called_at)"
+    b.add(stat("LLM calls", f"SELECT COUNT(*) {calls}", unit="short", color_mode="none",
+               desc="Requests sent to the LLM in the time range (routes sql/clarify never call it)."), 4, 4)
+    b.add(stat("Prompt tokens", f"SELECT SUM(prompt_tokens) {calls}", unit="short", color_mode="none",
+               desc="Input tokens: system + context + question, as the model counted them."), 4, 4)
+    b.add(stat("Completion tokens", f"SELECT SUM(completion_tokens) {calls}", unit="short", color_mode="none",
+               desc="Output tokens (eval_count)."), 4, 4)
+    b.add(stat("Avg prompt tokens / call", f"SELECT ROUND(AVG(prompt_tokens)) {calls}", unit="short",
+               color_mode="none", desc="Compare with num_ctx (6144 for lc06): the context budget in use."), 4, 4)
+    b.add(stat("Reported share", f"SELECT AVG(CASE WHEN token_method = 'reported' THEN 1.0 ELSE 0.0 END) {calls}",
+               unit="percentunit", decimals=0,
+               thresholds=[{"color": CRITICAL, "value": None}, {"color": WARN, "value": 0.9}, {"color": GOOD, "value": 1}],
+               desc="Calls whose tokens came from the model's own count. Below 100% = some numbers are estimates "
+                    "(check llm_usage_estimated_calls)."), 4, 4)
+    b.add(stat("Prompts at the context limit",
+               f"SELECT COUNT(*) {calls} AND num_ctx IS NOT NULL AND prompt_tokens_reported >= num_ctx",
+               thresholds=ZERO_GOOD_WARN, desc="Prompt reached num_ctx: the server truncated it before the model "
+                                               "read it (check llm_prompt_fills_context)."), 4, 4)
+    b.add(timeseries("Tokens per day, by app", [sql_target(f"""
+        SELECT date_trunc('day', called_at) AS time, app || ' · prompt' AS metric, SUM(prompt_tokens) AS value
+        {calls} GROUP BY 1, 2
+        UNION ALL
+        SELECT date_trunc('day', called_at), app || ' · completion', SUM(COALESCE(completion_tokens, 0))
+        {calls} GROUP BY 1, 2 ORDER BY 1""", fmt="time_series")], unit="short", draw="bars", stack=True,
+        desc="Daily consumption. Prompt dominates in RAG: the retrieved context is most of the input."), 12, 8)
+    p = timeseries("Prompt tokens per call: reported vs estimate", [sql_target(f"""
+        SELECT called_at AS time, app || ' · reported' AS metric, prompt_tokens_reported AS value
+        {calls} AND prompt_tokens_reported IS NOT NULL
+        UNION ALL
+        SELECT called_at, app || ' · estimate (words × tokens/word)', prompt_tokens_estimate {calls}
+        ORDER BY 1""", fmt="time_series")], unit="short",
+        desc="One point per prompt. The gap is the error of the budget the retriever plans with "
+             "(check llm_token_estimate_drift: median error ≤ 25%).")
+    p["fieldConfig"]["defaults"]["custom"].update(drawStyle="points", showPoints="always", fillOpacity=0)
+    b.add(p, 12, 8)
+    b.add(table("Usage by app · model · route", f"""
+        SELECT app, model, COALESCE(route, '–') AS route, COUNT(*) AS calls,
+               ROUND(AVG(prompt_tokens)) AS avg_prompt, MAX(prompt_tokens) AS max_prompt,
+               ROUND(AVG(completion_tokens)) AS avg_completion, SUM(total_tokens) AS total_tokens,
+               ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) / 1000.0)::numeric, 1) AS p95_latency_s,
+               COUNT(*) FILTER (WHERE done_reason = 'length') AS cut_by_num_predict
+        {calls} GROUP BY 1, 2, 3 ORDER BY total_tokens DESC""",
+        desc="Where the tokens go. cut_by_num_predict = replies truncated by the answer budget."), 12, 8)
+    b.add(table("Latest calls (the prompt itself is never stored)", f"""
+        SELECT called_at AS called, app, route, tags->>'case' AS "case", tags->>'phrasing' AS phrasing,
+               prompt_tokens, completion_tokens, token_method AS method, prompt_tokens_estimate AS estimate,
+               ROUND(latency_ms / 1000.0, 1) AS latency_s, done_reason, LEFT(prompt_sha256, 12) AS prompt_hash
+        {calls} ORDER BY called_at DESC LIMIT 50""",
+        desc="One row per prompt. The same prompt_hash = the same prompt sent again (repeatable run)."), 12, 8)
     return b
 
 
