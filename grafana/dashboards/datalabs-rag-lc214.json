@@ -2930,7 +2930,18 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "–",
+                  "color": "text"
+                }
+              }
+            }
+          ],
           "noValue": "–",
           "decimals": 0
         },
@@ -3446,6 +3457,216 @@
         "x": 12,
         "y": 85,
         "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Useful token share (lc06)",
+      "description": "Tokens of calls that became an answer (with a valid citation) over all tokens lc06 spent. The rest went to refusals: the model's own, no valid citation, a truncated or unreadable reply. Not a quality gate (a refusal of an unanswerable question is correct): the cost side of the refusal rate.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT SUM(total_tokens) FILTER (WHERE tags->>'outcome' = 'answered')::numeric / NULLIF(SUM(total_tokens), 0) FROM ai.llm_call WHERE $__timeFilter(called_at) AND app = 'lc214_generate' AND tags ? 'outcome'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "–",
+                  "color": "text"
+                }
+              }
+            }
+          ],
+          "noValue": "–",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "id": 42,
+      "gridPos": {
+        "x": 0,
+        "y": 93,
+        "w": 6,
+        "h": 8
+      }
+    },
+    {
+      "type": "table",
+      "title": "Tokens by outcome (lc06)",
+      "description": "Where lc06's tokens went. answered/text = the model left the citations field empty and cited in its text (read under the model_text rule). cpu_s = seconds of generation spent on each outcome.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "dw"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "dw"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(tags->>'outcome', 'not recorded') AS outcome, COALESCE(tags->>'citations_from', '–') AS citations_from, COUNT(*) AS calls, SUM(total_tokens) AS total_tokens, ROUND(AVG(total_tokens)) AS avg_tokens, ROUND(100.0 * SUM(total_tokens) / NULLIF(SUM(SUM(total_tokens)) OVER (), 0), 1) AS pct_tokens, ROUND((SUM(latency_ms) / 1000.0)::numeric, 0) AS cpu_s FROM ai.llm_call WHERE $__timeFilter(called_at) AND app = 'lc214_generate' GROUP BY 1, 2 ORDER BY total_tokens DESC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "noValue": "–",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "success": {
+                        "text": "✔ success",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "pass": {
+                        "text": "✔ pass",
+                        "color": "green",
+                        "index": 1
+                      },
+                      "skipped": {
+                        "text": "⏭ skipped",
+                        "color": "text",
+                        "index": 2
+                      },
+                      "running": {
+                        "text": "▶ running",
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "warn": {
+                        "text": "▲ warn",
+                        "color": "yellow",
+                        "index": 4
+                      },
+                      "stale": {
+                        "text": "⏸ stale",
+                        "color": "orange",
+                        "index": 5
+                      },
+                      "error": {
+                        "text": "✖ error",
+                        "color": "red",
+                        "index": 6
+                      },
+                      "fail": {
+                        "text": "✖ fail",
+                        "color": "red",
+                        "index": 7
+                      },
+                      "failed": {
+                        "text": "✖ failed",
+                        "color": "red",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 43,
+      "gridPos": {
+        "x": 6,
+        "y": 93,
+        "w": 18,
         "h": 8
       }
     }

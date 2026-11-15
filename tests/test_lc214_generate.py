@@ -133,6 +133,31 @@ def test_each_llm_call_records_its_usage_and_the_routes_without_llm_record_none(
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("reply, outcome", [
+    ("grounded", {"outcome": "answered", "citations_from": "field"}),
+    ("cites_in_text", {"outcome": "answered", "citations_from": "text"}),    # citations field empty, text valid
+    ("outside_only", {"outcome": "no_valid_citation"}),
+    ("model_refuses", {"outcome": "model"}),
+    ("cut_by_num_predict", {"outcome": "truncated"}),
+])
+def test_usage_is_recorded_after_the_decision_with_its_outcome(monkeypatch, reply, outcome):
+    calls = []
+    monkeypatch.setattr(gen, "record_llm_call", calls.append)
+    a, _ = _answer(reply=reply)
+    (c,) = calls
+    assert {k: c.tags[k] for k in outcome} == outcome and set(c.tags) >= {"variant", "intent", "outcome"}
+    assert (c.tags["outcome"] == "answered") is a.answerable
+
+
+def test_a_reply_that_breaks_the_reader_is_still_recorded(monkeypatch):
+    calls = []
+    monkeypatch.setattr(gen, "record_llm_call", calls.append)
+    monkeypatch.setattr(gen, "parse_reply", lambda raw: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        _answer()
+    assert [c.tags["outcome"] for c in calls] == ["error"]                 # the tokens were spent anyway
+
+
 def test_the_call_is_repeatable_and_does_not_cut_the_context():
     _, llm = _answer()
     opts = llm.calls[0]["options"]

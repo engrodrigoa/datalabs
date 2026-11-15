@@ -465,11 +465,32 @@ def answer(question: str, store: rt.Store, encode: Callable[[str], list[float]],
     t0 = time.monotonic()
     resp = llm.generate(spec.system, prompt, spec.schema, options)
     a.latency_s = round(time.monotonic() - t0, 2)
-    # usage per call (ADR 0018): best-effort, never fails the answer; the prompt is kept as a hash, not as text
-    record_llm_call(from_ollama(resp, app=USAGE_APP, model=llm.model, prompt=prompt, system=spec.system,
-                                latency_s=a.latency_s, model_digest=getattr(llm, "model_digest", None),
-                                route=r.plan.route, num_ctx=options.get("num_ctx"),
-                                tags={"variant": spec.name, "intent": r.plan.intent, **(tags or {})}))
+    # usage per call (ADR 0018): best-effort, never fails the answer; the prompt is kept as a hash, not as text.
+    # Recorded after the decision, with its outcome: tokens that became an answer vs tokens spent on a refusal.
+    usage = from_ollama(resp, app=USAGE_APP, model=llm.model, prompt=prompt, system=spec.system,
+                        latency_s=a.latency_s, model_digest=getattr(llm, "model_digest", None),
+                        route=r.plan.route, num_ctx=options.get("num_ctx"),
+                        tags={"variant": spec.name, "intent": r.plan.intent, **(tags or {})})
+    try:
+        return _read_reply(a, resp, index, decision)
+    finally:
+        usage.tags.update(usage_outcome(a))
+        record_llm_call(usage)
+
+
+def usage_outcome(a: Answer) -> dict:
+    """The decision of one LLM call, as ai.llm_call tags (ADR 0018). `outcome`: answered | the refusal that decided
+    it (model, no_valid_citation, invalid_json, truncated) | error (the reply could not be read). An answer always
+    carries a valid citation (barrier 3); `citations_from` says whether the model put it in the citations field or
+    only in its text (read under the model_text rule)."""
+    if a.answerable:
+        in_field = any(c.get("status") == "valid" for c in a.citations)
+        return {"outcome": "answered", "citations_from": "field" if in_field else "text"}
+    return {"outcome": a.refusal or "error"}
+
+
+def _read_reply(a: Answer, resp: dict, index: Index, decision: str) -> Answer:
+    """Barriers 2 and 3 on the model's reply (the LLM was called)."""
     a.llm_called = True
     a.done_reason = resp.get("done_reason")
     a.prompt_eval_count, a.eval_count = resp.get("prompt_eval_count"), resp.get("eval_count")

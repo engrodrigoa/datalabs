@@ -144,7 +144,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   and reply are never stored (sha256 + size only). Best-effort write on its own connection; linked to the runner's
   `step_run_id`. Consumers: lc06 (`lc214_generate`), the ANP assistant (`anp_assistant`). A new LLM call site
   records through the same module. Checks `llm_usage_recorded`, `llm_usage_estimated_calls`,
-  `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board row 6. No cost (local LLM, no price dimension yet).
+  `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board row 6. lc06 records after its decision with
+  `tags.outcome` (answered | refusal | error) and `citations_from`: useful token share. No cost (local LLM, no price
+  dimension yet).
 
 ## Development rules
 

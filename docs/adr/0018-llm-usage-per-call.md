@@ -33,6 +33,20 @@ the prototype for a real case outside the lab: prompts logged by an application,
    the interactive assistant), so tokens join `audit.pipeline_step_runs`. Free labels in `tags` (lc06: variant,
    intent, golden case, phrasing).
 
+7. **The value of the spend, not only the spend (lc06).** A token count says what was spent, not whether it
+   became an answer. lc06 records each call after its decision, with `tags.outcome`: `answered` (always with a valid
+   citation, barrier 3) or the refusal that decided it (`model`, `no_valid_citation`, `truncated`, `invalid_json`),
+   `error` when the reply could not be read (the tokens were spent anyway: still recorded). `citations_from` says
+   whether the model put the valid citation in the `citations` field or only in its text (read under `model_text`).
+   Board: *Useful token share* (answered tokens / all lc06 tokens) and *Tokens by outcome*. It is the cost side of
+   the refusal rate, not a quality gate: refusing an unanswerable question is correct, and correctness against the
+   golden labels stays with the lc06 gate (ADR 0015). No column was added: the outcome is a tag, the table stays
+   generic for other consumers.
+
+   First call measured in the lab (2026-11-15, qwen2.5:3b, i7-7700HQ): 4,064 prompt tokens reported against an
+   estimate of 3,887 (-4.4%, ≈1.78 tokens per word), 104 completion tokens, 336 s, of which 312 s (93%) reading the
+   prompt at 13 tokens/s. In RAG the cost is the retrieved context, not the reply.
+
 **Data quality and observability** (`pipelines/observability/checks.yml`, pipeline `lc214`, `requires: ai`):
 
 | check | type | catches |
