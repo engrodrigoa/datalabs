@@ -104,6 +104,9 @@ def sql_target(sql: str, ds=DW, fmt="table", ref="A") -> dict:
             "rawSql": " ".join(sql.split())}
 
 
+NULL_NEUTRAL = [{"type": "special", "options": {"match": "null", "result": {"text": "–", "color": NEUTRAL}}}]
+
+
 def stat(title, sql, ds=DW, unit="none", thresholds=None, desc="", decimals=None, mappings=None, color_mode="background"):
     steps = thresholds or [{"color": NEUTRAL, "value": None}]
     defaults = {"unit": unit, "thresholds": {"mode": "absolute", "steps": steps}, "color": {"mode": "thresholds"},
@@ -1076,7 +1079,7 @@ def rag_lc214() -> Board:
     b.add(stat("Avg prompt tokens / call", f"SELECT ROUND(AVG(prompt_tokens)) {calls}", unit="short",
                color_mode="none", desc="Compare with num_ctx (6144 for lc06): the context budget in use."), 4, 4)
     b.add(stat("Reported share", f"SELECT AVG(CASE WHEN token_method = 'reported' THEN 1.0 ELSE 0.0 END) {calls}",
-               unit="percentunit", decimals=0,
+               unit="percentunit", decimals=0, mappings=NULL_NEUTRAL,
                thresholds=[{"color": CRITICAL, "value": None}, {"color": WARN, "value": 0.9}, {"color": GOOD, "value": 1}],
                desc="Calls whose tokens came from the model's own count. Below 100% = some numbers are estimates "
                     "(check llm_usage_estimated_calls)."), 4, 4)
@@ -1115,6 +1118,26 @@ def rag_lc214() -> Board:
                ROUND(latency_ms / 1000.0, 1) AS latency_s, done_reason, LEFT(prompt_sha256, 12) AS prompt_hash
         {calls} ORDER BY called_at DESC LIMIT 50""",
         desc="One row per prompt. The same prompt_hash = the same prompt sent again (repeatable run)."), 12, 8)
+
+    # ADR 0018, value of the spend: lc06 records each call after its decision (tags.outcome)
+    outcome = "COALESCE(tags->>'outcome', 'not recorded')"
+    gen_calls = f"{calls} AND app = 'lc214_generate'"
+    b.add(stat("Useful token share (lc06)", f"""
+        SELECT SUM(total_tokens) FILTER (WHERE tags->>'outcome' = 'answered')::numeric
+               / NULLIF(SUM(total_tokens), 0)
+        {gen_calls} AND tags ? 'outcome'""", unit="percentunit", decimals=0, color_mode="none",
+        mappings=NULL_NEUTRAL,
+        desc="Tokens of calls that became an answer (with a valid citation) over all tokens lc06 spent. The rest "
+             "went to refusals: the model's own, no valid citation, a truncated or unreadable reply. Not a quality "
+             "gate (a refusal of an unanswerable question is correct): the cost side of the refusal rate."), 6, 8)
+    b.add(table("Tokens by outcome (lc06)", f"""
+        SELECT {outcome} AS outcome, COALESCE(tags->>'citations_from', '–') AS citations_from, COUNT(*) AS calls,
+               SUM(total_tokens) AS total_tokens, ROUND(AVG(total_tokens)) AS avg_tokens,
+               ROUND(100.0 * SUM(total_tokens) / NULLIF(SUM(SUM(total_tokens)) OVER (), 0), 1) AS pct_tokens,
+               ROUND((SUM(latency_ms) / 1000.0)::numeric, 0) AS cpu_s
+        {gen_calls} GROUP BY 1, 2 ORDER BY total_tokens DESC""",
+        desc="Where lc06's tokens went. answered/text = the model left the citations field empty and cited in its "
+             "text (read under the model_text rule). cpu_s = seconds of generation spent on each outcome."), 18, 8)
     return b
 
 
