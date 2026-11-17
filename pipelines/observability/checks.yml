@@ -330,6 +330,65 @@ checks:
         AND called_at >= now() - interval '30 days'
     max: 0.25
 
+  # ------------------------------------------------------------------ RTC reference (ADR 0019)
+  # Official CST / cClassTrib / NCM tables of the Receita Federal tax calculator (GitHub mirror) and the NF-e
+  # adherence built on them. Health of the LOAD (is the reference there, current, complete) is separate from the
+  # QUALITY of the items (do the notes follow it): the first are errors, the second warnings for the business.
+  - name: rtc_reference_loaded
+    pipeline: rtc
+    dataset: ctrl.rtc_carga
+    type: threshold
+    query: SELECT COUNT(*) FROM ctrl.rtc_carga
+    min: 1                    # no version loaded: every adherence status would be "cclasstrib_inexistente"
+
+  - name: rtc_reference_age_days
+    pipeline: rtc
+    dataset: ctrl.rtc_carga
+    type: threshold
+    severity: warn
+    # days since the version in use was built. The Receita releases every 2-4 weeks (internal changelog,
+    # 1.5.0 -> 1.6.0 in 35 days); 45 days without a new sha means the mirror stopped following, or our source
+    # check is not seeing it. This is the measurement of the mirror's real cadence (ADR 0019, open question).
+    query: SELECT COALESCE(EXTRACT(EPOCH FROM now() - MAX(built_at)) / 86400, 9999) FROM ctrl.rtc_carga
+    max: 45
+
+  - name: rtc_serving_parity
+    pipeline: rtc
+    dataset: ref_rtc.classificacao_tributaria
+    type: reconciliation
+    left_label: rows_built
+    query: >
+      SELECT (row_counts ->> 'CLASSIFICACAO_TRIBUTARIA')::bigint FROM ctrl.rtc_carga
+      ORDER BY loaded_at DESC, carga_id DESC LIMIT 1
+    right_label: rows_served
+    compare_query: SELECT COUNT(*) FROM silver.rtc_cclasstrib
+    tolerance_pct: 0          # the dbt model must expose every row the version brought (no join loses one)
+
+  - name: rtc_nfe_adherence_coverage
+    pipeline: rtc
+    dataset: gold.ft_nfe_item_aderencia_rtc
+    type: reconciliation
+    left_label: nfe_items
+    query: SELECT COUNT(*) FROM silver.nfe_item
+    right_label: items_evaluated
+    compare_query: SELECT COUNT(*) FROM gold.ft_nfe_item_aderencia_rtc
+    tolerance_pct: 0          # every item gets a status (the model is rebuilt after the NF-e batches)
+    severity: warn            # dag_nfe may load a batch between the dbt run and this check
+
+  - name: rtc_nfe_ncm_ineligible_pct
+    pipeline: rtc
+    dataset: gold.ft_nfe_item_aderencia_rtc
+    type: threshold
+    severity: warn
+    # % of the last 30 days' items whose cClassTrib requires an NCM list that the item's NCM is not in. A signal
+    # for the business (benefit on an ineligible product), never a pipeline failure. The synthetic generator
+    # injects ~0.5% (gen_nfe.py --sujo); above 1% the trend deserves a look at ag_nfe_aderencia_rtc_mensal.
+    query: >
+      SELECT COALESCE(100.0 * COUNT(*) FILTER (WHERE status_aderencia = 'ncm_inelegivel') / NULLIF(COUNT(*), 0), 0)
+      FROM gold.ft_nfe_item_aderencia_rtc
+      WHERE dt_emissao >= (SELECT MAX(dt_emissao) - 30 FROM gold.ft_nfe_item_aderencia_rtc)
+    max: 1.0
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs

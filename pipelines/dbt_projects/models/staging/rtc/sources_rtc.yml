@@ -1,0 +1,36 @@
+version: 2
+
+sources:
+  - name: ref_rtc
+    description: >
+      Tabelas oficiais da Calculadora de Tributos da Receita Federal (github.com/ReceitaFederal/calculadora-rtc-regime-regular,
+      licença MIT), reconstruídas a partir dos scripts Flyway (rtc01_fetch) e carregadas por versão (rtc02_load, ADR 0019).
+      Cópia crua: nomes de coluna da fonte, datas como texto 'AAAA-MM-DD', flags 0/1. A tipagem fica no staging.
+    schema: ref_rtc
+    tables:
+      - name: situacao_tributaria
+        description: "CST. Há uma linha por CST e por grupo de tributo (o CST 000 do IBS/CBS e o do IS são linhas distintas)."
+      - name: tributo
+        description: "IS, CBS, IBSUF, IBSMun."
+      - name: tributo_situacao_tributaria
+        description: "Quais tributos cada CST atende (decide o grupo IBS/CBS ou IS de uma cClassTrib)."
+      - name: classificacao_tributaria
+        description: "cClassTrib, com vigência. O código sozinho não é chave: 000001 existe para IBS/CBS e para IS."
+      - name: fundamentacao_legal
+      - name: fundamentacao_classificacao
+      - name: anexo
+        description: "Itens dos anexos da LC 214/2025 (ex.: Anexo IX item 2 = fertilizantes)."
+      - name: ncm_aplicavel
+        description: "NCM elegíveis por cClassTrib. O NCM da regra é PREFIXO (capítulo, posição ou código completo)."
+      - name: excecao_ncm_aplicavel
+        description: "NCM excluídos de uma regra de ncm_aplicavel (prefixo), com vigência própria."
+      - name: tipo_dfe
+      - name: tipo_dfe_classificacao
+        description: "Em quais documentos fiscais (NF-e, NFC-e, NFS-e...) cada cClassTrib pode ser usada."
+
+  - name: ctrl_rtc
+    schema: ctrl
+    tables:
+      - name: rtc_carga
+        description: "Uma linha por versão carregada em ref_rtc: release, versão da base (V00nn) e sha do git."
+        loaded_at_field: loaded_at

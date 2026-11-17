@@ -157,10 +157,26 @@ devolução de tributo e carga efetiva por mês, UF/município, CST/cClassTrib e
 | Total CBS ≠ Σ itens | `assert_nfe_total_cbs_igual_soma_itens` (warn) |
 | vBC IBS/CBS total ≠ Σ itens | `assert_nfe_total_vbc_ibscbs_igual_soma_itens` (warn) |
 | cClassTrib incompatível com o CST | `nfe_cclasstrib_coerente` + relacionamento com `dm_nfe_tributacao` (warn) |
+| cClassTrib fora da tabela oficial (inexistente, fora de vigência, CST ≠ CST oficial) | `assert_nfe_item_cclasstrib_oficial` sobre `gold.ft_nfe_item_aderencia_rtc` (warn, [ADR 0019](../adr/0019-rtc-official-reference-tables.md)) |
+| Benefício com NCM inelegível (ex.: eletrônico com a redução de 60% dos insumos agro, Anexo IX) | `assert_nfe_item_ncm_elegivel_rtc` (warn) + check `rtc_nfe_ncm_ineligible_pct`: só a tabela oficial NCM x cClassTrib mostra |
 | Nota com data antiga chegando hoje | agregado reabre o mês certo; SCD2 aponta a versão certa |
 | Alteração cadastral do contribuinte | nova versão em `dm_nfe_participante` |
 
 As decisões de arquitetura estão em [ADR 0006](../adr/0006-nfe-incremental-lotes.md).
+
+### Aderência à tabela oficial da Receita (cClassTrib x NCM)
+
+A tabela oficial de CST / cClassTrib / NCM vem da Calculadora de Tributos que a Receita publicou no GitHub (MIT):
+o `dag_rtc_ref` (diário, `make rtc-ref`) verifica o espelho com `git ls-remote`, reconstrói a base a partir dos
+scripts Flyway (sem Java), carrega em `ref_rtc` com a versão em `ctrl.rtc_carga` e recalcula
+`gold.ft_nfe_item_aderencia_rtc` (um status por item) e `gold.ag_nfe_aderencia_rtc_mensal` (mês x cClassTrib x
+status, sem CNPJ). No lab (3.000 notas, `--defect-rate 0.04`): 30/30 benefícios com NCM inelegível e 23/23
+cClassTrib incoerentes detectados, 0 falso positivo. Detalhes e medições: [ADR 0019](../adr/0019-rtc-official-reference-tables.md).
+
+```sql
+SELECT mes_emissao, cclasstrib, status_aderencia, itens, valor_produtos, pct_itens_na_cclasstrib
+FROM gold.ag_nfe_aderencia_rtc_mensal WHERE status_aderencia <> 'aderente' ORDER BY 1, 2;
+```
 
 ## Plano / próximos passos
 

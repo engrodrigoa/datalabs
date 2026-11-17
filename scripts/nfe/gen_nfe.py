@@ -16,7 +16,9 @@ Realismo:
   * escrita atômica (.tmp -> .xml): sensor nunca vê arquivo pela metade
 
 Anomalias (somente as plausíveis em nota autorizada / no transporte):
-  --defect-rate   inconsistência de negócio: total CBS ≠ Σ itens, vBC total ≠ Σ itens, cClassTrib×CST
+  --defect-rate   inconsistência de negócio: total CBS ≠ Σ itens, vBC total ≠ Σ itens, cClassTrib×CST,
+                  benefício com NCM inelegível (eletrônico com a redução de 60% dos insumos agro do Anexo IX:
+                  CST, cClassTrib e valores coerentes, só o NCM fora da lista oficial — ADR 0019)
   --dup-rate      reenvio: o mesmo XML chega de novo com outro nome de arquivo
   --corrupt-rate  arquivo truncado no transporte (XML malformado -> rejeitado na ingestão)
 
@@ -361,6 +363,12 @@ def gerar_nota(rng: random.Random, cad: Cadastro, dt: datetime, args, defeito: s
     n_itens = rng.choices([1, 2, 3, 4, 5, 8, 15], weights=[35, 20, 15, 10, 10, 6, 4])[0]
     for n in range(1, n_itens + 1):
         xprod, ncm, ucom, (lo, hi), perfil = rng.choice(catalogo)
+        if defeito == "beneficio_ncm_inelegivel" and n == 1:
+            # indício de benefício indevido: produto fora do Anexo IX com o tratamento dos insumos agro
+            # (CST 200 / cClassTrib 200038, redução de 60%). Tudo coerente, menos o NCM: a autorizadora não barra,
+            # só a tabela oficial NCM x cClassTrib (ref_rtc) mostra (gold.ft_nfe_item_aderencia_rtc).
+            xprod, ncm, ucom, (lo, hi), _ = rng.choice(CATALOGO["varejo_eletro"])
+            perfil = "agro_red"
         qtd = q(D(rng.uniform(1, 40)), 4) if ucom == "TO" else D(rng.randint(1, 60))
         vun = q(D(rng.uniform(lo, hi)), 10)
         vprod = q(qtd * vun)
@@ -670,7 +678,8 @@ def main():
         cont = {"ok": 0, "defeito": 0, "dup": 0, "corrompido": 0}
         for _ in range(a.n):
             dt = ini + timedelta(seconds=rng.randint(0, janela))
-            defeito = rng.choice(["tot_cbs_divergente", "vbc_ibscbs_divergente", "cclasstrib_incoerente"]) \
+            defeito = rng.choice(["tot_cbs_divergente", "vbc_ibscbs_divergente", "cclasstrib_incoerente",
+                                 "beneficio_ncm_inelegivel"]) \
                 if rng.random() < a.defect_rate else ""
             chave, root, nfe, _ = gerar_nota(rng, cad, dt, a, defeito)
             if schema is not None and not defeito:
