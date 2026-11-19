@@ -155,6 +155,8 @@ nfe-backfill: ## NF-e: histórico jan-set/2026 (5000 notas) para popular o DW
 	  --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
 
 rtc-ref: ## RTC: busca a tabela oficial cClassTrib/NCM (Receita) e recalcula a aderência dos itens de NF-e
+	@echo "aguardando o Airflow registrar o dag_rtc_ref (DAG nova: até ~5 min, e nasce pausada)..."
+	@until $(AF) airflow dags unpause dag_rtc_ref >/dev/null 2>&1; do sleep 5; done
 	$(AF) airflow dags trigger dag_rtc_ref
 	@echo ""
 	@echo "  acompanhe:  http://localhost:8080/dags/dag_rtc_ref"
