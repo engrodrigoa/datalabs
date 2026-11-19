@@ -132,20 +132,20 @@ def load(conn, db_path: str, entry: dict, report: dict | None, step_run_id: str 
             if mismatched:
                 raise LoadError("load_count_mismatch", f"rows loaded != rows built: {mismatched}")
             cur.execute("""
-                INSERT INTO ctrl.rtc_carga (sha, release, database_version, source_repo, built_at, row_counts,
-                                            schema_changes, step_run_id)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)""",
-                        (entry["sha"], entry.get("release"), entry.get("database_version"),
-                         (report or {}).get("repo", "?"), entry.get("built_at"), json.dumps(counts),
-                         json.dumps(recreated), step_run_id))
+                INSERT INTO ctrl.rtc_carga (sha, contract_version, release, database_version, source_repo, built_at,
+                                            row_counts, schema_changes, step_run_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)""",
+                        (entry["sha"], entry.get("contract_version", 1), entry.get("release"),
+                         entry.get("database_version"), (report or {}).get("repo", "?"), entry.get("built_at"),
+                         json.dumps(counts), json.dumps(recreated), step_run_id))
     finally:
         src.close()
     return {"row_counts": counts, "recreated": recreated}
 
 
-def already_loaded(conn, sha: str) -> bool:
+def already_loaded(conn, sha: str, contract_version: int) -> bool:
     with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM ctrl.rtc_carga WHERE sha = %s", (sha,))
+        cur.execute("SELECT 1 FROM ctrl.rtc_carga WHERE sha = %s AND contract_version = %s", (sha, contract_version))
         return cur.fetchone() is not None
 
 
@@ -154,15 +154,15 @@ def run(lake: Lake, conn, *, force: bool = False) -> int:
     current = (lake.get_json(k_manifest(), {}) or {}).get("current")
     if not current:
         raise LoadError("nothing_landed", "landing/rtc/manifest.json has no current version: run rtc01_fetch first")
-    sha = current["sha"]
-    step.label(source_sha=sha[:12], release=current.get("release") or "?")
-    if already_loaded(conn, sha) and not force:
-        log_event(logger, "version_already_loaded", f"{sha[:12]} ({current.get('release')}) is already in ref_rtc",
-                  sha=sha)
+    sha, contract = current["sha"], current.get("contract_version", 1)
+    step.label(source_sha=sha[:12], release=current.get("release") or "?", contract_version=str(contract))
+    if already_loaded(conn, sha, contract) and not force:
+        log_event(logger, "version_already_loaded", f"{sha[:12]} ({current.get('release')}, contract v{contract}) "
+                  "is already in ref_rtc", sha=sha)
         return EXIT_SKIPPED
     if force:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM ctrl.rtc_carga WHERE sha = %s", (sha,))
+            cur.execute("DELETE FROM ctrl.rtc_carga WHERE sha = %s AND contract_version = %s", (sha, contract))
 
     report = lake.get_json(current["db"].rsplit("/", 1)[0] + "/build_report.json", None)
     with tempfile.TemporaryDirectory(prefix="rtc02_") as tmp:

@@ -53,3 +53,30 @@ models:
               arguments:
                 to: ref('rtc_cclasstrib')
                 field: cltr_id
+
+  - name: rtc_percentual_reducao
+    description: >
+      % oficial de redução da alíquota por cClassTrib e tributo (CBS, IBSUF, IBSMun), com vigência. Formato longo:
+      CBS e IBS podem ter percentuais diferentes para a mesma classificação.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cltr_id, tributo, dt_inicio_vigencia]
+    columns:
+      - name: tributo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['CBS', 'IBSUF', 'IBSMun']
+      - name: p_reducao
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 100"
+      - name: cltr_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('rtc_cclasstrib')
+                field: cltr_id

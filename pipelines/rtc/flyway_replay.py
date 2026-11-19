@@ -44,8 +44,16 @@ CONTRACT_MIN_ROWS = {
     "TIPO_DFE": 10,                      # 18
     "TIPO_DFE_CLASSIFICACAO": 250,       # 405
     "VERSAO_BASE_DADO": 1,               # 59
+    # contract v2: official reductions and treatments (dm_nfe_tributacao, rule reducao_divergente)
+    "PERCENTUAL_REDUCAO": 340,           # 492 = 164 cClassTrib x (CBS, IBSUF, IBSMun)
+    "TRATAMENTO_CLASSIFICACAO": 130,     # 193
+    "TRATAMENTO_TRIBUTARIO": 30,         # 43
 }
 EXPORT_TABLES = tuple(CONTRACT_MIN_ROWS)
+# Bump when EXPORT_TABLES or the floors change: rtc01 and rtc02 skip only when BOTH the source sha and this version
+# are unchanged, so a new contract reloads the current release without waiting for the Receita to publish another
+# one (same idea as LC 214's PARSER_VERSION).
+CONTRACT_VERSION = 2
 
 
 class ReplayError(Exception):

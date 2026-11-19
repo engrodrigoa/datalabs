@@ -159,6 +159,9 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `gold.ft_nfe_item_aderencia_rtc`: one status per item, first failing rule (inexistente -> fora_vigencia ->
   cst_incompativel -> ncm_inelegivel); NCM rule = prefix minus exceptions, point in time (calculator's own rule).
   Signals are dbt `warn` in `dq_nfe`. Generator defect `beneficio_ncm_inelegivel` is the answer key (30/30, 0 FP).
+  Contract v2 (`CONTRACT_VERSION` in both steps' skip rule; version = sha + contract): official reductions per tax
+  (`silver.rtc_percentual_reducao`, long format) + treatments; rule 6 `reducao_divergente` (IBSUF `pRedAliq`, CBS
+  derived from `pAliqEfet`, tol. 0.01 / 1 p.p.), defect `reducao_divergente` (27/27, 0 FP).
 
 ## Development rules
 

@@ -10,7 +10,8 @@ CREATE SCHEMA IF NOT EXISTS ref_rtc;
 
 CREATE TABLE IF NOT EXISTS ctrl.rtc_carga (
     carga_id          bigserial PRIMARY KEY,
-    sha               text NOT NULL UNIQUE,         -- git commit of the mirror that was built
+    sha               text NOT NULL,                -- git commit of the mirror that was built
+    contract_version  int  NOT NULL DEFAULT 1,      -- flyway_replay.CONTRACT_VERSION: which tables were exported
     release           text,                         -- pom.xml <version> (e.g. 1.6.1)
     database_version  text,                         -- last migration recorded by the scripts (e.g. V0059)
     source_repo       text NOT NULL,
@@ -21,6 +22,10 @@ CREATE TABLE IF NOT EXISTS ctrl.rtc_carga (
     step_run_id       uuid                          -- -> audit.pipeline_step_runs
 );
 
+-- contract v2 (2026-11): a version is (sha, contract_version); databases created with v1 are migrated in place
+ALTER TABLE ctrl.rtc_carga ADD COLUMN IF NOT EXISTS contract_version int NOT NULL DEFAULT 1;
+ALTER TABLE ctrl.rtc_carga DROP CONSTRAINT IF EXISTS rtc_carga_sha_key;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_rtc_carga_sha_contract ON ctrl.rtc_carga (sha, contract_version);
 CREATE INDEX IF NOT EXISTS ix_rtc_carga_loaded_at ON ctrl.rtc_carga (loaded_at DESC);
 
 COMMENT ON TABLE ctrl.rtc_carga IS

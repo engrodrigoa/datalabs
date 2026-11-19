@@ -4,7 +4,7 @@ models:
   - name: ft_nfe_item_aderencia_rtc
     description: >
       Aderência de cada item de NF-e às tabelas oficiais da Calculadora RTC (cClassTrib existe, vigente, CST
-      coerente, NCM elegível). Um status por item: a primeira regra que falha. 'ncm_inelegivel' é indício para a
+      coerente, NCM elegível, % de redução oficial). Um status por item: a primeira regra que falha. 'ncm_inelegivel' é indício para a
       área de negócio avaliar, não conclusão fiscal.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
@@ -17,7 +17,7 @@ models:
           - accepted_values:
               arguments:
                 values: ['aderente', 'sem_cclasstrib', 'cclasstrib_inexistente', 'cclasstrib_fora_vigencia',
-                         'cst_incompativel', 'ncm_inelegivel']
+                         'cst_incompativel', 'ncm_inelegivel', 'reducao_divergente']
 
   - name: ag_nfe_aderencia_rtc_mensal
     description: "Agregado mês x cClassTrib x status (itens, notas, emitentes, valores). Sem CNPJ: é o que se apresenta."

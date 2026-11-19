@@ -9,7 +9,13 @@
 --   cst_incompativel          vigente, mas o CST do item não é o CST oficial da cClassTrib
 --   ncm_inelegivel            a cClassTrib tem lista de NCM (ex.: Anexo IX, insumos agro) e o NCM do item
 --                             não casa com nenhuma regra vigente (prefixo), ou casa só com uma exceção
+--   reducao_divergente        o % de redução declarado no item difere do % oficial da cClassTrib na data de emissão
+--                             (IBSUF: pRedAliq do item; CBS: derivado da alíquota efetiva, 100 x (1 - pAliqEfet/pCBS))
 --   aderente                  passou em todas
+--
+-- Tolerâncias da redução: IBSUF 0,01 p.p. (o item traz o percentual); CBS 1 p.p. (derivado de pAliqEfet, que o
+-- emitente pode arredondar a 2 casas: 0,005 / 0,9 = 0,56 p.p. de erro máximo com a alíquota de teste de 2026).
+-- IBSMun fica de fora: a alíquota de referência de 2026 é 0, e sobre zero não há redução a medir.
 --
 -- "ncm_inelegivel" é INDÍCIO, não infração: a classificação existe e é coerente com o CST, mas o produto não
 -- está na lista que dá direito ao tratamento (redução, alíquota zero...). É o caso que a autorizadora não barra.
@@ -31,14 +37,18 @@ with item as (
     select
         i.chave_acesso, i.n_item, i.lote_id, n.dt_emissao, n.emit_cnpj, n.emit_uf,
         i.ncm, i.xprod, i.cst_ibscbs as cst, i.cclasstrib,
-        i.vprod, i.vbc_ibscbs, i.p_red_aliq, coalesce(i.v_ibs, 0) + coalesce(i.v_cbs, 0) as v_ibscbs
+        i.vprod, i.vbc_ibscbs, i.p_red_aliq, coalesce(i.v_ibs, 0) + coalesce(i.v_cbs, 0) as v_ibscbs,
+        coalesce(i.p_red_aliq, 0)                                                  as p_red_decl_ibs_uf,
+        case when i.p_cbs > 0
+             then round(100 * (1 - coalesce(i.p_aliqefet_cbs, i.p_cbs) / i.p_cbs), 2) end as p_red_decl_cbs
     from {{ ref('nfe_item') }} as i
     join {{ ref('nfe_nota') }} as n using (chave_acesso)
 {%- else %}
     select null::text as chave_acesso, null::int as n_item, null::bigint as lote_id, null::date as dt_emissao,
            null::text as emit_cnpj, null::text as emit_uf, null::text as ncm, null::text as xprod, null::text as cst,
            null::text as cclasstrib, null::numeric(15,2) as vprod, null::numeric(15,2) as vbc_ibscbs,
-           null::numeric(7,4) as p_red_aliq, null::numeric(15,2) as v_ibscbs
+           null::numeric(7,4) as p_red_aliq, null::numeric(15,2) as v_ibscbs,
+           null::numeric(7,4) as p_red_decl_ibs_uf, null::numeric(7,2) as p_red_decl_cbs
     where false
 {%- endif %}
 ),
@@ -81,6 +91,19 @@ elegibilidade as (
                   and it.ncm like e.ncm_prefixo || '%'
                   and it.dt_emissao between e.dt_inicio_vigencia and e.dt_fim_vigencia_efetiva)
     group by a.chave_acesso, a.n_item
+),
+
+reducao as (
+    -- % oficial vigente na data de emissão, por tributo, para a cClassTrib casada (vigente e com CST coerente)
+    select a.chave_acesso, a.n_item,
+           max(r.p_reducao) filter (where r.tributo = 'IBSUF')                         as p_red_ofic_ibs_uf,
+           max(r.p_reducao) filter (where r.tributo = 'CBS')                           as p_red_ofic_cbs
+    from avaliacao as a
+    join item as it using (chave_acesso, n_item)
+    join {{ ref('rtc_percentual_reducao') }} as r
+      on r.cltr_id = a.cltr_id
+     and it.dt_emissao between r.dt_inicio_vigencia and r.dt_fim_vigencia_efetiva
+    group by a.chave_acesso, a.n_item
 )
 
 select
@@ -106,11 +129,18 @@ select
         when not a.vigente                      then 'cclasstrib_fora_vigencia'
         when a.cltr_id is null                  then 'cst_incompativel'
         when c.tem_lista_ncm and not el.elegivel then 'ncm_inelegivel'
+        when abs(it.p_red_decl_ibs_uf - rd.p_red_ofic_ibs_uf) > 0.01
+          or abs(it.p_red_decl_cbs - rd.p_red_ofic_cbs) > 1.0
+                                                then 'reducao_divergente'
         else 'aderente'
     end                                         as status_aderencia,
     it.vprod,
     it.vbc_ibscbs,
     it.p_red_aliq,
+    it.p_red_decl_ibs_uf,                       -- % de redução declarado (IBSUF), 0 quando o item não traz gRed
+    rd.p_red_ofic_ibs_uf,                       -- % oficial (ref_rtc.percentual_reducao) na data de emissão
+    it.p_red_decl_cbs,                          -- % declarado (CBS), derivado da alíquota efetiva
+    rd.p_red_ofic_cbs,
     it.v_ibscbs,
     c.rtc_release,
     c.rtc_versao_base,
@@ -120,3 +150,4 @@ from item as it
 join avaliacao as a using (chave_acesso, n_item)
 left join classif as c on c.cltr_id = a.cltr_id
 left join elegibilidade as el using (chave_acesso, n_item)
+left join reducao as rd using (chave_acesso, n_item)

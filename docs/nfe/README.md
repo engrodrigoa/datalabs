@@ -159,6 +159,7 @@ devolução de tributo e carga efetiva por mês, UF/município, CST/cClassTrib e
 | cClassTrib incompatível com o CST | `nfe_cclasstrib_coerente` + relacionamento com `dm_nfe_tributacao` (warn) |
 | cClassTrib fora da tabela oficial (inexistente, fora de vigência, CST ≠ CST oficial) | `assert_nfe_item_cclasstrib_oficial` sobre `gold.ft_nfe_item_aderencia_rtc` (warn, [ADR 0019](../adr/0019-rtc-official-reference-tables.md)) |
 | Benefício com NCM inelegível (ex.: eletrônico com a redução de 60% dos insumos agro, Anexo IX) | `assert_nfe_item_ncm_elegivel_rtc` (warn) + check `rtc_nfe_ncm_ineligible_pct`: só a tabela oficial NCM x cClassTrib mostra |
+| % de redução diferente do oficial (ex.: 200038 com pRedAliq 30 em vez de 60) | `assert_nfe_item_reducao_oficial` (warn): `ref_rtc.percentual_reducao` por tributo, na data de emissão |
 | Nota com data antiga chegando hoje | agregado reabre o mês certo; SCD2 aponta a versão certa |
 | Alteração cadastral do contribuinte | nova versão em `dm_nfe_participante` |
 
@@ -170,8 +171,8 @@ A tabela oficial de CST / cClassTrib / NCM vem da Calculadora de Tributos que a 
 o `dag_rtc_ref` (diário, `make rtc-ref`) verifica o espelho com `git ls-remote`, reconstrói a base a partir dos
 scripts Flyway (sem Java), carrega em `ref_rtc` com a versão em `ctrl.rtc_carga` e recalcula
 `gold.ft_nfe_item_aderencia_rtc` (um status por item) e `gold.ag_nfe_aderencia_rtc_mensal` (mês x cClassTrib x
-status, sem CNPJ). No lab (3.000 notas, `--defect-rate 0.04`): 30/30 benefícios com NCM inelegível e 23/23
-cClassTrib incoerentes detectados, 0 falso positivo. Detalhes e medições: [ADR 0019](../adr/0019-rtc-official-reference-tables.md).
+status, sem CNPJ). No lab (7.000 notas, dois lotes): 64/64 benefícios com NCM inelegível, 63/63 cClassTrib
+incoerentes e 27/27 reduções divergentes detectados, 0 falso positivo. Detalhes e medições: [ADR 0019](../adr/0019-rtc-official-reference-tables.md).
 
 ```sql
 SELECT mes_emissao, cclasstrib, status_aderencia, itens, valor_produtos, pct_itens_na_cclasstrib

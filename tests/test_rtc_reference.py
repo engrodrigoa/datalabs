@@ -183,3 +183,30 @@ def test_create_sql_lowercases_and_quotes():
 def test_export_tables_are_the_contract():
     assert set(fr.EXPORT_TABLES) == set(fr.CONTRACT_MIN_ROWS)
     assert json.dumps(fr.EXPORT_TABLES)                 # serialisable (stored in reports)
+
+
+def test_rtc01_contract_bump_rebuilds_the_same_sha(tmp_path, monkeypatch):
+    """A new CONTRACT_VERSION reloads the current release: same sha, no waiting for a new Receita release."""
+    monkeypatch.setattr(fr, "CONTRACT_MIN_ROWS", {"CLASSIFICACAO_TRIBUTARIA": 1, "VERSAO_BASE_DADO": 1})
+    lake = LocalLake(str(tmp_path / "lake"))
+    sha = "e" * 40
+    monkeypatch.setattr(fr, "CONTRACT_VERSION", 1)
+    assert rtc01.run(lake, sha_of=lambda *_: sha, fetch=fake_fetch) == rtc01.EXIT_OK
+    assert rtc01.run(lake, sha_of=lambda *_: sha, fetch=fake_fetch) == rtc01.EXIT_SKIPPED
+    monkeypatch.setattr(fr, "CONTRACT_VERSION", 2)
+    assert rtc01.run(lake, sha_of=lambda *_: sha, fetch=fake_fetch) == rtc01.EXIT_OK
+    manifest = lake.get_json(rtc01.k_manifest())
+    assert manifest["current"]["contract_version"] == 2
+    assert manifest["previous"] is None                 # same sha rebuilt: not a new version of the source
+    assert len(manifest["versions"]) == 1
+    assert lake.get_json(rtc01.k_report(sha))["contract_version"] == 2
+
+
+def test_manifest_without_contract_version_is_v1_and_rebuilds(tmp_path, monkeypatch):
+    """Manifests written before contract versions existed are read as v1 (the lab's state after the first PR)."""
+    monkeypatch.setattr(fr, "CONTRACT_MIN_ROWS", {"CLASSIFICACAO_TRIBUTARIA": 1, "VERSAO_BASE_DADO": 1})
+    lake = LocalLake(str(tmp_path / "lake"))
+    sha = "f" * 40
+    lake.put_json(rtc01.k_manifest(), {"current": {"sha": sha, "db": rtc01.k_db(sha)}, "previous": None,
+                                       "versions": [{"sha": sha}]})
+    assert rtc01.run(lake, sha_of=lambda *_: sha, fetch=fake_fetch) == rtc01.EXIT_OK

@@ -1,6 +1,6 @@
 # ADR 0019 — Official CST / cClassTrib / NCM tables from the Receita Federal tax calculator, and NF-e adherence
 
-**Status:** accepted (`pipelines/rtc/`, `dag_rtc_ref`, schema `ref_rtc` + `ctrl.rtc_carga` in
+**Status:** accepted, amended 2026-11-18 (contract v2, below) (`pipelines/rtc/`, `dag_rtc_ref`, schema `ref_rtc` + `ctrl.rtc_carga` in
 `infra/postgres/init/sql/08_rtc.sql`, dbt tag `rtc`, checks `rtc_*`).
 
 **Context.** The NF-e domain classified items with a 3-row seed (`nfe_ref_classtrib.csv`, "simplified descriptions,
@@ -88,3 +88,44 @@ mirror's real cadence), `rtc_serving_parity`, `rtc_nfe_adherence_coverage`, `rtc
   adherence (`ag_nfe_aderencia_rtc_mensal`) is not built yet.
 - The same design is the proposal for a production DW (PoC outside this repository): official table as a governed,
   versioned dimension, point-in-time join with the items, a signal for the business rather than a verdict.
+
+## Amendment 1 (2026-11-18) — contract v2: official reductions, treatments, rule `reducao_divergente`
+
+**Context.** The adherence checked *which* classification an item used, not *how much* discount it took. The
+official percentage lives in `PERCENTUAL_REDUCAO`, outside the v1 contract.
+
+**Measured (release 1.6.1).** 492 rows = 164 cClassTrib x (CBS, IBSUF, IBSMun); values 0, 30, 40, 50, 60, 70, 80,
+100. CBS and IBS can differ for the same classification (200025: CBS 100%, IBS 60%). Reference rates 2026: CBS 0.9%,
+IBSUF 0.1%, IBSMun 0%. `TRATAMENTO_CLASSIFICACAO` (193) links each cClassTrib to one of 43 treatments
+(`TRATAMENTO_TRIBUTARIO`: "Alíquota reduzida em 60%" + the JEXL expressions of the calculation).
+
+**Decisions.**
+
+1. **Contract v2** adds `PERCENTUAL_REDUCAO`, `TRATAMENTO_CLASSIFICACAO`, `TRATAMENTO_TRIBUTARIO`.
+   `flyway_replay.CONTRACT_VERSION` enters the skip rule of both steps: rtc01 skips only when sha AND contract are
+   unchanged (event `contract_changed` otherwise), rtc02 only when `(sha, contract_version)` is in `ctrl.rtc_carga`
+   (unique index replaces the unique sha; `08_rtc.sql` migrates a v1 table in place). Without it, a new contract
+   would wait for the Receita's next release. Manifests without the field read as v1.
+2. **Long format** `silver.rtc_percentual_reducao` (cClassTrib x tributo x validity), not one column: the taxes
+   differ and each has its own validity.
+3. **Declared reduction without touching `silver.nfe_item`.** The item carries `pRedAliq` only for IBSUF; the CBS
+   reduction is derived from the effective rate, `100 x (1 - pAliqEfet / pCBS)`. Parsing the other `gRed` groups
+   would add columns to an incremental model with `on_schema_change='fail'` (full refresh of every lab).
+   Tolerances: IBSUF 0.01 p.p.; CBS 1 p.p. (pAliqEfet rounded to 2 decimals: 0.005 / 0.9 = 0.56 p.p. worst case).
+   IBSMun is not evaluated: a 0% reference rate has no reduction to measure.
+4. **Rule 6 `reducao_divergente`**, after `ncm_inelegivel` (classification and NCM right, discount wrong). Generator
+   defect `reducao_divergente`: eligible agro input, CST 200 / 200038, `pRedAliq` 30 instead of 60, values
+   recalculated with 30% so the totals still reconcile.
+
+**Result (7,000 notes in two batches, 22,038 items).**
+
+| Injected | Notes | Detected as | Notes |
+|---|---|---|---|
+| `beneficio_ncm_inelegivel` | 64 | `ncm_inelegivel` | 64 |
+| `cclasstrib_incoerente` | 63 | `cst_incompativel` | 63 |
+| `reducao_divergente` | 27 | `reducao_divergente` | 27 |
+| totals (`tot_cbs_*`, `vbc_ibscbs_*`) | 154 | — (other tests) | 0 |
+| none | — | — | 0 false positives |
+
+Max |declared − official| CBS among adherent items: 0.00 p.p. Upgrade v1 → v2 on a loaded lab: rtc01
+`contract_changed` → landed, rtc02 17 tables / 4,266 rows, second run exit 99.

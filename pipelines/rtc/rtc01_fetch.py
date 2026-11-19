@@ -146,17 +146,22 @@ def run(lake: Lake, *, force: bool = False, sha_of=upstream_sha, fetch=fetch_tre
     step = current_step()
     sha = sha_of(repo, ref)
     manifest = lake.get_json(k_manifest(), empty_manifest())
-    current = (manifest.get("current") or {}).get("sha")
-    step.label(source_sha=sha[:12])
-    if sha == current and not force:
-        log_event(logger, "source_unchanged", f"{ref} still at {sha[:12]}: nothing to rebuild", sha=sha)
+    current = manifest.get("current") or {}
+    step.label(source_sha=sha[:12], contract_version=str(fr.CONTRACT_VERSION))
+    if sha == current.get("sha") and current.get("contract_version") == fr.CONTRACT_VERSION and not force:
+        log_event(logger, "source_unchanged", f"{ref} still at {sha[:12]} (contract v{fr.CONTRACT_VERSION}): "
+                  "nothing to rebuild", sha=sha)
         return EXIT_SKIPPED
+    if sha == current.get("sha"):
+        log_event(logger, "contract_changed", f"same source {sha[:12]}, contract v{current.get('contract_version')}"
+                  f" -> v{fr.CONTRACT_VERSION}: rebuilding", sha=sha)
 
     with tempfile.TemporaryDirectory(prefix="rtc01_") as tmp:
         checkout = fetch(sha, os.path.join(tmp, "src"), repo)
         db_path = Path(tmp) / DB_NAME
         report = build(checkout, db_path)
-        report.update(sha=sha, ref=ref, repo=repo, built_at=datetime.now(timezone.utc).isoformat())
+        report.update(sha=sha, ref=ref, repo=repo, built_at=datetime.now(timezone.utc).isoformat(),
+                      contract_version=fr.CONTRACT_VERSION)
         if report["overlapping_vigencias"]:
             log_event(logger, "source_vigencia_overlap",
                       f"{len(report['overlapping_vigencias'])} cClassTrib with overlapping validity in the same "
@@ -166,9 +171,10 @@ def run(lake: Lake, *, force: bool = False, sha_of=upstream_sha, fetch=fetch_tre
         lake.put_json(k_report(sha), report)
 
     entry = {"sha": sha, "release": report["release"], "database_version": report["database_version"],
-             "built_at": report["built_at"], "db": k_db(sha)}
+             "built_at": report["built_at"], "db": k_db(sha), "contract_version": fr.CONTRACT_VERSION}
     versions = [v for v in manifest.get("versions", []) if v.get("sha") != sha] + [entry]
-    lake.put_json(k_manifest(), {"current": entry, "previous": manifest.get("current"), "versions": versions})
+    previous = manifest.get("current") if (manifest.get("current") or {}).get("sha") != sha else manifest.get("previous")
+    lake.put_json(k_manifest(), {"current": entry, "previous": previous, "versions": versions})
 
     rows = sum(v or 0 for v in report["row_counts"].values())
     step.add(files_total=1, rows_out=rows)

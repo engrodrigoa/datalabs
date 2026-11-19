@@ -24,6 +24,12 @@ sources:
         description: "NCM elegíveis por cClassTrib. O NCM da regra é PREFIXO (capítulo, posição ou código completo)."
       - name: excecao_ncm_aplicavel
         description: "NCM excluídos de uma regra de ncm_aplicavel (prefixo), com vigência própria."
+      - name: percentual_reducao
+        description: "% de redução da alíquota por cClassTrib e POR TRIBUTO (CBS, IBSUF, IBSMun), com vigência."
+      - name: tratamento_classificacao
+        description: "Qual tratamento tributário (fórmulas de cálculo) cada cClassTrib usa, com vigência."
+      - name: tratamento_tributario
+        description: "Tratamentos: descrição ('Alíquota reduzida em 60%') e as expressões JEXL do cálculo."
       - name: tipo_dfe
       - name: tipo_dfe_classificacao
         description: "Em quais documentos fiscais (NF-e, NFC-e, NFS-e...) cada cClassTrib pode ser usada."
