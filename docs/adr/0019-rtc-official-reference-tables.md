@@ -1,6 +1,6 @@
 # ADR 0019 — Official CST / cClassTrib / NCM tables from the Receita Federal tax calculator, and NF-e adherence
 
-**Status:** accepted, amended 2026-11-18 (contract v2, below) (`pipelines/rtc/`, `dag_rtc_ref`, schema `ref_rtc` + `ctrl.rtc_carga` in
+**Status:** accepted, amended 2026-11-18 (contract v2; star dimension, below) (`pipelines/rtc/`, `dag_rtc_ref`, schema `ref_rtc` + `ctrl.rtc_carga` in
 `infra/postgres/init/sql/08_rtc.sql`, dbt tag `rtc`, checks `rtc_*`).
 
 **Context.** The NF-e domain classified items with a 3-row seed (`nfe_ref_classtrib.csv`, "simplified descriptions,
@@ -76,8 +76,8 @@ mirror's real cadence), `rtc_serving_parity`, `rtc_nfe_adherence_coverage`, `rtc
 
 **Consequences.**
 
-- The seed `nfe_ref_classtrib` and `dm_nfe_tributacao` stay as they are (the star schema's dimension); switching the
-  dimension to `silver.rtc_cclasstrib` is a separate change (it alters a published gold model).
+- The seed `nfe_ref_classtrib` and `dm_nfe_tributacao` stayed as they were in this first change; the dimension moved
+  to the official table in amendment 2.
 - `fundamentacao_legal` carries the short legal reference (`Art. 138, § 1º`): the same ids the LC 214 RAG uses
   (ADR 0010), so a cClassTrib can be explained by its provision. Not wired yet.
 - IS has its own cClassTrib list (29 classifications, 391 NCM rules, from 2027): the same model applies to
@@ -129,3 +129,29 @@ IBSUF 0.1%, IBSMun 0%. `TRATAMENTO_CLASSIFICACAO` (193) links each cClassTrib to
 
 Max |declared − official| CBS among adherent items: 0.00 p.p. Upgrade v1 → v2 on a loaded lab: rtc01
 `contract_changed` → landed, rtc02 17 tables / 4,266 rows, second run exit 99.
+
+## Amendment 2 (2026-11-18) — `gold.dm_nfe_tributacao` from the official table
+
+**Context.** The star's classification dimension still came from the 3-row seed (via a dbt snapshot): 3 of the
+164 IBS/CBS classifications, "simplified" descriptions, one reduction column.
+
+**Decisions.**
+
+1. **Type 1, same key.** One row per `cst || cclasstrib` (the key `ft_nfe_item` already stores), attributes of the
+   row valid today (else the most recent). Validity and history stay where they are answered: `silver.rtc_cclasstrib`
+   + `ctrl.rtc_carga` (versions) and `gold.ft_nfe_item_aderencia_rtc` (point in time per item). An SCD2 dimension
+   would change the key of the incremental fact (full refresh of `ft_nfe_item`) to answer a question the adherence
+   fact already answers.
+2. **Seed and snapshot removed** (`nfe_ref_classtrib`, `snap_nfe_ref_classtrib`): one source of truth. Their tables
+   remain in existing labs until dropped by hand (`silver.nfe_ref_classtrib`, `silver.snap_nfe_ref_classtrib`).
+3. **Columns kept for readers.** `tipo_tributacao` = the official treatment ("Alíquota reduzida em 60%", read by the
+   Grafana NF-e board); `p_reducao_aliquota` = IBSUF reduction (the field the item declares as `pRedAliq`), plus
+   `p_reducao_cbs` / `p_reducao_ibs_uf` / `p_reducao_ibs_mun`, `descricao_cst`, `tipo_aliquota`, `tem_lista_ncm`,
+   `fundamentacao_legal`, `rtc_release`.
+4. **Built by both DAGs** (tags `nfe` + `rtc`): `dag_rtc_ref` rebuilds it right after a new official version. A
+   fresh clone where `dag_rtc_ref` has not run yet gets an empty dimension with the right columns (guard on the two
+   silver relations), so `dag_nfe` does not fail; the fact's relationship test (warn) shows the gap.
+
+**Result.** 164 rows, `sk_tributacao` unique; fact items by treatment: integral 11,689, reduced 60% 6,439, deferral
+3,847, 63 without dimension (= the injected `cclasstrib_incoerente`, e.g. CST 000 with 200038). Empty-reference path:
+0 rows, build green.

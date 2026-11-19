@@ -69,11 +69,6 @@ seeds:
       +schema: silver
       +tags: ["nfe"]
 
-snapshots:
-  dbt_project:
-    nfe:
-      +tags: ["nfe", "gold"]
-
 data_tests:
   +store_failures: false
   # NF-e: falhas de qualidade viram tabelas consultáveis (quarentena) no schema dq_nfe

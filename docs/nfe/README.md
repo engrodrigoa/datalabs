@@ -20,7 +20,7 @@ stg_nfe__xml ─► int_nfe__xml_vigente (reenvio: vale o mais recente)
    └─► silver.nfe_participante_hist
             ▼
 gold.dm_nfe_participante (SCD2) · dm_nfe_tempo · dm_nfe_municipio · dm_nfe_cfop · dm_nfe_ncm
-gold.dm_nfe_tributacao (← snapshot) · dm_nfe_operacao (junk)                    (GOLD)
+gold.dm_nfe_tributacao (← tabela oficial RTC) · dm_nfe_operacao (junk)          (GOLD)
 gold.ft_nfe_item · ft_nfe_documento · ag_nfe_ibscbs_mensal
    │  testes → dq_nfe.* (quarentena) · Elementary
    ▼
@@ -123,7 +123,7 @@ Grão da fato principal: **item da NF-e**.
 | `dm_nfe_tempo` | `sk_data` (AAAAMMDD) | data de emissão |
 | `dm_nfe_participante` | `sk_participante` | emitente e destinatário (role-playing), **SCD2 por data de emissão** |
 | `dm_nfe_operacao` | `sk_operacao` | *junk dimension* (tpNF, finNFe, idDest, indFinal, indPres) + `sinal_arrecadacao` |
-| `dm_nfe_tributacao` | `sk_tributacao` (CST+cClassTrib) | vem do **snapshot** (histórico da tabela oficial) |
+| `dm_nfe_tributacao` | `sk_tributacao` (CST+cClassTrib) | **tabela oficial** da Receita (`silver.rtc_cclasstrib`, tipo 1); histórico em `ctrl.rtc_carga` ([ADR 0019](../adr/0019-rtc-official-reference-tables.md)) |
 | `dm_nfe_cfop`, `dm_nfe_ncm`, `dm_nfe_municipio` | código natural | seeds; código ausente → teste `warn` |
 
 `ag_nfe_ibscbs_mensal` responde às perguntas típicas de desempenho fiscal: arrecadação IBS/CBS, diferimento,

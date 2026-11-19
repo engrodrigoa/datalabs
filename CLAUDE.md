@@ -162,6 +162,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   Contract v2 (`CONTRACT_VERSION` in both steps' skip rule; version = sha + contract): official reductions per tax
   (`silver.rtc_percentual_reducao`, long format) + treatments; rule 6 `reducao_divergente` (IBSUF `pRedAliq`, CBS
   derived from `pAliqEfet`, tol. 0.01 / 1 p.p.), defect `reducao_divergente` (27/27, 0 FP).
+  `gold.dm_nfe_tributacao` comes from the official table (type 1, key `cst || cclasstrib`, tags nfe + rtc, empty
+  when the reference is not loaded yet); seed `nfe_ref_classtrib` and its snapshot were removed.
 
 ## Development rules
 

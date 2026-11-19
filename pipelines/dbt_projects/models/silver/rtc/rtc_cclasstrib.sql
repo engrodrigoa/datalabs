@@ -1,7 +1,7 @@
 {{ config(indexes=[{'columns': ['cclasstrib']}, {'columns': ['grupo_tributo', 'cclasstrib', 'dt_inicio_vigencia'], 'unique': true}]) }}
 
 -- cClassTrib oficial (Calculadora RTC da Receita), com vigência e linhagem da versão carregada.
--- Substitui, para quem precisar da tabela oficial, a seed nfe_ref_classtrib (3 linhas simplificadas).
+-- Alimenta gold.dm_nfe_tributacao (que antes vinha de uma seed de 3 linhas simplificadas).
 -- Junção ponto-no-tempo: dt_emissao between dt_inicio_vigencia and coalesce(dt_fim_vigencia, '9999-12-31').
 with versao as (
     select sha, release, database_version, loaded_at
