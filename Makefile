@@ -81,7 +81,6 @@ demo: ## run the ANP pipeline end to end (real data from gov.br/anp)
 	$(AF) airflow dags unpause dag_setup_infrastructure
 	$(AF) airflow dags unpause dag_dbt_anp
 	$(AF) airflow dags unpause dag_observability_health
-	$(AF) airflow dags unpause dag_rag_anp
 	@# unpausing already schedules the latest interval: trigger only if no run shows up (no duplicate run)
 	@for i in 1 2 3 4 5 6; do \
 	  $(AF) airflow dags list-runs dag_dbt_anp -o plain 2>/dev/null | grep -q dag_dbt_anp && break; sleep 5; done; \

@@ -33,7 +33,7 @@ def test_reported_tokens_win_over_the_estimate():
 
 
 def test_a_response_without_usage_falls_back_to_the_estimate():
-    c = lu.from_ollama({"response": "ok"}, app="anp_assistant", model="llama3.2:1b", prompt="a b c d")
+    c = lu.from_ollama({"response": "ok"}, app="lc214_generate", model="llama3.2:1b", prompt="a b c d")
     assert c.token_method == "estimated"
     assert c.prompt_tokens_reported is None and c.completion_tokens is None
     assert c.prompt_tokens == c.prompt_tokens_estimate == lu.estimate_tokens("a b c d") == 7   # 4 words x 1.7

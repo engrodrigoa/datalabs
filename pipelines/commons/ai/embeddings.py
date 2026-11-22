@@ -1,12 +1,12 @@
-"""Embedding model shared by every RAG step (build, retrieval, generation, evaluation).
+"""Embedding model shared by every RAG step (chunking, embedding, retrieval, evaluation).
 
-One place decides the model, so the vectors written by rag01 and the query vectors of
-rag02/03/04 can never come from different models.
+One place decides the model, so the token limit lc03 chunks for, the vectors lc04_embed writes and the
+query vectors of the retriever, lc05 and lc06 can never come from different models.
 
 Default: multilingual-e5-small (384 dims, ~470 MB). On the lab's CPU it embeds several
 times faster than e5-base (768 dims, ~1.1 GB) and downloads in a fraction of the time,
 which keeps the portfolio reproducible on a laptop. Switching models is a governed change:
-rag01 detects it and rebuilds the vector store, and the evaluation gate (rag04) decides if
+lc04_embed detects it and rebuilds the vector store, and the retrieval gate (lc05) decides if
 the new model is good enough.
 """
 from __future__ import annotations

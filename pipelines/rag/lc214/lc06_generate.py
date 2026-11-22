@@ -87,7 +87,7 @@ logger = get_logger("lc06_generate")
 
 GEN_VERSION = "5"                    # bump when the report's definitions change (5: verdicts, drift, gate)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-# The LC 214 model is its own setting: OLLAMA_MODEL stays the ANP assistant's (llama3.2:1b). qwen2.5:3b was chosen
+# The LC 214 model is its own setting (the lab's only LLM since ADR 0020). qwen2.5:3b was chosen over llama3.2:1b
 # on the dev subset (ADR 0015, H4): the 1B answered 0 of 9 correctly and invented content; the 3B 2 of 9, invented none.
 GEN_MODEL = os.getenv("LC214_GEN_MODEL", "qwen2.5:3b")
 SEED = int(os.getenv("LC214_GEN_SEED", "42"))

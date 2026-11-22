@@ -1,6 +1,7 @@
 # ADR 0005 — RAG over tabular data: route to SQL first, vectors second
 
-**Status:** accepted
+**Status:** superseded by [ADR 0020](0020-retire-anp-rag.md) (the ANP RAG was retired; the principle lives on in
+the LC 214 router, [ADR 0012](0012-lc214-question-router.md))
 
 Embeddings retrieve *similar text*, not exact identifiers or aggregates. Questions with a CNPJ or an
 aggregation (count, average, min/max, list) go to parameterised SQL on the gold layer; everything else goes

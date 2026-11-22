@@ -198,14 +198,16 @@ ZERO_GOOD_WARN = [{"color": GOOD, "value": None}, {"color": WARN, "value": 1}]
 # =====================================================================================================
 def pipeline_health() -> Board:
     b = Board("datalabs-pipeline-health", "DataLabs · Pipeline Health",
-              "Is the data platform healthy? Step runs, data health checks, dbt/Elementary tests, Airflow runs, RAG quality and error logs.",
+              "Is the data platform healthy? Step runs, data health checks, dbt/Elementary tests, Airflow runs and "
+              "error logs. The RAG has its own board (RAG LC 214).",
               ["datalabs", "observability", "data-quality"])
     b.links = [{"title": "Airflow platform", "type": "link", "url": "/d/datalabs-airflow-platform", "icon": "dashboard"},
+               {"title": "RAG LC 214", "type": "link", "url": "/d/datalabs-rag-lc214", "icon": "dashboard"},
                {"title": "Logs explorer", "type": "link", "url": "/d/datalabs-logs", "icon": "doc"},
                {"title": "Airflow UI", "type": "link", "url": "http://localhost:8080", "targetBlank": True, "icon": "external link"}]
     b.templating = [{
         "name": "pipeline", "label": "Pipeline", "type": "query", "datasource": DW,
-        "query": "SELECT unnest(ARRAY['anp','rfb','rag','obs']) AS p UNION SELECT DISTINCT pipeline FROM audit.pipeline_step_runs ORDER BY 1",
+        "query": "SELECT unnest(ARRAY['anp','rfb','lc214','obs']) AS p UNION SELECT DISTINCT pipeline FROM audit.pipeline_step_runs ORDER BY 1",
         "definition": "pipelines", "refresh": 1, "multi": True, "includeAll": True,
         "current": {"selected": True, "text": ["All"], "value": ["$__all"]}, "sort": 1, "hide": 0,
     }]
@@ -372,35 +374,6 @@ def pipeline_health() -> Board:
                                 "failed": {"text": "✖ failed", "color": CRITICAL},
                                 "up_for_retry": {"text": "↻ retry", "color": WARN}}}]}]}]), 24, 8)
 
-    # ------------------------------------------------------------- rag
-    b.row("RAG quality — ai.rag_eval_* (golden set)")
-    b.add(timeseries("Evaluation accuracy per run", [sql_target("""
-        SELECT executado_em AS time, acuracia_roteamento * 100 AS "routing accuracy",
-               acuracia_valor * 100 AS "value accuracy (vs SQL truth)"
-        FROM ai.rag_eval_summary WHERE $__timeFilter(executado_em) ORDER BY 1""", fmt="time_series")],
-        unit="percent", draw="line",
-        desc="the evaluation task fails below RAG_MIN_ROUTING_ACC / RAG_MIN_VALUE_ACC (quality gate)"), 12, 8)
-    b.add(stat("Avg retrieval latency (last eval)", """
-        SELECT latencia_media_ms FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1""",
-               unit="ms", decimals=0, color_mode="none"), 4, 4)
-    b.add(stat("Vector index used", """
-        SELECT CASE WHEN plano_execucao_usa_indice THEN 1 ELSE 0 END FROM ai.rag_eval_summary
-        ORDER BY executado_em DESC LIMIT 1""",
-               mappings=[{"type": "value", "options": {"1": {"text": "✔ HNSW", "color": GOOD},
-                                                         "0": {"text": "✖ seq scan", "color": WARN}}}]), 4, 4)
-    b.add(stat("Context ↔ gold parity", """
-        SELECT CASE WHEN paridade_contexto_gold THEN 1 ELSE 0 END FROM ai.rag_eval_summary
-        ORDER BY executado_em DESC LIMIT 1""",
-               mappings=[{"type": "value", "options": {"1": {"text": "✔ in sync", "color": GOOD},
-                                                         "0": {"text": "✖ diverged", "color": CRITICAL}}}]), 4, 4)
-    b.add(table("Last evaluation — per question", """
-        SELECT tipo_consulta AS type, pergunta AS question, metodo_esperado AS expected_route,
-               metodo_obtido AS route, acerto_roteamento AS route_ok, valor_obtido, valor_esperado,
-               acerto_valor AS value_ok, ROUND(latencia_retrieval_ms::numeric) AS latency_ms
-        FROM ai.rag_eval_metrics
-        WHERE run_id = (SELECT run_id FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1)
-        ORDER BY tipo_consulta""", status_cols=()), 12, 8)
-
     # ------------------------------------------------------------- logs
     b.row("Logs — Loki")
     b.add(timeseries("Error & warning lines per DAG", [
@@ -409,7 +382,7 @@ def pipeline_health() -> Board:
         loki_target('sum by (dag_id) (count_over_time({job="airflow", source="task", level="WARNING"} [$__auto]))',
                     ref="B", legend="{{dag_id}} warnings")], draw="bars", stack=True), 12, 8)
     b.add(logs("Alerts, failures and schema drift",
-               '{job="airflow", event=~"alert|task_failed|step_finished|file_failed|schema_drift_.*|rag_eval_gate|check_result", level=~"ERROR|WARNING"} '
+               '{job="airflow", event=~"alert|task_failed|step_finished|file_failed|schema_drift_.*|lc214_.*_gate_failed|golden_contract_failed|check_result", level=~"ERROR|WARNING"} '
                + LINE_PARSE + f' | line_format `[{{{{.event}}}}] {MSG}`'), 12, 8)
     return b
 
@@ -632,20 +605,19 @@ def nfe_fiscal() -> Board:
 
 
 # =====================================================================================================
-# 5) ANP — data product (operation · batch profile · quality · prices · RAG downstream)
+# 5) ANP — data product (operation · batch profile · quality · prices)
 # =====================================================================================================
 ANP_STEPS = "pipeline = 'anp'"
 ANP_LANDING = "pipeline = 'anp' AND step IN ('landing_semanal', 'landing_mensal')"
 ANP_TESTS = "(test_unique_id ILIKE '%anp%' OR table_name IN ('dm_postos', 'dm_produtos'))"
-RAG_BUILD = "pipeline = 'rag' AND step = 'build_context'"
 DAY_S = 86400
 
 
 def anp_produto() -> Board:
     b = Board("datalabs-anp", "DataLabs · ANP (combustíveis)",
               "Produto de dados da ANP: cada carga (audit.pipeline_step_runs), perfil do lote, qualidade "
-              "(health checks + dbt/Elementary), preços (gold.ag_anp_preco_semanal) e o RAG que consome a gold.",
-              ["datalabs", "anp", "dbt", "rag"], refresh="5m", time_from="now-90d")
+              "(health checks + dbt/Elementary) e preços (gold.ag_anp_preco_semanal).",
+              ["datalabs", "anp", "dbt"], refresh="5m", time_from="now-90d")
     b.links = [{"title": "Pipeline health", "type": "link", "url": "/d/datalabs-pipeline-health", "icon": "dashboard"},
                {"title": "Logs explorer", "type": "link", "url": "/d/datalabs-logs", "icon": "doc"},
                {"title": "Airflow · dag_dbt_anp", "type": "link", "url": "http://localhost:8080/dags/dag_dbt_anp",
@@ -838,35 +810,6 @@ def anp_produto() -> Board:
         WHERE uf IN ($uf) AND semana = (SELECT MAX(semana) FROM gold.ag_anp_preco_semanal)
         GROUP BY uf ORDER BY gasolina DESC NULLS LAST""", status_cols=()), 12, 9)
 
-    # ------------------------------------------------------------- RAG
-    b.row("Downstream — RAG sobre a gold (ai.rag_context_anp)")
-    b.add(stat("Último sync do vector store", f"""
-        SELECT COALESCE(metrics ->> 'sync_mode', 'full (legado)') FROM audit.pipeline_step_runs
-        WHERE {RAG_BUILD} AND status IN ('success', 'skipped') ORDER BY started_at DESC LIMIT 1""",
-               color_mode="none", desc="incremental = só o delta da gold; full = store vazio, troca de modelo ou pedido."), 6, 4)
-    b.add(stat("Vetores no store", "SELECT COUNT(*) FROM ai.rag_context_anp", unit="short", color_mode="none"), 6, 4)
-    b.add(stat("Paridade gold (GO) ↔ vetores", """
-        SELECT (SELECT COUNT(*) FROM ai.rag_context_anp)
-             - (SELECT COALESCE(SUM(qtd_coletas), 0) FROM gold.ag_anp_preco_semanal WHERE uf = 'GO')""",
-               thresholds=[{"color": WARN, "value": None}, {"color": GOOD, "value": 0}, {"color": WARN, "value": 1}],
-               desc="Vetores − coletas de GO na gold. 0 = o RAG enxerga exatamente a gold."), 6, 4)
-    b.add(stat("Acurácia do último gate", """
-        SELECT 100 * LEAST(acuracia_roteamento, acuracia_valor) FROM ai.rag_eval_summary
-        ORDER BY executado_em DESC LIMIT 1""", unit="percent", decimals=1, thresholds=GREEN_RED_RATE,
-               desc="Menor entre roteamento e valor no golden set (gate: 90%)."), 6, 4)
-    b.add(table("Execuções do build_context", f"""
-        SELECT started_at, status, ROUND(duration_s::numeric) AS duracao_s,
-               metrics ->> 'sync_mode' AS modo, (metrics ->> 'chunks_new')::int AS novos,
-               (metrics ->> 'chunks_stale')::int AS obsoletos, (metrics ->> 'embed_rows_per_s')::numeric AS linhas_por_s,
-               metrics ->> 'model' AS modelo, LEFT(error_message, 60) AS erro
-        FROM audit.pipeline_step_runs WHERE {RAG_BUILD} AND $__timeFilter(started_at)
-        ORDER BY started_at DESC LIMIT 20"""), 14, 8)
-    b.add(timeseries("Velocidade de embedding por modelo", [sql_target(f"""
-        SELECT started_at AS time, metrics ->> 'model' AS metric, (metrics ->> 'embed_rows_per_s')::numeric AS value
-        FROM audit.pipeline_step_runs
-        WHERE {RAG_BUILD} AND metrics ? 'embed_rows_per_s' AND $__timeFilter(started_at) ORDER BY 1""",
-        fmt="time_series")], draw="points",
-        desc="Linhas/s no cálculo dos embeddings (CPU). e5-base ≈ 6-7, e5-small ≈ 26 no lab."), 10, 8)
     return b
 
 

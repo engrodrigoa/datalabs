@@ -19,7 +19,7 @@ pytest.importorskip("airflow.sdk", reason="Airflow 3 not installed (runs in the 
 
 DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
 EXPECTED_DAGS = {
-    "dag_dbt_anp", "dag_nfe", "dag_observability_health", "dag_rag_anp", "dag_rag_lc214", "dag_rfb",
+    "dag_dbt_anp", "dag_nfe", "dag_observability_health", "dag_rag_lc214", "dag_rfb",
     "dag_rfb_dw_dbt", "dag_rtc_ref", "dag_setup_infrastructure",
 }
 

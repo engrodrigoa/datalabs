@@ -145,40 +145,6 @@ checks:
     tolerance_pct: 1
     
 
-  # ------------------------------------------------------------------ RAG (AI layer)
-  - name: rag_context_parity
-    pipeline: rag
-    requires: ai
-    dataset: ai.rag_context_anp
-    type: reconciliation
-    severity: warn
-    left_label: gold_rows_go
-    query: >
-      SELECT COUNT(*) FROM gold.ft_anp_combustiveis a
-      JOIN gold.dm_postos b ON b.id_posto_sk = a.id_posto_sk
-      WHERE b.estado_sigla = 'GO'
-    right_label: context_rows
-    compare_query: SELECT COUNT(*) FROM ai.rag_context_anp
-    tolerance_pct: 0
-
-  - name: rag_routing_accuracy_pct
-    pipeline: rag
-    requires: ai
-    dataset: ai.rag_eval_summary
-    type: threshold
-    severity: warn
-    query: SELECT acuracia_roteamento * 100 FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1
-    min: 90
-
-  - name: rag_value_accuracy_pct
-    pipeline: rag
-    requires: ai
-    dataset: ai.rag_eval_summary
-    type: threshold
-    severity: warn
-    query: SELECT acuracia_valor * 100 FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1
-    min: 90
-
   # ------------------------------------------------------------------ LC 214/2025 (legislation RAG, ADR 0010)
   # The law lives in Parquet until lc04 loads it: these checks read the step audit, which every run writes.
   - name: lc214_source_watch_freshness

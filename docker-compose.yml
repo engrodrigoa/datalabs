@@ -1,7 +1,7 @@
 # DataLabs — data engineering + observability lab
 #
 #   docker compose up -d                       core + observability (default)
-#   docker compose --profile ai up -d          + Ollama (CPU) for the RAG generator
+#   docker compose --profile ai up -d          + Ollama (CPU) for the LC 214 answer generation
 #   docker compose --profile tools up -d       + Adminer
 #   GPU: docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile ai up -d
 #
@@ -334,8 +334,8 @@ services:
     profiles: ["ai"]
     environment:
       OLLAMA_HOST: http://ollama:11434
-    # two models: the ANP assistant's (OLLAMA_MODEL) and the LC 214 generator's (LC214_GEN_MODEL, ADR 0015)
-    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${OLLAMA_MODEL:-llama3.2:1b} && ollama pull ${LC214_GEN_MODEL:-qwen2.5:3b}"]
+    # the LC 214 generator's model (LC214_GEN_MODEL, ADR 0015); the only LLM the lab calls since ADR 0020
+    entrypoint: ["/bin/sh", "-c", "sleep 5 && ollama pull ${LC214_GEN_MODEL:-qwen2.5:3b}"]
     depends_on:
       - ollama
     restart: "no"
