@@ -7,10 +7,9 @@
 ![Postgres](https://img.shields.io/badge/Postgres-15%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)
 ![Grafana](https://img.shields.io/badge/Grafana-Loki%20·%20Prometheus-F46800?logo=grafana&logoColor=white)
 
-A production-style data platform that runs on a laptop with one command. It ingests Brazilian public
-data (**ANP** fuel prices and **Receita Federal** CNPJ registry) and synthetic **NF-e** with the tax reform
-groups, models it with **dbt**, runs a **RAG** over the LC 214/2025 on **pgvector**, and makes every step **observable**: structured logs, platform
-metrics, per-step volumes, and data health checks, all in Grafana.
+A production-style data platform that runs on one machine with Docker Compose. Four data products share one
+platform (Airflow 3, dbt, Postgres + pgvector, S3) and one observability layer (Loki, Prometheus, an audit trail
+and data health checks, all in Grafana).
 
 > **The question this project answers:** *is the data right, complete and on time, and how would I know if it wasn't?*
 
@@ -19,17 +18,172 @@ metrics, per-step volumes, and data health checks, all in Grafana.
 
 ---
 
-## What this project demonstrates
+## The four products
 
-| Area | Evidence in this repo |
+| Product | What it shows | DAG | Run it | Grafana |
+|---|---|---|---|---|
+| ⛽ **ANP fuel prices** | data engineering on a messy public source: late-arriving files, schema drift, incremental star schema, a serving layer for an app | `dag_dbt_anp` (weekly) | `make demo` | *ANP (combustíveis)* |
+| 🏢 **RFB CNPJ registry** | volume on a single node: tens of millions of rows streamed from ZIPs with Polars, a source that cannot be listed | `dag_rfb` → `dag_rfb_dw_dbt` | [trigger `dag_rfb`](#rfb) | *Pipeline Health* |
+| 🧾 **NF-e tax reform (IBS/CBS/IS)** | the 2026 tax reform as data: XML in SQL + dbt, batch control, SCD2, fiscal quality rules, quarantine, each item checked against the **official cClassTrib/NCM tables** of the Receita's tax calculator | `dag_nfe` (every 10 min) + `dag_rtc_ref` (daily) | `make nfe-quickstart` + `make rtc-ref` | *NF-e (IBS/CBS)* |
+| ⚖️ **RAG over the LC 214/2025** | AI data engineering: the tax reform law as a governed source, a deterministic citation router, retrieval and answer **gates**, token usage per call | `dag_rag_lc214` (weekly) | [AI profile](#lc214) | *RAG LC 214* |
+
+The NF-e and the LC 214 meet on the **cClassTrib** code (the tax classification every NF-e item carries). The
+official table already brings each code's legal reference (`Art. 412, I`), which the LC 214 router parses: the next
+study case links each item to the provisions that ground its taxation ([roadmap](#roadmap)).
+
+Every product is planned in the same three lanes, and this README describes each one that way:
+
+| Lane | Question |
 |---|---|
-| **Observability** | structured logs (readable line + JSON fields) → Loki, Airflow StatsD → Prometheus, per-step audit table, 6 dashboards as code, alerting to Telegram/Slack/Discord |
-| **Data quality** | dbt tests + **Elementary anomaly detection** (volume, freshness, column) + config-driven **freshness / volume / reconciliation** checks across layers |
-| **Reliability** | idempotent and resumable loads (a re-run skips what already landed), late-arriving data handled, schema-drift detection, honest exit codes (no "green with no data") |
-| **AI data engineering** | legislation RAG: versioned source, structural parser, **incremental embeddings** (set-difference sync) → pgvector, deterministic citation router, **retrieval and answer gates** in the DAG, LLM tokens per call |
-| **Performance engineering** | bottlenecks measured, fixed and recorded in ADRs: stateful services on Docker volumes (health checks 7 min → 2 s), Cosmos from a pre-built dbt manifest, RFB read as a stream from the ZIP (~35 s per file instead of extracting multi-GB CSVs at ~3 MB/s) |
-| **DataOps** | CI runs lint, unit tests, a real Postgres + dbt build + checks, executes every Grafana query, and parses every DAG on the real Airflow 3 runtime; pinned images checked weekly; one-command setup; a major upgrade (Airflow 2.9 → 3.3) done in place, with its breaking changes turned into CI guardrails ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
-| **Data modeling** | medallion layers (landing → staging → silver → gold), star schemas for ANP and RFB, incremental models |
+| **Data** | where does the data come from, and what does each layer add? |
+| **Observability** | did the load run, how much moved, and is that normal? |
+| **Quality** | is the data right: complete, consistent between layers, inside the business rules? |
+
+---
+
+## How to run
+
+### 1. Requirements
+
+* Docker with Compose v2 · 6 GB of RAM for Docker (**8 GB** with the AI profile) · ~15 GB of disk · internet
+  (gov.br, PyPI, Docker Hub; Hugging Face and Ollama for the AI profile).
+* GNU make (optional: every target has its raw command, see [without make](#without-make)).
+* **Windows:** clone inside WSL (`~/datalabs`), not under `/mnt/c`, and size the WSL VM with
+  [docs/wslconfig.example](docs/wslconfig.example) (`scripts/dev-setup-wsl.sh` sets up the WSL Ubuntu side).
+
+### 2. Start the platform
+
+```bash
+git clone https://github.com/engrodrigoa/datalabs.git && cd datalabs
+make preflight   # creates .env (random passwords) and checks Docker, memory, DNS/TLS and the pinned images
+make up          # builds and starts Postgres, S3 (Silo), Airflow 3, Grafana, Loki, Prometheus
+make creds       # the logins for THIS machine (passwords are random per machine)
+make doctor      # checks the running stack for silent failures (empty bind mounts, missing models)
+```
+
+| Service | URL | |
+|---|---|---|
+| Grafana | http://localhost:3000 | home = *DataLabs · Pipeline Health*; one board per product |
+| Airflow | http://localhost:8080 | **DAGs start paused**: the targets below unpause what they need |
+| S3 console (Silo) | http://localhost:9091 | buckets `landing` · `bronze` · `silver` · `gold` · `audit` (the LC 214 lake lives under `*/lc214/`) |
+| Prometheus | http://localhost:9090 | |
+
+The first `make up` takes a while (image build, `airflow-init` migrates the metadata DB, installs the dbt packages
+and generates the dbt manifest). Wait until `docker compose ps` shows `airflow-init` as *Exited (0)*.
+
+### 3. Run a product
+
+Each product runs on its own; pick any of them, in any order.
+
+**⛽ ANP** (real data from gov.br/anp):
+```bash
+make demo             # unpauses the ANP, setup and health DAGs and runs dag_dbt_anp once
+make demo-offline     # no internet: synthetic ANP files (real layout) -> landing -> dbt -> checks
+make dashboard-anp    # Streamlit app on http://localhost:8501 (own venv, reads the gold as anp_app_ro)
+```
+
+<a id="rfb"></a>**🏢 RFB** (`dev_mode` on by default: 500k rows per big entity; download ~21 min):
+```bash
+docker compose exec -T airflow-scheduler airflow dags unpause dag_setup_infrastructure
+docker compose exec -T airflow-scheduler airflow dags unpause dag_rfb_dw_dbt    # runs on the landing asset
+docker compose exec -T airflow-scheduler airflow dags unpause dag_rfb
+docker compose exec -T airflow-scheduler airflow dags trigger dag_rfb --conf '{"ref_month": "2026-08"}'
+```
+
+**🧾 NF-e** (synthetic notes; nothing real ever enters the repo):
+```bash
+make nfe-quickstart   # Elementary tables, 2,000 notes Jan–Sep/2026 with anomalies, unpauses + triggers dag_nfe
+make nfe-stream       # then: continuous arrival, 12 batches of 200 notes, one every 5 min
+make rtc-ref          # official cClassTrib/NCM tables (Receita calculator) -> adherence of every item
+```
+
+<a id="lc214"></a>**⚖️ RAG LC 214** (needs the AI profile: sentence-transformers on CPU + Ollama with `qwen2.5:3b`):
+```bash
+./scripts/preflight.sh --ai   # also checks the AI downloads (PyTorch wheels, Hugging Face, Ollama registry)
+make up-ai                    # rebuilds the image with the AI layer, starts Ollama and pulls qwen2.5:3b
+make models                   # downloads the embedding model now, not inside the first DAG run
+docker compose exec -T airflow-scheduler airflow dags unpause dag_rag_lc214
+docker compose exec -T airflow-scheduler airflow dags trigger dag_rag_lc214
+```
+The run downloads the law from the Câmara, parses it, embeds 867 chunks and runs both gates. The answer step is
+CPU-bound (~40 min for the 11-phrasing dev subset); on WSL give it every core (`processors` in
+`%USERPROFILE%\.wslconfig`). `make up-ai` builds with `INSTALL_AI=true` for that call only: a later `make up` rebuilds
+**without** the AI layer. To keep it, set `INSTALL_AI=true` and `COMPOSE_PROFILES=ai` in `.env`.
+
+Without the AI image the LC 214 DAG stops at its AI gate and its checks are recorded as *skipped*
+(`requires: ai`), not as warnings: the AI layer is opt-in by design.
+
+### 4. Check the result
+
+```bash
+make health   # runs every data health check now (results in Grafana and obs.v_check_last_result)
+make urls     # the addresses again
+```
+
+| Board (Grafana) | Look for |
+|---|---|
+| *Pipeline Health* | every step green, rows loaded vs. baseline, failing checks = 0, data age |
+| *ANP (combustíveis)* | the last load (files, rows, duration), batch profile, prices by UF |
+| *NF-e (IBS/CBS)* | batches `PROCESSADO`, quarantine counts, tax totals of the gold layer |
+| *RAG LC 214* | both gates standing (metric above its floor), false answers = 0, tokens per call |
+
+### 5. Stop, rebuild
+
+```bash
+make down     # stops everything, keeps the data
+make clean    # DELETES every volume (Postgres, S3, models, Grafana...): then make up and docs/runbook-rebuild.md
+```
+Changed a dbt model? `make dbt-parse`: the DAGs render from the dbt manifest, so a new or renamed model only shows
+up in Airflow after the manifest is regenerated. `make help` lists every target.
+
+<details id="without-make">
+<summary>Without make (PowerShell or any shell)</summary>
+
+```bash
+cp .env.example .env            # then replace every change-me value (passwords and the Airflow keys)
+./scripts/preflight.sh          # bash: WSL, Linux, macOS or Git Bash
+docker compose up -d --build                                       # make up
+$env:INSTALL_AI = "true"; docker compose --profile ai up -d --build  # make up-ai (PowerShell)
+docker compose exec -T airflow-scheduler airflow dags unpause dag_dbt_anp
+docker compose exec -T airflow-scheduler airflow dags trigger dag_dbt_anp
+```
+The [runbook](docs/runbook-rebuild.md) has every step in this form. `make env` is the safe way to create `.env`:
+it generates the three Airflow keys, which compose refuses to start without.
+</details>
+
+<details>
+<summary>GPU (optional)</summary>
+
+```bash
+make up-gpu    # the AI profile with Ollama on an NVIDIA GPU (needs nvidia-container-toolkit)
+```
+The default stack needs no GPU.
+</details>
+
+<details>
+<summary>Fresh machine / troubleshooting (every case below happened on a clean clone)</summary>
+
+`make preflight` detects most of these before `make up`; `make doctor` detects the silent ones afterwards.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `pull access denied for minio/minio, repository does not exist` | the image was deleted from Docker Hub (2026-09-11) | already fixed: the stack uses Silo pinned by digest ([ADR 0004](docs/adr/0004-object-storage.md)); a weekly CI job checks every pinned image |
+| pip fails with `SSLEOFError` / `UNEXPECTED_EOF` on `files.pythonhosted.org` during the build | the ISP/router DNS resolves it to a `100.64.0.0/10` address | Docker Desktop → Settings → Docker Engine: add `"dns": ["1.1.1.1", "8.8.8.8"]` at the **top level** of the JSON, *Apply & restart* (no Windows admin needed) |
+| `x509: certificate signed by unknown authority` / `self-signed certificate in certificate chain` (Hugging Face, Ollama) | TLS inspection by a corporate proxy/antivirus | use another network, or `make models-export` on a machine with access + `make models-import` here + `HF_HUB_OFFLINE=1`. Do **not** disable TLS verification |
+| Docker/host memory at ~97% | the WSL2 VM has no limit and keeps its page cache | [docs/wslconfig.example](docs/wslconfig.example), then `wsl --shutdown` |
+| Grafana shows an empty *DataLabs* folder / no logs in Loki after `wsl --shutdown` | containers restarted by their restart policy mounted the bind mounts **empty** | `docker compose up -d --force-recreate grafana promtail prometheus` (`make doctor` detects it); cloning under `~/` avoids it |
+| Elementary anomaly tests fail with `relation "none" does not exist` | Elementary tables missing on an empty database | fixed: `airflow-init` creates them; manual refresh: `make elementary` |
+| Edited `.env` but nothing changed | `.env` is read when a container is **created** | `docker compose up -d` (recreates the containers whose configuration changed) |
+| `dag_rag_lc214` tasks skipped | the image was built without the AI layer (or a later `make up` rebuilt it without) | `make up-ai`, and `INSTALL_AI=true` + `COMPOSE_PROFILES=ai` in `.env` to keep it |
+| `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
+| Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | the Airflow containers had no shared `AIRFLOW__API__SECRET_KEY`, so each made its own | `make env` adds it to an existing `.env`, then `docker compose up -d` |
+| Every task fails at start with `403` / `Invalid auth token` from the Execution API | no shared `AIRFLOW__API_AUTH__JWT_SECRET` (an Airflow 2 `.env`): compose stops with `missing in .env, run make env` | `make env` generates the Airflow 3 keys into the existing `.env`, then `docker compose up -d` ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
+| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9; the old `airflow_webserver` container still holds port 8080 | `make down` first (removes the orphaned webserver), then `sudo rm -rf airflow/logs/dag_id=* airflow/logs/scheduler` (Airflow 2 logs, written by the container user), then `make env && make up`. Nothing to drop: `airflow-init` migrates the DB in place, run history included. A run left *running* by the old stack blocks DAGs with `max_active_runs=1` (e.g. `dag_nfe`): mark it failed in the UI |
+| AI build fails: `ResolutionImpossible`, `sentence-transformers ... depends on numpy<2.0.0` | pip blames numpy while backtracking; the real conflict is `tokenizers` pinned by the Airflow image vs. transformers 4.x | already fixed: `sentence-transformers>=5` (ADR 0017, decision 9); the CI dry-runs the AI layer against the Airflow constraints |
+| `make up`: `Bind for 0.0.0.0:8080 failed: port is already allocated` | the Airflow 2 `airflow_webserver` container is still running (no longer in the compose file, so `up` does not touch it) | `make down` (it runs `down --remove-orphans`), then `make up` |
+| `dag_rag_anp` still listed in Airflow after updating | the ANP RAG was retired ([ADR 0020](docs/adr/0020-retire-anp-rag.md)); its file is gone but its run history is not | `docker compose exec -T airflow-scheduler airflow dags delete dag_rag_anp -y` (once); its tables and audit rows are cleaned by `dag_setup_infrastructure` / `make db-bootstrap` |
+
+</details>
 
 ---
 
@@ -42,6 +196,7 @@ flowchart LR
     RFB[Receita Federal<br/>WebDAV ZIPs]
     NFE[NF-e XML<br/>simulated issuer → inbox]
     LAW[LC 214/2025<br/>PDF, versioned by sha256]
+    RTC[Receita tax calculator<br/>Flyway scripts, by sha]
   end
 
   subgraph Orchestration[Airflow 3.3 + Cosmos]
@@ -61,13 +216,16 @@ flowchart LR
   ANP --> RUN --> PG
   RFB --> RUN --> MINIO --> PG
   NFE -- FileSensor · batch · pg_read_file --> PG
+  RTC -- SQLite replay · contract --> RUN
   PG --> DBT --> PG
-  LAW --> RUN --> MINIO -- provisions · chunks --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[citation router<br/>+ Ollama LLM]
+  PG -- serving marts --> APP[Streamlit<br/>ANP app]
+  LAW --> RUN --> MINIO -- provisions · chunks --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[citation router<br/>+ gates + Ollama]
+  PG -.->|"cClassTrib legal reference (next)"| RAG
 
   subgraph Observability
     LOKI[Loki] --- GRAF[Grafana]
     PROM[Prometheus] --- GRAF
-    AUD[(audit.* · elementary.*)] --- GRAF
+    AUD[(audit.* · elementary.* · ai.llm_call)] --- GRAF
     ALERT[alerts<br/>Telegram/Slack/Discord]
   end
 
@@ -77,6 +235,115 @@ flowchart LR
   DBT -. test results .-> AUD
   RUN -. failures, drift, stale data .-> ALERT
 ```
+
+---
+
+## Data products
+
+### ⛽ ANP — fuel prices (`dag_dbt_anp`, Mondays 06:00)
+
+| Lane | |
+|---|---|
+| **Data** | scrape (weekly + monthly files) → landing (Postgres) → dbt: stg → silver → gold star schema (`ft_anp_combustiveis`, `dm_postos`, `dm_produtos`) → two serving marts → Streamlit app |
+| **Observability** | every load in `audit.pipeline_step_runs` (files, rows, duration), Loki events (`file_loaded`, `schema_drift_*`), a 3 h run deadline, board *ANP (combustíveis)* with the batch profile of each load |
+| **Quality** | dbt tests + Elementary (volume, freshness, column anomalies); 8 health checks: freshness of source and gold, load volume, UF coverage, invalid prices, stg → silver → gold reconciliation, orphan facts; the marts are reconciled with the fact by tests |
+
+* **Late-arriving data:** the monthly closed file arrives weeks later with old survey dates. The incremental fact
+  uses the *ingestion* watermark, not the business date, so those rows are not silently dropped.
+* **Schema drift:** files are validated against the expected contract. A file with missing columns is rejected (and
+  alerted), and extra columns are dropped with a warning.
+* **History preserved:** the weekly file keeps the same name every week, so each load is keyed by survey reference
+  instead of being overwritten.
+* **Serving layer** ([ADR 0016](docs/adr/0016-anp-streamlit-analytics-layer.md)): `ag_anp_preco_posto_atual` (latest
+  price per station × product) and `ag_anp_preco_municipio_diario` (day × city × product, exact roll-ups). The
+  Streamlit app (UF → city → bairro → station, product cards, price line) reads only those two marts, as the
+  read-only role `anp_app_ro`.
+
+### 🏢 RFB — CNPJ open data (`dag_rfb` → `dag_rfb_dw_dbt`, manual)
+
+| Lane | |
+|---|---|
+| **Data** | WebDAV ZIPs (a fixed contract of 37 files per month) → bronze parquet (S3) → silver parquet (typed, audited) → DW landing (`COPY`) → dbt gold (`ft_receita_federal` + dimensions) |
+| **Observability** | one step per entity and file with bytes, rows and the failure cause by name (link rotated, month not published, file missing); landing emits the asset `datalabs://landing/rfb`, which triggers the dbt DAG |
+| **Quality** | 4 health checks (reference freshness, shifted-column rows %, duplicated keys, landing → gold reconciliation), the heavy ones run after the load, not every 6 h; dbt tests on the gold |
+
+* Tens of millions of rows on a single node with Polars + PyArrow batches ([ADR 0002](docs/adr/0002-polars-single-node.md)).
+* **CSV read as a stream straight from the ZIP:** nothing is extracted to disk. With `dev_mode` (500k rows per big
+  entity), the reader stops at the limit without decompressing the rest. Each Estabelecimentos file loads in ~35 s
+  (extracting a 2.2 GB ZIP to the bind mount ran at ~3 MB/s before reading a single row).
+* **Resumable bronze:** a file counts as done only when its parquet exists in S3, uploaded after the whole file was
+  read. A re-run continues from the first missing file.
+* **Download driven by a file contract** ([ADR 0009](docs/adr/0009-rfb-source-contract.md)): the source stopped
+  listing its folders and answers intermittently under bursts, so the step fetches the files every month must have,
+  with retries and backoff, and accepts a local file only if it is a readable ZIP of the announced size.
+
+### 🧾 NF-e — tax reform DW, IBS/CBS/IS (`dag_nfe`, FileSensor every 10 min)
+
+| Lane | |
+|---|---|
+| **Data** | simulated issuer (`gen_nfe.py`) → inbox → batch (`ctrl.nfe_lote`) → bronze via SQL (`pg_read_file`, insert-only) → dbt: `XMLTABLE` silver → participant SCD2 → gold star schema (`ft_nfe_item`, `ft_nfe_documento`, `ag_nfe_ibscbs_mensal`). Reference: the Receita's Flyway scripts (`ReceitaFederal/calculadora-rtc-regime-regular`) replayed in SQLite → `ref_rtc` → `silver.rtc_*` → `dm_nfe_tributacao` + `ft_nfe_item_aderencia_rtc` (`dag_rtc_ref`) |
+| **Observability** | each batch moves `CARREGADO → PROCESSADO`, rejected files are rows in `ctrl.nfe_arquivo_rejeitado`; each official table version is a row in `ctrl.rtc_carga` (sha, release, contract), a run with the same sha exits *skipped*; board *NF-e (IBS/CBS)* |
+| **Quality** | contracts on silver; custom tests (access-key and CNPJ check digits, cClassTrib × CST, header × item reconciliation of IBS/CBS bases and totals, the 2026 IBS/CBS base rule: vProd − ICMS − PIS − COFINS); business anomalies as `warn` + `store_failures` quarantine in `dq_nfe`; Elementary volume monitor; all scoped to the batch in flight. **Adherence to the official table**, one status per item: cClassTrib inexistent, out of validity, CST incompatible, NCM ineligible for the benefit, reduction % different from the official one; 5 `rtc_*` checks |
+
+* **SQL + dbt only:** ingestion is a PL/pgSQL function and parsing is `XMLTABLE` in dbt. Python only orchestrates and
+  simulates the source system. The XML is validated against the official XSDs (IBS/CBS/IS groups, alphanumeric CNPJ).
+* **Batch-level control instead of a per-row flag:** corrected batches are re-queued and merged idempotently
+  ([ADR 0006](docs/adr/0006-nfe-incremental-lotes.md)).
+* **SCD2 that survives late-arriving notes:** the participant version key comes from the note's own attributes, with
+  no date-range join.
+* **Official reference, versioned** ([ADR 0019](docs/adr/0019-rtc-official-reference-tables.md)): the Receita
+  publishes the tables as Flyway scripts; `rtc01` replays them in SQLite (no Java) and checks a structural contract,
+  `rtc02` loads them in one transaction. The adherence join is point in time (validity on the issue date). Measured on
+  7,000 synthetic notes: 64/64 ineligible NCM, 63/63 incoherent cClassTrib, 27/27 divergent reductions, 0 false
+  positives (the generator's injected defects are the answer key).
+* **Where the data comes from:** there is no public NF-e dataset, so
+  [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: XSD-valid notes with a stable register
+  of fictitious companies, dated register changes for the SCD2 and plausible anomalies on demand. Only public codes
+  (IBGE, NCM, CFOP, CST) are real. Details: [docs/nfe/README.md](docs/nfe/README.md) (pt-BR).
+
+| Make target | Simulates |
+|---|---|
+| `make nfe-quickstart` | from zero: 2,000 notes Jan–Sep/2026 with anomalies, then triggers the DAG |
+| `make nfe-demo` | one arrival of 500 notes |
+| `make nfe-stream` | continuous arrival: 12 batches of 200, one every 5 min |
+| `make nfe-backfill` | history: 5,000 notes Jan–Sep/2026 |
+
+The generator needs only the Python standard library, so it also runs on the host:
+`python scripts/nfe/gen_nfe.py 100 --sujo --agora` (100 notes with anomalies, triggers `dag_nfe`; `--help` for the rest).
+
+### ⚖️ RAG — LC 214/2025, the tax reform law (`dag_rag_lc214`, Mondays 06:40)
+
+An auditor's question is answered from the law or refused, and every refusal names the barrier that decided it. The
+design starts from *when not to answer*: **false answers have a ceiling of 0**, refusals of answerable questions are
+measured as the cost.
+
+| Lane | |
+|---|---|
+| **Data** | PDF from the Câmara, versioned by sha256 (lc01) → one row per provision, ids from the printed labels (lc02) → small-to-big chunks under the 512-token limit (lc03) → `ai.lc214_dispositivo` / `ai.lc214_artigo` by upsert (lc04a) and `ai.lc214_chunk` by set difference (lc04c) → router → retriever → `qwen2.5:3b` → cited JSON (lc06) |
+| **Observability** | each step exits *skipped* when its input and code version are unchanged; the gates record the floor they judged against; every LLM call is a row in `ai.llm_call` (tokens reported by the model, the estimate next to it, prompt as a hash); board *RAG LC 214* |
+| **Quality** | source contract (pages, sha256); parser invariants with known source defects listed in code; golden contract (routing 82/82 phrasings, the law's self-citations ≥ 99% resolved); 10 health checks (serving and vector parity, single law version, LLM usage); **retrieval gate** (lc05) and **answer gate** (lc06) against committed baselines |
+
+| | measured (2026-10) |
+|---|---|
+| corpus | 4,223 provisions, 867 chunks (0 over the 512-token limit), golden contract 82/82 |
+| retrieval gate (lc05) | fiscal / formal success@k 0.39 / 0.48, context recall 0.65 / 0.77; fiscal × formal gap 0.16 |
+| answers (lc06, dev subset of 11 phrasings) | llama3.2:1b 0/9 (invented a calculation), **qwen2.5:3b 2/9, 0 invented**; acceptance bar was 3/9 and is **not met** |
+| reproducibility | last DAG run: 0 verdict flips, 0/11 texts reworded against the baseline |
+
+* **Router before retrieval** ([ADR 0012](docs/adr/0012-lc214-question-router.md)): a citation goes to SQL (exact
+  text, status), a citation + question is *combined* (the cited provision anchors the context), a question goes to
+  vectors, and an ambiguous citation is asked back, never guessed.
+* **Two gates, one rule** ([ADR 0014](docs/adr/0014-lc214-retrieval-evaluation-gate.md),
+  [ADR 0015](docs/adr/0015-lc214-answer-generation.md)): thresholds are a committed baseline minus a tolerance **in
+  cases**; improvements never fail, raising the baseline is a deliberate commit, a missing baseline fails the run.
+* **Three barriers to "não consta":** nothing to ground on (no LLM call), the model's own `answerable`, and a citation
+  check against the provisions the context actually showed (valid | outside_context | not_found | foreign).
+* **What failed, in the open:** the small model refuses fiscal phrasings with "o contexto não trata
+  especificamente": the auditor's vocabulary against the law's (ADR 0015, "Where it stands").
+* **Tokens per prompt** ([ADR 0018](docs/adr/0018-llm-usage-per-call.md)): four checks watch them: lost writes, calls
+  without the model's count, prompts truncated at `num_ctx`, and the drift of the estimate the retriever budgets with.
+* Study guide, step by step with the metric and the failure mode of each step:
+  [case study (pt-BR)](docs/case-study/lc214-rag.md).
 
 ---
 
@@ -122,14 +389,10 @@ Exit codes keep their Airflow meaning: `0` success, `99` skipped (*no new data*)
   error_after_hours: 408
 ```
 
-The checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source
-that silently stops publishing is detected even when no DAG runs. Coverage includes freshness, volume, UF
-coverage, invalid prices, orphan facts, stg→silver→gold reconciliation, suspicious RFB rows, duplicate keys,
-LC 214 serving and vector parity, LLM token usage, and stale "running" steps (killed by OOM).
-
-Each check also carries guardrails: `timeout_s` (a slow query ends as `error`, never hangs the DAG),
-`cost: heavy` (full scans run after their own pipeline, not in the 6-hourly sweep) and
-`suspended: "<reason>"` (temporarily recorded as `skipped` with the reason, visible in Grafana).
+28 checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source that
+silently stops publishing is detected even when no DAG runs. Each check carries guardrails: `timeout_s` (a slow query
+ends as `error`, never hangs the DAG), `cost: heavy` (full scans run after their own pipeline, not in the 6-hourly
+sweep) and `suspended: "<reason>"` (recorded as `skipped` with the reason, visible in Grafana).
 
 ### Dashboards (versioned as code: `grafana/dashboards-src/build.py`)
 
@@ -138,98 +401,24 @@ Each check also carries guardrails: `timeout_s` (a slow query ends as `error`, n
 | **Pipeline Health** (home) | success rate, failed steps, rows loaded, failing checks, data age · last run of every step · volume vs. baseline · check status · dbt/Elementary test results · slowest models · Airflow DAG runs and task failures · error logs |
 | **Airflow Platform** | scheduler heartbeat, import errors, executor slots, task outcomes, p95 duration per DAG, schedule delay, DAG parse time |
 | **Logs Explorer** | filter by DAG / level / event / free text, parsed JSON events and raw logs |
-| **ANP (combustíveis)** | data product view: every load (files, rows, duration, slowest tasks) · batch profile per load (rows/price by product, coverage, volume vs. median) · health checks incl. suspended ones · dbt tests · weekly prices by UF (`gold.ag_anp_preco_semanal`) |
-| **RAG LC 214** | is the gate standing? lc05 retrieval and lc06 answer gates (metric × floor, minimum margin), false answers (ceiling 0), data contract per step, health checks, verdict/text drift, latency and token calibration |
+| **ANP (combustíveis)** | every load (files, rows, duration, slowest tasks) · batch profile per load · health checks incl. suspended ones · dbt tests · weekly prices by UF |
 | **NF-e (IBS/CBS)** | batches (`ctrl.nfe_lote`), quarantine, dbt/Elementary tests, tax performance of the gold layer |
+| **RAG LC 214** | is the gate standing? lc05 retrieval and lc06 answer gates (metric × floor, minimum margin), false answers (ceiling 0), data contract per step, health checks, verdict/text drift, latency, tokens per call |
 
 Grafana reads Postgres through a **read-only role** (`grafana_ro`), and Airflow metadata lives in its own database.
 
 ### Alerting
 
-Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALERT_WEBHOOK_URL`). Alerts are designed to fire **once, on the root cause**:
+Configure one channel in `.env` (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` or `ALERT_WEBHOOK_URL`). Alerts are designed
+to fire **once, on the root cause**:
 
 * task failure → Airflow callback **after the last retry**
 * partial load (some files failed) → runner
 * failing / warning data checks → checks
-* missed run deadline on the ANP DAG (3 h from queue; Airflow 3 `DeadlineAlert`, which replaced SLAs, [ADR 0017](docs/adr/0017-airflow-3-migration.md))
-* the final audit task **fails the DAG run** when any task failed (an `ALL_DONE` leaf would otherwise mark the run green), and it does not send an alert of its own
-
----
-
-## Data products
-
-### ⛽ ANP — fuel prices (`dag_dbt_anp`, weekly)
-
-`scrape (weekly + monthly) → landing (Postgres) → dbt: stg → silver → gold star schema → Elementary → health checks`
-
-* **Late-arriving data:** the monthly closed file arrives weeks later with old survey dates. The incremental fact
-  uses the *ingestion* watermark, not the business date, so those rows are not silently dropped.
-* **Schema drift:** files are validated against the expected contract. A file with missing columns is rejected (and alerted), and extra columns are dropped with a warning.
-* **History preserved:** the weekly file keeps the same name every week, so each load is keyed by survey reference instead of being overwritten.
-* Gold: `ft_anp_combustiveis`, `dm_postos`, `dm_produtos`, with tests and Elementary volume/freshness/column anomaly monitors.
-* Serving marts for the analytics app: `ag_anp_preco_posto_atual` (latest price per station × product) and
-  `ag_anp_preco_municipio_diario` (day × city × product, exact roll-ups), reconciled with the fact by tests.
-* **Analytics app** (`make dashboard-anp`, http://localhost:8501): Streamlit matrix UF → city → bairro → station
-  with the latest price per station inside a recency window, product cards, and the price line by collection
-  day down to the city. Reads only the two marts, as the read-only role `anp_app_ro`
-  ([ADR 0016](docs/adr/0016-anp-streamlit-analytics-layer.md)).
-
-### 🏢 RFB — CNPJ open data (`dag_rfb` → `dag_rfb_dw_dbt`)
-
-`WebDAV ZIPs → bronze parquet (MinIO) → silver parquet (typed, audited) → DW landing (COPY) → dbt gold`
-
-* Tens of millions of rows on a single node with Polars + PyArrow batches ([ADR 0002](docs/adr/0002-polars-single-node.md)).
-* **CSV read as a stream straight from the ZIP:** nothing is extracted to disk. With `dev_mode` (500k rows per big entity), the reader stops at the limit without decompressing the rest. Extracting a 2.2 GB ZIP to the bind mount ran at ~3 MB/s before reading a single row. Each Estabelecimentos file now loads in about 35 s.
-* **Resumable bronze:** a file counts as done only when its parquet exists in MinIO, and the upload happens only after the whole file was read. A re-run continues from the first missing file.
-* Shifted-column detection (`_suspeita_deslocamento`) is tracked as a % metric with a threshold.
-* **Download driven by a file contract** ([ADR 0009](docs/adr/0009-rfb-source-contract.md)): the source stopped listing its folders and answers intermittently under bursts, so the step fetches the 37 files every month must have, with retries and backoff, accepts a local file only if it is a readable ZIP of the announced size, and names the cause when it fails (link rotated, month not published yet, files that never came). The share link is public configuration (`RFB_SHARE_URL`), so a fresh clone needs no manual step.
-* Download → bronze → silver → landing with parallel entities (bounded by `max_active_tasks`), with the `ref_month` parameter set from the UI.
-* Asset-driven scheduling: landing emits `datalabs://landing/rfb`, which triggers the dbt DAG.
-
-### 🧾 NF-e — tax reform DW (IBS/CBS/IS) (`dag_nfe`, sensor-driven)
-
-`simulated issuer → inbox → batch (ctrl) → bronze via SQL (pg_read_file) → dbt: XMLTABLE silver → gold star schema`
-
-* **SQL + dbt only:** ingestion is a PL/pgSQL function and parsing is `XMLTABLE` in dbt. Python only orchestrates and simulates the source system. The XML structure is validated against the official XSDs (IBS/CBS/IS groups, alphanumeric CNPJ).
-* **Batch-level control instead of a per-row flag:** the bronze table is insert-only, each batch moves `CARREGADO → PROCESSADO`, and corrected batches are re-queued and merged idempotently ([ADR 0006](docs/adr/0006-nfe-incremental-lotes.md)).
-* **SCD2 that survives late-arriving notes:** the participant version key is derived from the note's own attributes, with no date-range join. A `dbt snapshot` is used only where processing time is the right semantics (the cClassTrib reference table).
-* **Quality scoped to the batch in flight:** contracts on silver, custom generic tests (access-key and CNPJ check digits, cClassTrib × CST), header × item reconciliation, `store_failures` quarantine in `dq_nfe`, Elementary volume monitor.
-* Details: [docs/nfe/README.md](docs/nfe/README.md) · try it: `make nfe-quickstart` (from zero to the `DataLabs · NF-e` dashboard), then `make nfe-stream`.
-
-**Where the data comes from.** There is no public NF-e dataset, so [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: it writes NF-e XMLs (layout 4.00 + IBS/CBS/IS groups, XSD-valid, alphanumeric CNPJ for part of the issuers) into `./datasource/nfe/inbox`, the way documents would reach the tax authority, and `dag_nfe` (FileSensor, every 10 min) picks them up. Everything is synthetic: a stable register of fictitious companies (`--seed-cadastro`), dated register changes that feed the SCD2, and only public codes (IBGE, NCM, CFOP, CST) are real. It needs only the Python standard library, so it runs on the host:
-
-```bash
-python scripts/nfe/gen_nfe.py 100                  # 100 notes "from now"
-python scripts/nfe/gen_nfe.py 100 --sujo           # + plausible anomalies: business defects 2%, re-sends 1%, truncated files 0.5%
-python scripts/nfe/gen_nfe.py 100 --sujo --agora   # + triggers dag_nfe immediately
-python scripts/nfe/gen_nfe.py --help               # dates, batches, arrival interval, --manifesto (answer key of injected anomalies)
-```
-
-| Make target | Simulates |
-|---|---|
-| `make nfe-quickstart` | from zero: 2,000 notes Jan–Sep/2026 with anomalies, then triggers the DAG |
-| `make nfe-demo` | one arrival of 500 notes |
-| `make nfe-stream` | continuous arrival: 12 batches of 200, one every 5 min |
-| `make nfe-backfill` | history: 5,000 notes Jan–Sep/2026 |
-
-### ⚖️ RAG — LC 214/2025 legislation (`dag_rag_lc214`, weekly source watch)
-
-`PDF (versioned by sha256) → one row per provision → small-to-big chunks → Postgres + pgvector → router → retrieval gate → cited JSON answer → answer gate`
-
-An auditor's question is answered from the law or refused, and every refusal names the barrier that decided it. The design starts from *when not to answer*: **false answers have a ceiling of 0**, refusals of answerable questions are measured as the cost.
-
-| | measured (2026-10) |
-|---|---|
-| corpus | 4,223 provisions, 867 chunks (0 over the 512-token limit), 6/6 health checks, golden contract 82/82 |
-| retrieval gate (lc05) | fiscal / formal success@k 0.39 / 0.48, context recall 0.65 / 0.77; fiscal × formal gap 0.16 |
-| answers (lc06, dev subset of 11 phrasings) | llama3.2:1b 0/9 (invented a calculation), **qwen2.5:3b 2/9, 0 invented**; acceptance bar was 3/9 and is **not met** |
-| reproducibility | last DAG run: 0 verdict flips, 0/11 texts reworded against the baseline |
-
-* **Two gates, one rule:** thresholds are a committed baseline minus a tolerance **in cases** (1 case = 3-4 pp at lc05), improvements never fail and raising the baseline is a deliberate commit; a missing baseline fails the run.
-* **Three barriers to "não consta":** nothing to ground on (no LLM call), the model's own `answerable`, and a citation check against the provisions the context actually showed (valid | outside_context | not_found | foreign).
-* **What failed, in the open:** the small model refuses fiscal phrasings with "o contexto não trata especificamente": the auditor's vocabulary against the law's ([ADR 0015](docs/adr/0015-lc214-answer-generation.md), "Where it stands").
-* **Tokens per prompt:** every LLM call is one row in `ai.llm_call` with the tokens the model reported, the words × tokens-per-word estimate next to it, and the prompt kept only as a hash. Four checks watch it: lost writes, calls without the model's count, prompts truncated at `num_ctx`, and the drift of the estimate the retriever budgets with ([ADR 0018](docs/adr/0018-llm-usage-per-call.md)).
-* Study guide, step by step with the metric and the failure mode of each step: [case study (pt-BR)](docs/case-study/lc214-rag.md). Board: **DataLabs · RAG LC 214**.
+* missed run deadline on the ANP DAG (3 h from queue; Airflow 3 `DeadlineAlert`, which replaced SLAs,
+  [ADR 0017](docs/adr/0017-airflow-3-migration.md))
+* the final audit task **fails the DAG run** when any task failed (an `ALL_DONE` leaf would otherwise mark the run
+  green), and it does not send an alert of its own
 
 ---
 
@@ -242,107 +431,47 @@ An auditor's question is answered from the law or refused, and every refusal nam
 | DAG parsing with Cosmos | `dbt ls` at parse time, 120 s timeouts (DAGs disappearing) | manifest read, no `dbt` call | `dbt parse` once at init, `LoadMode.DBT_MANIFEST` |
 | `dbt deps` | every run, often timing out | once at init | packages on a Docker volume |
 | RFB ZIP → bronze, `dev_mode` (25 files, 10M rows) | first file still extracting at ~3 MB/s | 8 min | stream from the ZIP instead of extracting |
+| LC 214 answers on CPU (WSL) | 130 s per answer with 4 of 8 cores | 88 s with 8 | `processors` in `.wslconfig` ([ADR 0015](docs/adr/0015-lc214-answer-generation.md)) |
 
-After a wipe ([runbook](docs/runbook-rebuild.md)): `dag_rfb_dw_dbt` in 9 min (5M establishments, landing = gold reconciled), ANP 789,803 rows silver = gold.
+After a wipe ([runbook](docs/runbook-rebuild.md)): `dag_rfb_dw_dbt` in 9 min (5M establishments, landing = gold
+reconciled), ANP 789,803 rows silver = gold.
 
 ---
 
-## Quickstart
+## Testing & CI
 
-**Requirements:** Docker with Compose v2 · 6 GB of RAM for Docker (8 GB with the AI profile) · ~15 GB of disk · internet (gov.br, PyPI, Docker Hub). GNU make is optional (the raw commands are below). **Windows:** clone inside WSL (`~/datalabs`), not under `/mnt/c`, and size the WSL VM with [docs/wslconfig.example](docs/wslconfig.example).
+`.github/workflows/ci.yml` runs on every push to `master` and on every pull request:
 
-```bash
-git clone https://github.com/engrodrigoa/datalabs.git && cd datalabs
-make preflight # creates .env (random passwords, printed once) and checks Docker, memory, DNS/TLS and pinned images
-make up        # builds and starts the stack
-make demo      # unpauses the DAGs and runs the ANP pipeline with real data
-make doctor    # checks the running stack for silent failures (empty bind mounts, missing models)
-```
+1. **lint + unit tests**: ruff (incl. `AIR3`, the Airflow 3 migration rules); pytest: runner exit codes, checks
+   logic, schema-drift detection, log format parsed with the same regex as Promtail, the LC 214 parser, router,
+   retriever and gates on fixtures (no LLM in CI), and the Airflow 3 guardrails; dashboards regenerated from code with
+   no diff allowed.
+2. **compose**: `docker compose config` for the default, AI and GPU variants.
+3. **airflow-dags**: Airflow 3.3.2 with the official constraints parses `airflow/dags` with the dag-processor's
+   DagBag: no import errors or deprecated APIs, observability callbacks on every task, the ANP deadline, the asset
+   wiring, and the run timestamp rendered with and without a logical date. It also dry-runs the AI layer (CPU torch +
+   sentence-transformers) against the same constraints.
+4. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner,
+   `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed
+   as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
 
-| Service | URL | |
-|---|---|---|
-| Grafana | http://localhost:3000 | home = *DataLabs · Pipeline Health* |
-| Airflow | http://localhost:8080 | DAGs start paused · the UI follows the browser language (*User → Select Language* to change it) |
-| S3 console (Silo, MinIO-compatible) | http://localhost:9091 | |
-| Prometheus | http://localhost:9090 | |
-
-**Logins:** `make creds` (read from `.env`). Passwords are generated per machine: if your browser autofills a password saved for `localhost` on another machine, the login fails with the right user name.
-
-> **Changed a dbt model?** Run `make dbt-parse`. The DAGs render from the dbt manifest generated at startup, so a new or renamed model only shows up in Airflow after the manifest is regenerated.
->
-> **Rebuild from zero:** `make clean && make up` and follow [docs/runbook-rebuild.md](docs/runbook-rebuild.md). Every table is derived from public sources or generators.
-
-<details>
-<summary>Without make</summary>
-
-```bash
-cp .env.example .env            # then change the passwords
-./scripts/preflight.sh          # bash: WSL, Linux, macOS or Git Bash
-docker compose up -d --build
-docker compose exec airflow-scheduler airflow dags unpause dag_dbt_anp
-docker compose exec airflow-scheduler airflow dags trigger dag_dbt_anp
-```
-</details>
-
-<details>
-<summary>AI profile (RAG) and GPU</summary>
-
-```bash
-make up-ai     # image with sentence-transformers (CPU torch) + Ollama on CPU (qwen2.5:3b)
-make up-gpu    # same, Ollama on an NVIDIA GPU (needs nvidia-container-toolkit)
-```
-The default stack does **not** require a GPU. Without the AI image, `dag_rag_lc214` stops at its AI gate and the RAG health checks are recorded as *skipped* (`requires: ai`), not as permanent warnings.
-
-To keep the AI profile across restarts without make, put `INSTALL_AI=true` and `COMPOSE_PROFILES=ai` in `.env`.
-Download the embedding model at setup time, not inside the first DAG run: `make models`.
-The RAG DAG (embeddings → pgvector → retrieval gate) runs without Ollama; the LC 214 answer generation (`generate_answers` in `dag_rag_lc214`, ADR 0015) need it. Without Ollama, that task is *skipped*, not failed. Generation on CPU is bound by the prompt size and the cores: on WSL, check `processors` in `%USERPROFILE%\.wslconfig` (4 of 8 cores made the same answer take 130 s instead of 88 s).
-</details>
-
-<details>
-<summary>Offline demo (no internet)</summary>
-
-```bash
-make up && make demo-offline   # synthetic ANP files (real layout) -> landing -> dbt + Elementary -> health checks
-```
-</details>
-
-<details>
-<summary>Fresh machine / troubleshooting (every case below happened on a clean clone)</summary>
-
-`make preflight` detects most of these before `make up`; `make doctor` detects the silent ones afterwards.
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `pull access denied for minio/minio, repository does not exist` | the image was deleted from Docker Hub (2026-09-11) | already fixed: the stack uses Silo pinned by digest ([ADR 0004](docs/adr/0004-object-storage.md)); a weekly CI job checks every pinned image |
-| pip fails with `SSLEOFError` / `UNEXPECTED_EOF` on `files.pythonhosted.org` during the build | the ISP/router DNS resolves it to a `100.64.0.0/10` address | Docker Desktop → Settings → Docker Engine: add `"dns": ["1.1.1.1", "8.8.8.8"]` at the **top level** of the JSON, *Apply & restart* (no Windows admin needed) |
-| `x509: certificate signed by unknown authority` / `self-signed certificate in certificate chain` (Hugging Face, Ollama) | TLS inspection by a corporate proxy/antivirus | use another network, or `make models-export` on a machine with access + `make models-import` here + `HF_HUB_OFFLINE=1`. Do **not** disable TLS verification |
-| Docker/host memory at ~97% | the WSL2 VM has no limit and keeps its page cache | [docs/wslconfig.example](docs/wslconfig.example), then `wsl --shutdown` |
-| Grafana shows an empty *DataLabs* folder / no logs in Loki after `wsl --shutdown` | containers restarted by their restart policy mounted the bind mounts **empty** | `docker compose up -d --force-recreate grafana promtail prometheus` (`make doctor` detects it); cloning under `~/` avoids it |
-| Elementary anomaly tests fail with `relation "none" does not exist` | Elementary tables missing on an empty database | fixed: `airflow-init` creates them; manual refresh: `make elementary` |
-| Edited `.env` but nothing changed | `.env` is read when a container is **created** | `docker compose up -d` (recreates the containers whose configuration changed) |
-| `dag_rag_lc214` tasks skipped | the image was built without the AI layer | `make up-ai` (by design: the RAG layer is opt-in) |
-| `airflow-init` exits 1: `password authentication failed for user "datalab"` | the `pg_data` volume was created with another `.env` (new clone in another folder, deleted `.env`): Postgres applies the passwords only when it creates the volume | restore the old `.env`, or, with nothing to keep, `docker compose down -v` and `make up` (`make preflight` warns, `make doctor` confirms) |
-| Task log in the UI: `Could not read served logs: 403 FORBIDDEN` (+ a `secret_key` warning) | the Airflow containers had no shared `AIRFLOW__API__SECRET_KEY`, so each made its own | `make env` adds it to an existing `.env`, then `docker compose up -d` |
-| Every task fails at start with `403` / `Invalid auth token` from the Execution API | no shared `AIRFLOW__API_AUTH__JWT_SECRET` (an Airflow 2 `.env`): compose stops with `missing in .env, run make env` | `make env` generates the Airflow 3 keys into the existing `.env`, then `docker compose up -d` ([ADR 0017](docs/adr/0017-airflow-3-migration.md)) |
-| Upgrading an Airflow 2.9 install | the metadata DB in `pg_data` is from 2.9; the old `airflow_webserver` container still holds port 8080 | `make down` first (removes the orphaned webserver), then `sudo rm -rf airflow/logs/dag_id=* airflow/logs/scheduler` (Airflow 2 logs, written by the container user), then `make env && make up`. Nothing to drop: `airflow-init` migrates the DB in place, run history included. A run left *running* by the old stack blocks DAGs with `max_active_runs=1` (e.g. `dag_nfe`): mark it failed in the UI |
-| AI build fails: `ResolutionImpossible`, `sentence-transformers ... depends on numpy<2.0.0` | pip blames numpy while backtracking; the real conflict is `tokenizers` pinned by the Airflow image vs. transformers 4.x | already fixed: `sentence-transformers>=5` (ADR 0017, decision 9); the CI dry-runs the AI layer against the Airflow constraints |
-| `make up`: `Bind for 0.0.0.0:8080 failed: port is already allocated` | the Airflow 2 `airflow_webserver` container is still running (no longer in the compose file, so `up` does not touch it) | `make down` (it runs `down --remove-orphans`), then `make up` |
-
-</details>
+`.github/workflows/image-availability.yml` checks every Monday that each pinned image still exists in its registry
+(MinIO's disappearance is why, [ADR 0004](docs/adr/0004-object-storage.md)).
 
 ---
 
 ## Repository layout
 
 ```text
-airflow/dags/                 DAGs (ANP, RFB, RFB dbt, NF-e, RAG LC 214, setup, observability health)
-apps/anp_dashboard/           Streamlit analytics app over the ANP serving marts (own venv: make dashboard-anp)
+airflow/dags/                 DAGs: ANP, RFB, RFB dbt, NF-e, RTC reference, RAG LC 214, setup, observability health
+apps/anp_dashboard/           Streamlit app over the ANP serving marts (own venv: make dashboard-anp)
 pipelines/
   anp/  rfb/                  ingestion scripts
-  rag/lc214/                  legislation RAG: parser, chunks, embeddings, router, evaluation gates, answer generation
-  commons/                    logger, env, S3, Postgres COPY, embeddings, audit trail
+  rtc/                        official cClassTrib/NCM tables: Flyway replay in SQLite, load into ref_rtc
+  rag/lc214/                  legislation RAG: parser, chunks, embeddings, router, retriever, gates, generation
+  commons/                    logger, env, S3, Postgres COPY, audit trail; ai/: embeddings, sync plan, LLM usage
   observability/              runner, step tracker, checks (+ checks.yml), alerting, Airflow callbacks, DAG helpers
-  dbt_projects/               dbt project: staging · silver · gold, Elementary, profiles via env vars
+  dbt_projects/               dbt project: staging · silver · gold (tags anp, rfb, nfe, rtc), Elementary
 infra/
   postgres/init/              bootstrap (airflow DB, grafana_ro, anp_app_ro) + idempotent DDL (single source of truth)
   promtail/  prometheus/      log pipeline, StatsD mapping, scrape config
@@ -351,51 +480,38 @@ grafana/
   dashboards-src/build.py     dashboards as code  ->  grafana/dashboards/*.json
 tests/                        unit tests, Airflow 3 guardrails, DAG integrity, dashboard SQL validation
 docs/adr/                     architecture decision records
-docs/case-study/  docs/nfe/   LC 214 RAG study guide (pt-BR) · NF-e design notes
+docs/case-study/  docs/nfe/   LC 214 RAG study guide (pt-BR) · NF-e design notes (pt-BR)
 docs/runbook-rebuild.md       rebuild-from-zero runbook
 scripts/                      preflight, doctor, NF-e source simulator, ANP sample data, WSL setup
 ```
 
-## Testing & CI
-
-`.github/workflows/ci.yml` runs on every push to `master` and on every pull request:
-
-1. **lint + unit tests**: ruff (incl. `AIR3`, the Airflow 3 migration rules); pytest: runner exit codes, checks logic, schema-drift detection, log format parsed with the same regex as Promtail, and the Airflow 3 guardrails (no logical-date keys in templates, no metadata DB in task code); dashboards regenerated from code with no diff allowed.
-2. **compose**: `docker compose config` for the default, AI and GPU variants.
-3. **airflow-dags**: Airflow 3.3.2 with the official constraints parses `airflow/dags` with the dag-processor's DagBag: no import errors or deprecated APIs, observability callbacks on every task, the ANP deadline, the asset wiring, and the run timestamp rendered with and without a logical date. It also dry-runs the AI layer (CPU torch + sentence-transformers) against the same constraints.
-4. **data integration**: Postgres + pgvector service, bootstrap script, synthetic ANP files landed through the runner, `dbt build` with Elementary, data health checks, assertions on the audit trail, **every Grafana SQL query executed as `grafana_ro`**, and the ANP app's queries executed as `anp_app_ro` (which must be denied the fact).
-
-`.github/workflows/image-availability.yml` checks every Monday that each pinned image still exists in its registry (MinIO's disappearance is why, [ADR 0004](docs/adr/0004-object-storage.md)).
-
 ## Engineering decisions
 
-* [0001 — Observability: three signals + data health](docs/adr/0001-observability-architecture.md)
-* [0002 — Polars on a single node instead of Spark](docs/adr/0002-polars-single-node.md)
-* [0003 — Promtail now, Grafana Alloy next](docs/adr/0003-promtail-to-alloy.md)
-* [0004 — Object storage: from MinIO to Silo](docs/adr/0004-object-storage.md)
-* [0005 — RAG over tabular data: SQL first, vectors second](docs/adr/0005-rag-router.md) (superseded by 0020)
-* [0006 — NF-e: batch-level control, immutable bronze, SQL-only transformation](docs/adr/0006-nfe-incremental-lotes.md)
-* [0007 — RAG: incremental embeddings and a CPU-sized model](docs/adr/0007-rag-incremental-embeddings.md) (superseded by 0020)
-* [0008 — Stateful services in Docker volumes, not Windows bind mounts](docs/adr/0008-stateful-services-in-docker-volumes.md)
-* [0009 — RFB download driven by a file contract, not by the source's listing](docs/adr/0009-rfb-source-contract.md)
-* [0010 — Legislation RAG (LC 214/2025): source contract, structural parser, small-to-big chunks](docs/adr/0010-lc214-legislation-rag-ingestion.md)
-* [0011 — LC 214 serving tables: upsert by content hash, a projection of the lake](docs/adr/0011-lc214-serving-load.md)
-* [0012 — LC 214 question router: citations by SQL, questions by vectors, both when both](docs/adr/0012-lc214-question-router.md)
-* [0013 — LC 214 vector search: exact cosine over an incremental store, context under an LLM budget](docs/adr/0013-lc214-vector-search-and-context.md)
-* [0014 — LC 214 retrieval gate: golden set through the real retriever, thresholds from a committed baseline](docs/adr/0014-lc214-retrieval-evaluation-gate.md)
-* [0015 — LC 214 answer generation: cited JSON from a local LLM, three barriers to "não consta"](docs/adr/0015-lc214-answer-generation.md)
-* [0016 — ANP analytics layer: Streamlit over two gold serving marts, read-only role](docs/adr/0016-anp-streamlit-analytics-layer.md)
-* [0017 — Airflow 3: four components, Execution API, deadlines instead of SLAs](docs/adr/0017-airflow-3-migration.md)
-* [0018 — LLM usage per call: one row per prompt, tokens as the model reported them](docs/adr/0018-llm-usage-per-call.md)
-* [0020 — Retire the ANP RAG: one AI product, the LC 214](docs/adr/0020-retire-anp-rag.md)
+| | Platform | | Products |
+|---|---|---|---|
+| [0001](docs/adr/0001-observability-architecture.md) | Observability: three signals + data health | [0006](docs/adr/0006-nfe-incremental-lotes.md) | NF-e: batch-level control, immutable bronze, SQL-only transformation |
+| [0002](docs/adr/0002-polars-single-node.md) | Polars on a single node instead of Spark | [0009](docs/adr/0009-rfb-source-contract.md) | RFB download driven by a file contract, not by the source's listing |
+| [0003](docs/adr/0003-promtail-to-alloy.md) | Promtail now, Grafana Alloy next | [0010](docs/adr/0010-lc214-legislation-rag-ingestion.md) | LC 214: source contract, structural parser, small-to-big chunks |
+| [0004](docs/adr/0004-object-storage.md) | Object storage: from MinIO to Silo | [0011](docs/adr/0011-lc214-serving-load.md) | LC 214 serving tables: upsert by content hash |
+| [0008](docs/adr/0008-stateful-services-in-docker-volumes.md) | Stateful services in Docker volumes, not bind mounts | [0012](docs/adr/0012-lc214-question-router.md) | LC 214 router: citations by SQL, questions by vectors, both when both |
+| [0017](docs/adr/0017-airflow-3-migration.md) | Airflow 3: Execution API, deadlines instead of SLAs | [0013](docs/adr/0013-lc214-vector-search-and-context.md) | LC 214 vector search and context under an LLM budget |
+| [0018](docs/adr/0018-llm-usage-per-call.md) | LLM usage per call: tokens as the model reported them | [0014](docs/adr/0014-lc214-retrieval-evaluation-gate.md) | LC 214 retrieval gate: golden set, committed baseline |
+| [0020](docs/adr/0020-retire-anp-rag.md) | Retire the ANP RAG: one AI product, the LC 214 | [0015](docs/adr/0015-lc214-answer-generation.md) | LC 214 answers: cited JSON, three barriers to "não consta" |
+| | | [0016](docs/adr/0016-anp-streamlit-analytics-layer.md) | ANP analytics layer: two serving marts, read-only role |
+| | | [0019](docs/adr/0019-rtc-official-reference-tables.md) | Official cClassTrib/NCM tables (Receita calculator) and NF-e adherence |
+
+Superseded, kept as history: [0005](docs/adr/0005-rag-router.md) (RAG over tabular data: SQL first, vectors second)
+and [0007](docs/adr/0007-rag-incremental-embeddings.md) (incremental embeddings), both by 0020.
+
+<a id="roadmap"></a>
 
 ## Roadmap
 
-**RAG (next focus)**
-- [ ] LC 214 answer generation to its acceptance bar (2/9 → 3/9 measured, ADR 0015): fiscal → legal glossary, labelled context lines, full golden run on the lambda server
+**AI: the LC 214 RAG (focus)**
+- [ ] NF-e × LC 214 bridge (study case): the `fundamentacao_legal` of each official cClassTrib parsed by the router into provision ids, so each NF-e item points to the text that grounds its taxation. Probe (release 1.7.2): 187/187 codes parse, 5 of 202 references lose list items (`I, II e III`, `I a XVIII`)
+- [ ] Answer generation to its acceptance bar (2/9 → 3/9 measured, ADR 0015): fiscal → legal glossary, labelled context lines, full golden run on the lambda server
 - [ ] Retrieval quality: hybrid search (Postgres full-text + vectors with reciprocal rank fusion) against the fiscal vocabulary gap, a similarity threshold that answers "not in the law"
 - [ ] Answer-level evaluation (faithfulness) next to the citation check
-- [ ] NF-e × LC 214 bridge through the cClassTrib code (study case)
 
 **Platform**
 - [ ] Airflow logs on a Docker volume + Grafana Alloy + Loki 3 (Promtail is EOL and polls the bind mount)
@@ -410,7 +526,9 @@ scripts/                      preflight, doctor, NF-e source simulator, ANP samp
 
 ## Author
 
-**Rodrigo Arruda Carneiro**, Data Engineer: from traditional DW to vector databases, focused on observability and data quality through DataOps and CI/CD.
+**Rodrigo Arruda Carneiro**, Data Engineer: from traditional DW to vector databases, focused on observability and data
+quality through DataOps and CI/CD.
 [GitHub](https://github.com/engrodrigoa) · [LinkedIn](https://www.linkedin.com/in/rodrigoarruda89)
 
-<sub>Data sources: ANP — Série histórica de preços de combustíveis; Receita Federal — Dados Abertos do CNPJ. Public data, used for study purposes.</sub>
+<sub>Data sources: ANP — Série histórica de preços de combustíveis; Receita Federal — Dados Abertos do CNPJ; Câmara dos
+Deputados — LC 214/2025 (norma atualizada). Public data, used for study purposes. NF-e data is synthetic.</sub>
