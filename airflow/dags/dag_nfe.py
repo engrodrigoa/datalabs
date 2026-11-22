@@ -4,7 +4,7 @@ dag_nfe — NF-e (IBS/CBS/IS): chegada de XML -> lote -> bronze (SQL) -> silver/
     aguardar_xml        FileSensor na inbox (reschedule: não prende worker enquanto espera)
     reservar_lote       mv inbox/*.xml -> processando/<lote>  (o lote "congela" o que chegou)
     ingerir_bronze      ctrl.fn_nfe_ingerir_lote(): pg_read_file -> landing_nfe.nfe_xml (100% SQL)
-    dbt_nfe             seeds, silver (incremental por lote), snapshot, gold, testes (tag:nfe)
+    dbt_nfe             seeds, silver (incremental por lote), gold, testes (tag:nfe)
     finalizar_lote      CARREGADO -> PROCESSADO        (o "indi_processamento" 1 -> 2, por lote)
     marcar_erro         CARREGADO -> ERRO se o dbt falhar (reprocessar: ctrl.fn_nfe_reprocessar_lote)
     arquivar_lote       processando/<lote> -> processados/<lote>

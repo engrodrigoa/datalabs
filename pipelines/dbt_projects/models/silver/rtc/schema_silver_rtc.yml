@@ -1,0 +1,82 @@
+version: 2
+
+models:
+  - name: rtc_cclasstrib
+    description: >
+      cClassTrib oficial (Calculadora RTC da Receita Federal), uma linha por grupo de tributo x código x início de
+      vigência, com a versão carregada (release, versão da base, sha). Fonte: ref_rtc via ADR 0019.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [grupo_tributo, cclasstrib, dt_inicio_vigencia]
+    columns:
+      - name: cltr_id
+        data_tests: [unique, not_null]
+      - name: grupo_tributo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['IBSCBS', 'IS']
+      - name: cst
+        description: "CST oficial. Contrato: a cClassTrib começa com o CST (ex.: CST 200 -> 200038)."
+        data_tests: [not_null]
+      - name: cclasstrib
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "~ '^[0-9]{6}$'"
+      - name: dt_inicio_vigencia
+        data_tests: [not_null]
+      - name: rtc_sha
+        description: "Commit do espelho no GitHub que gerou esta versão (linhagem de cada linha)."
+        data_tests: [not_null]
+
+  - name: rtc_ncm_regra
+    description: "Regras NCM x cClassTrib (prefixo) e suas exceções, com vigência e item de anexo da LC 214."
+    columns:
+      - name: tipo_regra
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['elegivel', 'excecao']
+      - name: ncm_prefixo
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "~ '^[0-9]{2,8}$'"
+      - name: cltr_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('rtc_cclasstrib')
+                field: cltr_id
+
+  - name: rtc_percentual_reducao
+    description: >
+      % oficial de redução da alíquota por cClassTrib e tributo (CBS, IBSUF, IBSMun), com vigência. Formato longo:
+      CBS e IBS podem ter percentuais diferentes para a mesma classificação.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cltr_id, tributo, dt_inicio_vigencia]
+    columns:
+      - name: tributo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['CBS', 'IBSUF', 'IBSMun']
+      - name: p_reducao
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "between 0 and 100"
+      - name: cltr_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('rtc_cclasstrib')
+                field: cltr_id

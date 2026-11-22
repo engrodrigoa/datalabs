@@ -16,7 +16,10 @@ Realismo:
   * escrita atômica (.tmp -> .xml): sensor nunca vê arquivo pela metade
 
 Anomalias (somente as plausíveis em nota autorizada / no transporte):
-  --defect-rate   inconsistência de negócio: total CBS ≠ Σ itens, vBC total ≠ Σ itens, cClassTrib×CST
+  --defect-rate   inconsistência de negócio: total CBS ≠ Σ itens, vBC total ≠ Σ itens, cClassTrib×CST,
+                  benefício com NCM inelegível (eletrônico com a redução de 60% dos insumos agro do Anexo IX:
+                  CST, cClassTrib e valores coerentes, só o NCM fora da lista oficial — ADR 0019),
+                  redução divergente (insumo agro elegível, 200038, com pRedAliq 30 em vez dos 60% oficiais)
   --dup-rate      reenvio: o mesmo XML chega de novo com outro nome de arquivo
   --corrupt-rate  arquivo truncado no transporte (XML malformado -> rejeitado na ingestão)
 
@@ -361,6 +364,18 @@ def gerar_nota(rng: random.Random, cad: Cadastro, dt: datetime, args, defeito: s
     n_itens = rng.choices([1, 2, 3, 4, 5, 8, 15], weights=[35, 20, 15, 10, 10, 6, 4])[0]
     for n in range(1, n_itens + 1):
         xprod, ncm, ucom, (lo, hi), perfil = rng.choice(catalogo)
+        if defeito == "beneficio_ncm_inelegivel" and n == 1:
+            # indício de benefício indevido: produto fora do Anexo IX com o tratamento dos insumos agro
+            # (CST 200 / cClassTrib 200038, redução de 60%). Tudo coerente, menos o NCM: a autorizadora não barra,
+            # só a tabela oficial NCM x cClassTrib (ref_rtc) mostra (gold.ft_nfe_item_aderencia_rtc).
+            xprod, ncm, ucom, (lo, hi), _ = rng.choice(CATALOGO["varejo_eletro"])
+            perfil = "agro_red"
+        if defeito == "reducao_divergente" and n == 1:
+            # redução fora da tabela oficial: produto elegível (Anexo IX), CST 200 / 200038 coerentes, mas o desconto
+            # declarado é 30% e o oficial é 60% (ref_rtc.percentual_reducao). Valores recalculados com os 30%, então
+            # os totais batem: só a tabela oficial de percentuais mostra.
+            xprod, ncm, ucom, (lo, hi), _ = rng.choice([p for p in CATALOGO["agro_insumos"] if p[4] == "agro_red"])
+            perfil = "agro_red"
         qtd = q(D(rng.uniform(1, 40)), 4) if ucom == "TO" else D(rng.randint(1, 60))
         vun = q(D(rng.uniform(lo, hi)), 10)
         vprod = q(qtd * vun)
@@ -444,6 +459,8 @@ def gerar_nota(rng: random.Random, cad: Cadastro, dt: datetime, args, defeito: s
             cst, cclass, pred_aliq, pdif = "000", "000001", None, None
         if defeito == "cclasstrib_incoerente" and n == 1:
             cclass = {"000": "200038", "200": "000001", "515": "200038"}[cst]
+        if defeito == "reducao_divergente" and n == 1:
+            pred_aliq = D(30)
         devol = tipo == "devolucao"
 
         ibs = sub(imp, "IBSCBS")
@@ -670,7 +687,8 @@ def main():
         cont = {"ok": 0, "defeito": 0, "dup": 0, "corrompido": 0}
         for _ in range(a.n):
             dt = ini + timedelta(seconds=rng.randint(0, janela))
-            defeito = rng.choice(["tot_cbs_divergente", "vbc_ibscbs_divergente", "cclasstrib_incoerente"]) \
+            defeito = rng.choice(["tot_cbs_divergente", "vbc_ibscbs_divergente", "cclasstrib_incoerente",
+                                 "beneficio_ncm_inelegivel", "reducao_divergente"]) \
                 if rng.random() < a.defect_rate else ""
             chave, root, nfe, _ = gerar_nota(rng, cad, dt, a, defeito)
             if schema is not None and not defeito:

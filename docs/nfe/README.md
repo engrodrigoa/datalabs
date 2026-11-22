@@ -20,7 +20,7 @@ stg_nfe__xml ─► int_nfe__xml_vigente (reenvio: vale o mais recente)
    └─► silver.nfe_participante_hist
             ▼
 gold.dm_nfe_participante (SCD2) · dm_nfe_tempo · dm_nfe_municipio · dm_nfe_cfop · dm_nfe_ncm
-gold.dm_nfe_tributacao (← snapshot) · dm_nfe_operacao (junk)                    (GOLD)
+gold.dm_nfe_tributacao (← tabela oficial RTC) · dm_nfe_operacao (junk)          (GOLD)
 gold.ft_nfe_item · ft_nfe_documento · ag_nfe_ibscbs_mensal
    │  testes → dq_nfe.* (quarentena) · Elementary
    ▼
@@ -123,7 +123,7 @@ Grão da fato principal: **item da NF-e**.
 | `dm_nfe_tempo` | `sk_data` (AAAAMMDD) | data de emissão |
 | `dm_nfe_participante` | `sk_participante` | emitente e destinatário (role-playing), **SCD2 por data de emissão** |
 | `dm_nfe_operacao` | `sk_operacao` | *junk dimension* (tpNF, finNFe, idDest, indFinal, indPres) + `sinal_arrecadacao` |
-| `dm_nfe_tributacao` | `sk_tributacao` (CST+cClassTrib) | vem do **snapshot** (histórico da tabela oficial) |
+| `dm_nfe_tributacao` | `sk_tributacao` (CST+cClassTrib) | **tabela oficial** da Receita (`silver.rtc_cclasstrib`, tipo 1); histórico em `ctrl.rtc_carga` ([ADR 0019](../adr/0019-rtc-official-reference-tables.md)) |
 | `dm_nfe_cfop`, `dm_nfe_ncm`, `dm_nfe_municipio` | código natural | seeds; código ausente → teste `warn` |
 
 `ag_nfe_ibscbs_mensal` responde às perguntas típicas de desempenho fiscal: arrecadação IBS/CBS, diferimento,
@@ -157,10 +157,27 @@ devolução de tributo e carga efetiva por mês, UF/município, CST/cClassTrib e
 | Total CBS ≠ Σ itens | `assert_nfe_total_cbs_igual_soma_itens` (warn) |
 | vBC IBS/CBS total ≠ Σ itens | `assert_nfe_total_vbc_ibscbs_igual_soma_itens` (warn) |
 | cClassTrib incompatível com o CST | `nfe_cclasstrib_coerente` + relacionamento com `dm_nfe_tributacao` (warn) |
+| cClassTrib fora da tabela oficial (inexistente, fora de vigência, CST ≠ CST oficial) | `assert_nfe_item_cclasstrib_oficial` sobre `gold.ft_nfe_item_aderencia_rtc` (warn, [ADR 0019](../adr/0019-rtc-official-reference-tables.md)) |
+| Benefício com NCM inelegível (ex.: eletrônico com a redução de 60% dos insumos agro, Anexo IX) | `assert_nfe_item_ncm_elegivel_rtc` (warn) + check `rtc_nfe_ncm_ineligible_pct`: só a tabela oficial NCM x cClassTrib mostra |
+| % de redução diferente do oficial (ex.: 200038 com pRedAliq 30 em vez de 60) | `assert_nfe_item_reducao_oficial` (warn): `ref_rtc.percentual_reducao` por tributo, na data de emissão |
 | Nota com data antiga chegando hoje | agregado reabre o mês certo; SCD2 aponta a versão certa |
 | Alteração cadastral do contribuinte | nova versão em `dm_nfe_participante` |
 
 As decisões de arquitetura estão em [ADR 0006](../adr/0006-nfe-incremental-lotes.md).
+
+### Aderência à tabela oficial da Receita (cClassTrib x NCM)
+
+A tabela oficial de CST / cClassTrib / NCM vem da Calculadora de Tributos que a Receita publicou no GitHub (MIT):
+o `dag_rtc_ref` (diário, `make rtc-ref`) verifica o espelho com `git ls-remote`, reconstrói a base a partir dos
+scripts Flyway (sem Java), carrega em `ref_rtc` com a versão em `ctrl.rtc_carga` e recalcula
+`gold.ft_nfe_item_aderencia_rtc` (um status por item) e `gold.ag_nfe_aderencia_rtc_mensal` (mês x cClassTrib x
+status, sem CNPJ). No lab (7.000 notas, dois lotes): 64/64 benefícios com NCM inelegível, 63/63 cClassTrib
+incoerentes e 27/27 reduções divergentes detectados, 0 falso positivo. Detalhes e medições: [ADR 0019](../adr/0019-rtc-official-reference-tables.md).
+
+```sql
+SELECT mes_emissao, cclasstrib, status_aderencia, itens, valor_produtos, pct_itens_na_cclasstrib
+FROM gold.ag_nfe_aderencia_rtc_mensal WHERE status_aderencia <> 'aderente' ORDER BY 1, 2;
+```
 
 ## Plano / próximos passos
 

@@ -3,7 +3,7 @@ SHELL := /bin/bash
 COMPOSE := docker compose
 AF := $(COMPOSE) exec -T airflow-scheduler
 
-.PHONY: help preflight doctor creds models models-export models-import elementary env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill
+.PHONY: help preflight doctor creds models models-export models-import elementary env up up-ai up-gpu down clean ps logs demo demo-offline health dbt-deps dbt-parse db-bootstrap dashboards sample-data test lint urls nfe-quickstart nfe-demo nfe-stream nfe-backfill rtc-ref
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -153,6 +153,14 @@ nfe-stream: ## NF-e: chegada contínua (12 lotes de 200 notas, um a cada 5 min)
 nfe-backfill: ## NF-e: histórico jan-set/2026 (5000 notas) para popular o DW
 	$(AF) python /opt/airflow/scripts/nfe/gen_nfe.py --inbox /mnt/datasource/nfe/inbox --n 5000 \
 	  --data-ini 2026-01-01 --data-fim 2026-09-30 --defect-rate 0.02 --dup-rate 0.01 --corrupt-rate 0.005
+
+rtc-ref: ## RTC: busca a tabela oficial cClassTrib/NCM (Receita) e recalcula a aderência dos itens de NF-e
+	@echo "aguardando o Airflow registrar o dag_rtc_ref (DAG nova: até ~5 min, e nasce pausada)..."
+	@until $(AF) airflow dags unpause dag_rtc_ref >/dev/null 2>&1; do sleep 5; done
+	$(AF) airflow dags trigger dag_rtc_ref
+	@echo ""
+	@echo "  acompanhe:  http://localhost:8080/dags/dag_rtc_ref"
+	@echo "  resultado:  SELECT * FROM gold.ag_nfe_aderencia_rtc_mensal ORDER BY 1, 2, 4;"
 
 ANP_APP_VENV ?= .venv-anp
 dashboard-anp-install: ## create the ANP dashboard venv (Streamlit; separate from the Airflow image)

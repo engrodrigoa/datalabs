@@ -25,10 +25,15 @@ models:
         data_tests: [unique, not_null]
 
   - name: dm_nfe_tributacao
-    description: "CST x cClassTrib vigentes (histórico no snapshot snap_nfe_ref_classtrib)."
+    description: >
+      CST x cClassTrib do IBS/CBS da tabela oficial (Calculadora RTC, ADR 0019): uma linha por CST + cClassTrib com
+      os atributos vigentes hoje (tipo 1). Histórico e vigência por item: silver.rtc_cclasstrib e
+      gold.ft_nfe_item_aderencia_rtc.
     columns:
       - name: sk_tributacao
         data_tests: [unique, not_null]
+      - name: p_reducao_aliquota
+        description: "Compatibilidade: % de redução do IBSUF (o mesmo que o item declara em pRedAliq)."
 
   - name: dm_nfe_operacao
     description: "Dimensão junk dos indicadores do ide (tpNF, finNFe, idDest, indFinal, indPres)."

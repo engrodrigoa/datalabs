@@ -34,6 +34,8 @@ models:
         +tags: ["rfb"]
       nfe:
         +tags: ["nfe"]
+      rtc:
+        +tags: ["rtc"]
     silver:
       +materialized: table
       +schema: silver
@@ -41,6 +43,8 @@ models:
         +tags: ["anp"]
       nfe:
         +tags: ["nfe", "silver"]
+      rtc:
+        +tags: ["rtc", "silver"]
     gold:
       +materialized: table
       +schema: gold
@@ -50,6 +54,8 @@ models:
         +tags: ["rfb"]
       nfe:
         +tags: ["nfe", "gold"]
+      rtc:
+        +tags: ["rtc", "gold"]
 
   # Elementary writes run/test history here; Grafana reads it (schema elementary)
   elementary:
@@ -63,11 +69,6 @@ seeds:
       +schema: silver
       +tags: ["nfe"]
 
-snapshots:
-  dbt_project:
-    nfe:
-      +tags: ["nfe", "gold"]
-
 data_tests:
   +store_failures: false
   # NF-e: falhas de qualidade viram tabelas consultáveis (quarentena) no schema dq_nfe
@@ -76,6 +77,8 @@ data_tests:
       nfe: {+store_failures: true, +schema: dq_nfe}
     gold:
       nfe: {+store_failures: true, +schema: dq_nfe}
+      rtc: {+store_failures: true, +schema: dq_nfe}   # aderência à tabela oficial (ADR 0019)
     staging:
       nfe: {+store_failures: true, +schema: dq_nfe}
     nfe: {+store_failures: true, +schema: dq_nfe}     # tests/nfe (singulares)
+    rtc: {+store_failures: true, +schema: dq_nfe}     # tests/rtc (singulares)

@@ -28,11 +28,3 @@ seeds:
     columns:
       - name: ncm
         data_tests: [unique, not_null]
-  - name: nfe_ref_classtrib
-    description: "CST x cClassTrib do IBS/CBS (descrições simplificadas — conferir com a tabela oficial vigente)."
-    config:
-      column_types: {cst: text, cclasstrib: text, p_reducao_aliquota: numeric}
-    data_tests:
-      - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns: [cst, cclasstrib]

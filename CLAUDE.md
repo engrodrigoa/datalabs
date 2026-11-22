@@ -35,17 +35,19 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
   (asset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
   gate → lc06 generation; asset `datalabs://silver/lc214`),
+  `dag_rtc_ref` (daily 06:20, official cClassTrib/NCM tables -> `ref_rtc` -> NF-e adherence, ADR 0019),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
-- `pipelines/{anp,rfb,rag/anp,rag/lc214}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010)
+- `pipelines/{anp,rfb,rag/anp,rag/lc214,rtc}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010;
+  `rtc`: Receita calculator reference tables, `flyway_replay.py` rebuilds its SQLite from the Flyway scripts, ADR 0019)
 - `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync, `llm_usage`)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
-- `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`
+- `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`, `rtc`
 - `apps/anp_dashboard/` — Streamlit over `gold.ag_anp_preco_posto_atual` / `ag_anp_preco_municipio_diario` as `anp_app_ro`;
   `logic.py` pure Polars (tested), `data.py` the only SQL, `app.py` layout
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0018), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0019), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -147,6 +149,21 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board row 6. lc06 records after its decision with
   `tags.outcome` (answered | refusal | error) and `citations_from`: useful token share. No cost (local LLM, no price
   dimension yet).
+- **0019 RTC reference tables:** official CST / cClassTrib / NCM tables from the Receita Federal tax calculator
+  (`ReceitaFederal/calculadora-rtc-regime-regular`, MIT, a squashed mirror). rtc01: `git ls-remote` (same sha -> 99),
+  sparse `git fetch --depth 1 <sha>` of `flyway/sql`, replay in SQLite without Java (each `V<n>` in its own
+  transaction, a script with `PRAGMA foreign_keys` outside one, numeric order), structural contract
+  (`CONTRACT_MIN_ROWS`, 0 FK violations), lake `landing/rtc/<sha12>/` + manifest last. rtc02: raw copy into `ref_rtc`
+  in ONE transaction + `ctrl.rtc_carga` (release, `V00nn`, sha); changed columns -> DROP CASCADE + CREATE
+  (`schema_drift_table_recreated`). Key = (tax group IBSCBS|IS, cClassTrib, start of validity): the code alone repeats.
+  `gold.ft_nfe_item_aderencia_rtc`: one status per item, first failing rule (inexistente -> fora_vigencia ->
+  cst_incompativel -> ncm_inelegivel); NCM rule = prefix minus exceptions, point in time (calculator's own rule).
+  Signals are dbt `warn` in `dq_nfe`. Generator defect `beneficio_ncm_inelegivel` is the answer key (30/30, 0 FP).
+  Contract v2 (`CONTRACT_VERSION` in both steps' skip rule; version = sha + contract): official reductions per tax
+  (`silver.rtc_percentual_reducao`, long format) + treatments; rule 6 `reducao_divergente` (IBSUF `pRedAliq`, CBS
+  derived from `pAliqEfet`, tol. 0.01 / 1 p.p.), defect `reducao_divergente` (27/27, 0 FP).
+  `gold.dm_nfe_tributacao` comes from the official table (type 1, key `cst || cclasstrib`, tags nfe + rtc, empty
+  when the reference is not loaded yet); seed `nfe_ref_classtrib` and its snapshot were removed.
 
 ## Development rules
 
@@ -175,7 +192,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 26 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 31 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty
