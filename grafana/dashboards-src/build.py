@@ -631,6 +631,40 @@ def nfe_fiscal() -> Board:
         WHERE f.outcome IN ('ambiguous', 'resolved_by_text', 'not_found') OR f.status_lei <> 'vigente'
            OR f.texto_check = 'diverges'
         ORDER BY f.outcome, f.referencia LIMIT 50""", status_cols=()), 24, 8)
+
+    # ------------------------------------------------------------- explanation per cClassTrib (ADR 0022)
+    # ai.rtc_cclasstrib_explicacao: DDL table, empty until the AI profile runs dag_rtc_explain
+    b.row("Explicação por cClassTrib — LLM local sobre os dispositivos da ponte (ai.rtc_cclasstrib_explicacao)")
+    b.add(stat("Explicadas", """
+        SELECT 100.0 * COUNT(*) FILTER (WHERE outcome = 'explained')
+               / NULLIF(COUNT(*) FILTER (WHERE outcome <> 'no_anchor'), 0)
+        FROM ai.rtc_cclasstrib_explicacao WHERE NOT pendente""", unit="percent", decimals=1,
+               desc="cClassTribs com dispositivo ligado pela ponte cuja explicação passou pelas barreiras (cita um "
+                    "dispositivo que o contexto mostrou). O resto foi recusado e mostra o texto de recusa."), 6, 4)
+    b.add(stat("Citam a ponte", """
+        SELECT 100.0 * COUNT(*) FILTER (WHERE cita_ponte) / NULLIF(COUNT(*), 0)
+        FROM ai.rtc_cclasstrib_explicacao WHERE outcome = 'explained' AND NOT pendente""", unit="percent",
+               decimals=1, thresholds=GREEN_RED_RATE,
+               desc="Explicações que citam o dispositivo indicado pela Receita (ou uma parte dele), e não um vizinho "
+                    "do mesmo artigo."), 6, 4)
+    b.add(stat("Percentual sem fonte", """
+        SELECT COUNT(*) FROM ai.rtc_cclasstrib_explicacao
+        WHERE outcome = 'explained' AND cardinality(numeros_sem_fonte) > 0 AND NOT pendente""",
+               thresholds=[{"color": GOOD, "value": None}, {"color": WARN, "value": 1}],
+               desc="Explicações que afirmam um percentual que não está na tabela da Receita nem no trecho da lei."),
+          6, 4)
+    b.add(stat("Pendentes", """
+        SELECT COUNT(*) FROM ai.rtc_cclasstrib_explicacao WHERE pendente""",
+               thresholds=[{"color": GOOD, "value": None}, {"color": WARN, "value": 1}],
+               desc="Planejadas e ainda não alcançadas: nunca geradas (sem texto) ou à espera de regeneração (o texto "
+                    "anterior segue visível). Cada execução gasta no máximo RTC_EXPLAIN_MAX_MINUTES."), 6, 4)
+    b.add(table("Explicações (fonte: LC 214/2025)", """
+        SELECT e.cclasstrib, e.grupo_tributo AS grupo, e.outcome, e.cita_ponte,
+               array_to_string(e.fontes, '; ') AS fontes, array_to_string(e.numeros_sem_fonte, ', ') AS sem_fonte,
+               e.explicacao, e.model, e.generated_at
+        FROM ai.rtc_cclasstrib_explicacao e
+        ORDER BY (e.outcome = 'explained' AND e.cita_ponte AND cardinality(e.numeros_sem_fonte) = 0), e.cclasstrib,
+                 e.grupo_tributo LIMIT 250""", status_cols=()), 24, 10)
     return b
 
 

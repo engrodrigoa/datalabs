@@ -161,6 +161,14 @@ rtc-ref: ## RTC: busca a tabela oficial cClassTrib/NCM (Receita) e recalcula a a
 	@echo "  acompanhe:  http://localhost:8080/dags/dag_rtc_ref"
 	@echo "  resultado:  SELECT * FROM gold.ag_nfe_aderencia_rtc_mensal ORDER BY 1, 2, 4;"
 
+rtc-explain: ## RTC (perfil AI): explica cada cClassTrib a partir dos dispositivos da ponte, citando a LC 214
+	@echo "aguardando o Airflow registrar o dag_rtc_explain (DAG nova: até ~5 min, e nasce pausada)..."
+	@until $(AF) airflow dags unpause dag_rtc_explain >/dev/null 2>&1; do sleep 5; done
+	$(AF) airflow dags trigger dag_rtc_explain
+	@echo ""
+	@echo "  acompanhe:  http://localhost:8080/dags/dag_rtc_explain  (primeira vez: ~3 h de CPU, em execuções de 80 min)"
+	@echo "  resultado:  SELECT cclasstrib, outcome, fontes, explicacao FROM ai.rtc_cclasstrib_explicacao;"
+
 ANP_APP_VENV ?= .venv-anp
 dashboard-anp-install: ## create the ANP dashboard venv (Streamlit; separate from the Airflow image)
 	python3 -m venv $(ANP_APP_VENV) && $(ANP_APP_VENV)/bin/pip install -q -r apps/anp_dashboard/requirements.txt

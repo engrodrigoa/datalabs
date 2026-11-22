@@ -1,10 +1,11 @@
 """
 dag_rtc_ref — official CST / cClassTrib / NCM tables (Receita Federal tax calculator) -> ref_rtc -> NF-e adherence.
 
-    fetch_source  -> load_reference -> link_lc214 -> gate -> dbt_rtc (tag:rtc)       -> health_checks_rtc -> end
-    rtc01 (watch)    rtc02 (one tx)     rtc03 (bridge)       stg_rtc__* -> silver.rtc_* ->
-                                               gold.ft_nfe_item_aderencia_rtc + ag_ (mensal) + testes (dq_nfe)
-                                               gold.br_cclasstrib_lc214 + vw_nfe_item_fundamento_lc214
+    fetch_source  -> load_reference -> link_lc214 -> gate -> dbt_rtc (tag:rtc)       -+-> health_checks_rtc -> end
+    rtc01 (watch)    rtc02 (one tx)     rtc03 (bridge)       stg_rtc__* -> silver.rtc_* |
+                                               gold.ft_nfe_item_aderencia_rtc + ag_    +-> publish_rtc (asset
+                                               (mensal) + testes (dq_nfe)                  datalabs://gold/rtc ->
+                                               gold.br_cclasstrib_lc214 + vw_..._lc214     dag_rtc_explain, ADR 0022)
 
 Source (ADR 0019): github.com/ReceitaFederal/calculadora-rtc-regime-regular (MIT), a mirror of the Receita/Serpro
 repository whose Flyway scripts ARE the official tables. rtc01 asks git for the branch head (`git ls-remote`):
@@ -28,6 +29,10 @@ Bridge to the LC 214 (rtc03_lc214, ADR 0021)
     served changes): an amendment re-links the references the same day, not at the next 06:20. Skipped when nothing
     changed, or when the law is not served (base stack, no AI profile).
 
+Asset `datalabs://gold/rtc` (publish_rtc, after dbt_rtc succeeds)
+    dag_rtc_explain explains each cClassTrib from the provisions of the bridge with the local LLM (rtc04, ADR 0022).
+    Emitted on every successful build (daily): the explain step decides by itself, per row, whether anything changed.
+
 Params: force -> rebuild and reload the current sha (e.g. after a fix in flyway_replay.py) and the bridge.
 """
 import os
@@ -50,6 +55,7 @@ from pipelines.observability.dag_helpers import (
 
 FORCE = "{{ '--force' if params.force else '' }}"
 SERVING_LC214 = Asset("datalabs://serving/lc214")      # produced by dag_rag_lc214.load_postgres
+GOLD_RTC = Asset("datalabs://gold/rtc")                # consumed by dag_rtc_explain (ADR 0022)
 
 profile_config = ProfileConfig(
     profile_name="datalab",
@@ -104,6 +110,8 @@ with DAG(
     # NONE_FAILED (not ALL_DONE), as in dag_rag_lc214: a failed step upstream leaves this leaf upstream_failed and
     # the run red; with ALL_DONE a green leaf would hide it.
     data_health = health_checks("rtc", trigger_rule=TriggerRule.NONE_FAILED)
+    # the reference, the bridge and the RTC models are built: dag_rtc_explain may explain them (ADR 0022)
+    publish_rtc = EmptyOperator(task_id="publish_rtc", outlets=[GOLD_RTC])
     end = PythonOperator(task_id="end", python_callable=consolidate_dag_audit_logs, trigger_rule=TriggerRule.ALL_DONE)
 
-    fetch_source >> load_reference >> link_lc214 >> gate >> dbt_rtc >> data_health >> end
+    fetch_source >> load_reference >> link_lc214 >> gate >> dbt_rtc >> [data_health, publish_rtc] >> end

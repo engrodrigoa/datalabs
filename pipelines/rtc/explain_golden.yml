@@ -1,0 +1,89 @@
+# Golden cases of rtc04_explain (ADR 0022): ten official cClassTribs, chosen to cover the kinds of treatment and the
+# hard spots of the bridge. Labelled data: every provision id is re-checked against the law served on every run
+# (an id that left the law stops the run: explain_golden_stale). Generated first in every run, so the gate can judge
+# them before the batch is complete.
+#
+# Per case:
+#   cclasstrib / grupo   the code and its tax group (IBSCBS | IS); the latest start of validity is used
+#   outcome              explained (default) | no_anchor (fixed text, no LLM)
+#   expected             the provisions the explanation must cite, or a part of one (art. 138 accepts art. 138, I;
+#                        art. 138, § 2º does NOT accept the caput of art. 138)
+#   mentions             percentages the explanation must state (the table's own rates)
+#   review               the human verdict, filled after reading `rtc04_explain --review`:
+#                          verdict: pending | ok | wrong     sha: the sha printed with the text     note: why
+#                        A verdict whose sha is not the current text's is reported as `stale` (the text changed).
+cases:
+  - id: explain-01
+    cclasstrib: "200038"
+    grupo: IBSCBS
+    why: reduced 60% (insumos agropecuários, Anexo IX); the anchor is a whole article
+    expected: [lc214-2025:art-138]
+    mentions: [60]
+    review: {verdict: pending}
+
+  - id: explain-02
+    cclasstrib: "200025"
+    grupo: IBSCBS
+    why: one classification, two treatments (CBS zero, IBS reduced 60%, ProUni)
+    expected: [lc214-2025:art-308]
+    mentions: [60]
+    review: {verdict: pending}
+
+  - id: explain-03
+    cclasstrib: "200052"
+    grupo: IBSCBS
+    why: reduced 30% (profissões intelectuais); the reference is a range ("Art. 127, I a XVIII", 18 incisos)
+    expected: [lc214-2025:art-127]
+    mentions: [30]
+    review: {verdict: pending}
+
+  - id: explain-04
+    cclasstrib: "200010"
+    grupo: IBSCBS
+    why: rate zero (medicamentos para a administração pública); the reference is a list ("§ 1º, I e II")
+    expected: [lc214-2025:art-146:par-1:inc-I, lc214-2025:art-146:par-1:inc-II]
+    review: {verdict: pending}
+
+  - id: explain-05
+    cclasstrib: "410002"
+    grupo: IBSCBS
+    why: not levied (transferência entre estabelecimentos do mesmo contribuinte); the "matriz/filial" vocabulary
+      that the RAG's retrieval misses (content-03) comes here from the bridge
+    expected: [lc214-2025:art-6:inc-II]
+    review: {verdict: pending}
+
+  - id: explain-06
+    cclasstrib: "410027"
+    grupo: IBSCBS
+    why: the reference is ambiguous in the source ("Art. 80 II"); the bridge resolved it by the transcription
+    expected: [lc214-2025:art-80:par-1:inc-II]
+    review: {verdict: pending}
+
+  - id: explain-07
+    cclasstrib: "220001"
+    grupo: IBSCBS
+    why: fixed rate (incorporação imobiliária); the Receita's transcription diverges from the law served
+    expected: [lc214-2025:art-485:inc-I]
+    review: {verdict: pending}
+
+  - id: explain-08
+    cclasstrib: "515001"
+    grupo: IBSCBS
+    why: deferral with a 60% reduction; same article as explain-01, a different paragraph (precision of the citation)
+    expected: [lc214-2025:art-138:par-2]
+    mentions: [60]
+    review: {verdict: pending}
+
+  - id: explain-09
+    cclasstrib: "000001"
+    grupo: IS
+    why: Imposto Seletivo (primeiro fornecimento); the same code means something else in IBS/CBS (explain-10)
+    expected: [lc214-2025:art-412:inc-I]
+    review: {verdict: pending}
+
+  - id: explain-10
+    cclasstrib: "000001"
+    grupo: IBSCBS
+    why: Regra Geral, no provision linked, so a fixed text and no LLM call
+    outcome: no_anchor
+    review: {verdict: pending}
