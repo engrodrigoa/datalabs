@@ -1,9 +1,10 @@
 """
 dag_rtc_ref — official CST / cClassTrib / NCM tables (Receita Federal tax calculator) -> ref_rtc -> NF-e adherence.
 
-    fetch_source  -> load_reference -> gate -> dbt_rtc (tag:rtc)                  -> health_checks_rtc -> end
-    rtc01 (watch)    rtc02 (one tx)            stg_rtc__* -> silver.rtc_* ->
+    fetch_source  -> load_reference -> link_lc214 -> gate -> dbt_rtc (tag:rtc)       -> health_checks_rtc -> end
+    rtc01 (watch)    rtc02 (one tx)     rtc03 (bridge)       stg_rtc__* -> silver.rtc_* ->
                                                gold.ft_nfe_item_aderencia_rtc + ag_ (mensal) + testes (dq_nfe)
+                                               gold.br_cclasstrib_lc214 + vw_nfe_item_fundamento_lc214
 
 Source (ADR 0019): github.com/ReceitaFederal/calculadora-rtc-regime-regular (MIT), a mirror of the Receita/Serpro
 repository whose Flyway scripts ARE the official tables. rtc01 asks git for the branch head (`git ls-remote`):
@@ -19,7 +20,15 @@ Why dbt runs even when nothing new was fetched (gate = NONE_FAILED)
 Daily, not weekly: the source check is one `git ls-remote` (~1 s) and the adherence rebuild is seconds at lab
 volume. How often the mirror actually moves is measured by the checks (rtc_reference_age_days), not assumed.
 
-Params: force -> rebuild and reload the current sha (e.g. after a fix in flyway_replay.py).
+Bridge to the LC 214 (rtc03_lc214, ADR 0021)
+    Resolves the legal reference of each cClassTrib ("Art. 412, I") into provisions of the law served in
+    ai.lc214_dispositivo, with the LC 214 router's parser, and compares the Receita's transcription with the law.
+    Runs after the load (NONE_FAILED) because either side may have moved: a new reference version, or a new law
+    version. That is why the DAG also listens to `datalabs://serving/lc214` (emitted by dag_rag_lc214 when the law
+    served changes): an amendment re-links the references the same day, not at the next 06:20. Skipped when nothing
+    changed, or when the law is not served (base stack, no AI profile).
+
+Params: force -> rebuild and reload the current sha (e.g. after a fix in flyway_replay.py) and the bridge.
 """
 import os
 import sys
@@ -27,7 +36,7 @@ from datetime import datetime, timedelta
 
 from airflow.providers.standard.operators.empty import EmptyOperator  # type: ignore
 from airflow.providers.standard.operators.python import PythonOperator  # type: ignore
-from airflow.sdk import DAG, Param, TriggerRule  # type: ignore
+from airflow.sdk import DAG, Asset, AssetOrTimeSchedule, CronTriggerTimetable, Param, TriggerRule  # type: ignore
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig  # type: ignore
@@ -40,6 +49,7 @@ from pipelines.observability.dag_helpers import (
 )
 
 FORCE = "{{ '--force' if params.force else '' }}"
+SERVING_LC214 = Asset("datalabs://serving/lc214")      # produced by dag_rag_lc214.load_postgres
 
 profile_config = ProfileConfig(
     profile_name="datalab",
@@ -59,7 +69,9 @@ with DAG(
         **OBS_DEFAULT_ARGS,
     },
     start_date=datetime(2026, 11, 1),
-    schedule="20 6 * * *",
+    # daily 06:20 (same zone as AIRFLOW__CORE__DEFAULT_TIMEZONE) OR when the LC 214 served changes
+    schedule=AssetOrTimeSchedule(timetable=CronTriggerTimetable("20 6 * * *", timezone="America/Sao_Paulo"),
+                                 assets=[SERVING_LC214]),
     catchup=False,
     max_active_runs=1,
     deadline=run_deadline(timedelta(minutes=45), "dag_rtc_ref: reference checked and adherence rebuilt within 45 min"),
@@ -73,6 +85,9 @@ with DAG(
                                    execution_timeout=timedelta(minutes=10))
     load_reference = observed_script("load_reference", "rtc", "rtc/rtc02_load.py", args=FORCE,
                                      trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=10))
+    # exit 99 -> SKIPPED: same (reference, law, bridge version), or the law is not served (no AI profile)
+    link_lc214 = observed_script("link_lc214", "rtc", "rtc/rtc03_lc214.py", args=FORCE,
+                                 trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
     gate = EmptyOperator(task_id="gate", trigger_rule=TriggerRule.NONE_FAILED)
 
     dbt_rtc = DbtTaskGroup(
@@ -91,4 +106,4 @@ with DAG(
     data_health = health_checks("rtc", trigger_rule=TriggerRule.NONE_FAILED)
     end = PythonOperator(task_id="end", python_callable=consolidate_dag_audit_logs, trigger_rule=TriggerRule.ALL_DONE)
 
-    fetch_source >> load_reference >> gate >> dbt_rtc >> data_health >> end
+    fetch_source >> load_reference >> link_lc214 >> gate >> dbt_rtc >> data_health >> end

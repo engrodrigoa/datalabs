@@ -76,6 +76,12 @@ def test_assets_wire_the_producer_and_consumer_dags(dagbag_and_warnings):
     produced = {o.uri for t in bag.dags["dag_rfb"].tasks for o in t.outlets}
     assert "datalabs://landing/rfb" in produced
     assert "datalabs://landing/rfb" in str(bag.dags["dag_rfb_dw_dbt"].timetable.asset_condition)
+    # the law served changes -> the cClassTrib references are re-linked (ADR 0021); the daily cron stays
+    served = {o.uri for t in bag.dags["dag_rag_lc214"].tasks for o in t.outlets}
+    assert "datalabs://serving/lc214" in served
+    rtc = bag.dags["dag_rtc_ref"].timetable
+    assert "datalabs://serving/lc214" in str(rtc.asset_condition)
+    assert rtc.timetable.expression == "20 6 * * *"
 
 
 @pytest.mark.parametrize("logical_date", [None, datetime(2026, 11, 4, 9, 0, tzinfo=timezone.utc)],

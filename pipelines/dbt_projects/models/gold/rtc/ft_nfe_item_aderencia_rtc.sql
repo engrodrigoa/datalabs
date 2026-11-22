@@ -118,6 +118,7 @@ select
     it.cst,
     a.cst_oficial,                              -- CST da tabela oficial para a cClassTrib (diagnóstico)
     it.cclasstrib,
+    a.cltr_id,                                  -- linha oficial casada (vigente + CST coerente): chave da ponte LC 214
     c.descricao                                 as cclasstrib_descricao,
     c.tipo_aliquota,
     c.tem_lista_ncm,

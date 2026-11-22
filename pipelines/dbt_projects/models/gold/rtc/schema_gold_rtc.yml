@@ -25,3 +25,32 @@ models:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [mes_emissao, cclasstrib, status_aderencia]
+
+  - name: br_cclasstrib_lc214
+    description: >
+      Ponte cClassTrib oficial -> dispositivos da LC 214 (ADR 0021): uma linha por cClassTrib x citação da sua
+      fundamentação legal, com o texto e o status do dispositivo na lei servida e a comparação com a transcrição
+      da Receita. A resolução é do rtc03_lc214 (parser do router da LC 214, sem LLM).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [cltr_id, fdlg_id, ordem]
+    columns:
+      - name: outcome
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['resolved', 'ambiguous', 'not_found', 'foreign', 'unparsed']
+      - name: dispositivo_id
+        description: "Preenchido só quando outcome = 'resolved' (um único dispositivo)."
+        data_tests:
+          - relationships:
+              arguments:
+                to: source('ai_lc214', 'lc214_dispositivo')
+                field: dispositivo_id
+
+  - name: vw_nfe_item_fundamento_lc214
+    description: >
+      Item de NF-e -> dispositivo da LC 214 que fundamenta a sua cClassTrib (uma linha por item x dispositivo
+      citado). Só itens com cClassTrib casada na tabela oficial.

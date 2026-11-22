@@ -10,7 +10,7 @@ A portfolio data platform (owner: Rodrigo Arruda, Data Engineer) that runs on on
 Compose, every step observable in Grafana. Three products: public data (ANP fuel prices, Receita Federal CNPJ)
 → medallion layers → dbt gold; synthetic NF-e with the tax reform groups (IBS/CBS/IS); and a RAG over the
 LC 214/2025 on pgvector (the lab's only AI product since ADR 0020); the NF-e is checked against the official cClassTrib/NCM tables of the
-Receita calculator (ADR 0019), whose legal references are the bridge to the LC 214 (planned).
+Receita calculator (ADR 0019), whose legal references are resolved into LC 214 provisions (ADR 0021).
 Guiding question: *is the data right, complete and on time, and how would I know if it wasn't?*
 
 Host: Windows + Docker Desktop (WSL2), PowerShell without `make` is the common case. Give commands that
@@ -36,7 +36,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00, 3 h run deadline), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → asset
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_lc214` (Mon 06:40,
   LC 214 lc01→lc04a/lc04c + golden contract → lc05 gate → lc06 generation; asset `datalabs://silver/lc214`),
-  `dag_rtc_ref` (daily 06:20, official cClassTrib/NCM tables -> `ref_rtc` -> NF-e adherence, ADR 0019),
+  `dag_rtc_ref` (daily 06:20 OR asset `datalabs://serving/lc214` emitted by `dag_rag_lc214.load_postgres`; official
+  cClassTrib/NCM tables -> `ref_rtc` -> `link_lc214` (rtc03, ADR 0021) -> NF-e adherence, ADR 0019),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/lc214,rtc}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010;
   `rtc`: Receita calculator reference tables, `flyway_replay.py` rebuilds its SQLite from the Flyway scripts, ADR 0019)
@@ -49,7 +50,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0020), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0021), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -62,12 +63,12 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **0003 Promtail → Grafana Alloy + Loki 3:** planned; Promtail polls the `./airflow/logs` bind mount (high CPU on Windows).
 - **0004 Object storage:** `minio/minio` was deleted from Docker Hub (2026-09-11); the lab runs Silo (`pgsty/silo`, drop-in MinIO
   fork, tag + digest). All S3 access goes through `boto3` in `s3_client.py`, so a swap is a compose change. RustFS is the fallback.
-- **0005 RAG router (superseded by 0019):** ANP RAG, retired. Principle kept: exact questions → SQL, vectors only where
+- **0005 RAG router (superseded by 0020):** ANP RAG, retired. Principle kept: exact questions → SQL, vectors only where
   similarity is the question (the LC 214 router applies it).
 - **0006 NF-e:** control per batch (`ctrl.nfe_lote`: `CARREGADO → PROCESSADO`), insert-only bronze, ingestion in
   PL/pgSQL (`pg_read_file`), parsing with `XMLTABLE` in dbt. Participant SCD2 keyed by the note's own attributes
   (no date-range join). Tests scoped to the batch in flight; business anomalies are `warn` + `store_failures` in `dq_nfe`.
-- **0007 RAG incremental (superseded by 0019 as code):** the set-difference sync survives in
+- **0007 RAG incremental (superseded by 0020 as code):** the set-difference sync survives in
   `commons/ai/context_sync.plan_sync` (embed `desired − store`, delete `store − desired`, full rebuild only on empty
   store, model change or `--full-refresh`), used by `lc04_embed` (ADR 0013).
 - **0008 Volumes, not bind mounts:** every stateful service uses a named volume (`pg_data`, `minio_data`,
@@ -98,7 +99,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   wording), `combined` (citation + question: the cited provision is an anchor, vectors complete), `vector` (no
   LC 214 citation; another law is `foreign`, never an anchor), `clarify` (ambiguous or missing: ask, never guess).
   Citations in chat and legal order, lists, caput convention only when it leaves one candidate. Deterministic, so
-  the golden contract checks it exactly: R1 route, R2 anchors/options, R3 the law's 799 self-citations (≥ 99%).
+  the golden contract checks it exactly: R1 route, R2 anchors/options, R3 the law's self-citations (≥ 99%: 1,350 of
+  1,352 since the list/range reading of ADR 0021; 796/799 before).
 - **0013 LC 214 vector search:** `lc04_embed` syncs `ai.lc214_chunk` by set difference on the chunk_id (same id =
   same text = same vector: a new version or parser only restamps), DELETE + INSERT in one transaction (no TRUNCATE),
   guards `chunks_estimated` and `store_shrink` (net loss > 5%; churn allowed). Exact cosine search, no HNSW (867
@@ -169,6 +171,17 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   everything it taught is in the LC 214. Removed code, DAG, 3 checks, dashboard rows, `OLLAMA_MODEL`. Data cleanup in
   `infra/postgres/init/sql/04_retire_anp_rag.sql` (drops + deletes scoped to pipeline `rag` / app `anp_assistant`).
   Do not add a second RAG: new AI work extends the LC 214 (next: the NF-e bridge via cClassTrib).
+- **0021 NF-e × LC 214 bridge:** `rtc03_lc214` (task `link_lc214` in `dag_rtc_ref`, after the load, NONE_FAILED)
+  reads `ref_rtc.fundamentacao_legal.fdlg_texto_curto` with the LC 214 router (`parse_citations` + `Index.resolve`,
+  no LLM) into `ai.rtc_lc214_fundamento`: one row per citation, outcome resolved | ambiguous | not_found | foreign |
+  unparsed, `status_lei`, `texto_check` (Receita's transcription `fdlg_texto` × law text by words: match | near
+  ≥ 90% | diverges | no_transcription). Rebuilt (DELETE + INSERT, one tx) when (rtc sha, law sha256,
+  `BRIDGE_VERSION`) changes; exit 99 otherwise or when the law is not served (no AI profile). Router reads lists and
+  ranges (", X", " e X", " a X" after a bare roman or the plural "incisos"/"§§"/"parágrafos"; numeric article
+  ranges expanded, ≤ 60; "31-A a 31-E" keeps its ends); a legal-order segment closes at its article. Measured
+  (table 1.7.2): 238 citations, 235 resolved, 1 ambiguous in the source, 3 transcriptions diverge. dbt:
+  `gold.br_cclasstrib_lc214`, `gold.vw_nfe_item_fundamento_lc214` (via `cltr_id`, now in
+  `ft_nfe_item_aderencia_rtc`). Checks `rtc_lc214_*` (requires: ai, warn).
 
 ## Development rules
 
@@ -197,7 +210,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 28 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 32 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty

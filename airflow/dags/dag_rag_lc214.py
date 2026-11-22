@@ -27,8 +27,11 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
 
 Asset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
-    are new chunks. The load and the embedding run in this DAG, right after it; a downstream consumer (the
-    NF-e x LC 214 bridge, say) can be scheduled on the asset instead of on a clock.
+    are new chunks. The load and the embedding run in this DAG, right after it.
+
+Asset `datalabs://serving/lc214`
+    Emitted by load_postgres when the provisions served in Postgres changed (an amendment, a parser fix).
+    dag_rtc_ref listens to it: the cClassTrib legal references are re-linked to the new provisions (ADR 0021).
 
 Serving load (lc04_load.py, ADR 0011)
     Projects the current version into ai.lc214_dispositivo / ai.lc214_artigo by upsert in one transaction (readers
@@ -89,6 +92,9 @@ from pipelines.observability.airflow_callbacks import OBS_DAG_CALLBACKS, OBS_DEF
 from pipelines.observability.dag_helpers import health_checks, observed_script
 
 SILVER_LC214 = Asset("datalabs://silver/lc214")
+# emitted when the law SERVED in Postgres changed (lc04_load exit 0; 99 = same rows, no event): dag_rtc_ref
+# re-links the cClassTrib legal references to the new provisions (ADR 0021)
+SERVING_LC214 = Asset("datalabs://serving/lc214")
 
 FORCE = "{{ '--force' if params.force else '' }}"
 PDF = "{{ ('--pdf ' ~ params.pdf) if params.pdf else '' }}"
@@ -140,7 +146,7 @@ with DAG(
     data_health = health_checks("lc214", fail_on="never", trigger_rule=TriggerRule.NONE_FAILED)
     golden = observed_script("golden_contract", "lc214", "rag/lc214/golden.py",
                              trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=5))
-    load = observed_script("load_postgres", "lc214", "rag/lc214/lc04_load.py",
+    load = observed_script("load_postgres", "lc214", "rag/lc214/lc04_load.py", outlets=[SERVING_LC214],
                            trigger_rule=TriggerRule.NONE_FAILED, execution_timeout=timedelta(minutes=10))
     # first run: model load + 867 chunks on CPU (~13 chunks/s measured for the ANP store, ADR 0007): a few minutes
     embed = observed_script("embed_chunks", "lc214", "rag/lc214/lc04_embed.py",
