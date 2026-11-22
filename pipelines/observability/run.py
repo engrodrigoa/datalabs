@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         argv, script_args = argv[:idx], argv[idx + 1:]
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("pipeline", help="logical pipeline name: anp | rfb | rag | obs ...")
+    parser.add_argument("pipeline", help="logical pipeline name: anp | rfb | lc214 | obs ...")
     parser.add_argument("script", help="path to the python script (or module with -m semantics if --module)")
     parser.add_argument("--step", help="step name (default: Airflow task_id or script file name)")
     parser.add_argument("--module", action="store_true", help="treat `script` as a python module path")

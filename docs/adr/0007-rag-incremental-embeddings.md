@@ -1,6 +1,8 @@
 # ADR 0007 — RAG: incremental embeddings and a CPU-sized model
 
-**Status:** accepted
+**Status:** superseded by [ADR 0020](0020-retire-anp-rag.md) as running code (the ANP RAG was retired). The
+set-difference sync (`commons/ai/context_sync.plan_sync`) is used by the LC 214 vector store,
+[ADR 0013](0013-lc214-vector-search-and-context.md)
 
 **Context.** `rag01_context.py` rebuilt the whole vector store on every gold publication
 (`TRUNCATE` + embed ~32k GO rows). Embedding is CPU-bound: on the lab machine

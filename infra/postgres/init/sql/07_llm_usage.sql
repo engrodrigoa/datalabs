@@ -14,7 +14,7 @@
 CREATE TABLE IF NOT EXISTS ai.llm_call (
     call_id                 uuid PRIMARY KEY,
     called_at               timestamptz NOT NULL,             -- when the request was sent (UTC)
-    app                     text NOT NULL,                    -- the consumer: lc214_generate, anp_assistant
+    app                     text NOT NULL,                    -- the consumer: lc214_generate
     pipeline                text,                             -- the runner's pipeline/step when run through it
     step                    text,
     step_run_id             uuid,                             -- -> audit.pipeline_step_runs (null for ad-hoc runs)

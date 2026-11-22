@@ -1,7 +1,7 @@
 {
   "uid": "datalabs-pipeline-health",
   "title": "DataLabs · Pipeline Health",
-  "description": "Is the data platform healthy? Step runs, data health checks, dbt/Elementary tests, Airflow runs, RAG quality and error logs.",
+  "description": "Is the data platform healthy? Step runs, data health checks, dbt/Elementary tests, Airflow runs and error logs. The RAG has its own board (RAG LC 214).",
   "tags": [
     "datalabs",
     "observability",
@@ -43,6 +43,12 @@
       "icon": "dashboard"
     },
     {
+      "title": "RAG LC 214",
+      "type": "link",
+      "url": "/d/datalabs-rag-lc214",
+      "icon": "dashboard"
+    },
+    {
       "title": "Logs explorer",
       "type": "link",
       "url": "/d/datalabs-logs",
@@ -66,7 +72,7 @@
           "type": "grafana-postgresql-datasource",
           "uid": "dw"
         },
-        "query": "SELECT unnest(ARRAY['anp','rfb','rag','obs']) AS p UNION SELECT DISTINCT pipeline FROM audit.pipeline_step_runs ORDER BY 1",
+        "query": "SELECT unnest(ARRAY['anp','rfb','lc214','obs']) AS p UNION SELECT DISTINCT pipeline FROM audit.pipeline_step_runs ORDER BY 1",
         "definition": "pipelines",
         "refresh": 1,
         "multi": true,
@@ -2543,388 +2549,11 @@
     {
       "id": 32,
       "type": "row",
-      "title": "RAG quality — ai.rag_eval_* (golden set)",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 86,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Evaluation accuracy per run",
-      "description": "the evaluation task fails below RAG_MIN_ROUTING_ACC / RAG_MIN_VALUE_ACC (quality gate)",
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "dw"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "dw"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT executado_em AS time, acuracia_roteamento * 100 AS \"routing accuracy\", acuracia_valor * 100 AS \"value accuracy (vs SQL truth)\" FROM ai.rag_eval_summary WHERE $__timeFilter(executado_em) ORDER BY 1"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "pointSize": 8,
-            "showPoints": "auto",
-            "spanNulls": true,
-            "lineInterpolation": "linear",
-            "axisPlacement": "auto",
-            "gradientMode": "none",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "barAlignment": 0,
-            "axisSoftMin": 0
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "noValue": "no data yet",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "id": 33,
-      "gridPos": {
-        "x": 0,
-        "y": 87,
-        "w": 12,
-        "h": 8
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Avg retrieval latency (last eval)",
-      "description": "",
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "dw"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "dw"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT latencia_media_ms FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "noValue": "–",
-          "decimals": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "wideLayout": true,
-        "showPercentChange": false
-      },
-      "id": 34,
-      "gridPos": {
-        "x": 12,
-        "y": 87,
-        "w": 4,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Vector index used",
-      "description": "",
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "dw"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "dw"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT CASE WHEN plano_execucao_usa_indice THEN 1 ELSE 0 END FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "text": "✔ HNSW",
-                  "color": "green"
-                },
-                "0": {
-                  "text": "✖ seq scan",
-                  "color": "yellow"
-                }
-              }
-            }
-          ],
-          "noValue": "–"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "wideLayout": true,
-        "showPercentChange": false
-      },
-      "id": 35,
-      "gridPos": {
-        "x": 16,
-        "y": 87,
-        "w": 4,
-        "h": 4
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Context ↔ gold parity",
-      "description": "",
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "dw"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "dw"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT CASE WHEN paridade_contexto_gold THEN 1 ELSE 0 END FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "1": {
-                  "text": "✔ in sync",
-                  "color": "green"
-                },
-                "0": {
-                  "text": "✖ diverged",
-                  "color": "red"
-                }
-              }
-            }
-          ],
-          "noValue": "–"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "textMode": "value",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "wideLayout": true,
-        "showPercentChange": false
-      },
-      "id": 36,
-      "gridPos": {
-        "x": 20,
-        "y": 87,
-        "w": 4,
-        "h": 4
-      }
-    },
-    {
-      "type": "table",
-      "title": "Last evaluation — per question",
-      "description": "",
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "dw"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "dw"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT tipo_consulta AS type, pergunta AS question, metodo_esperado AS expected_route, metodo_obtido AS route, acerto_roteamento AS route_ok, valor_obtido, valor_esperado, acerto_valor AS value_ok, ROUND(latencia_retrieval_ms::numeric) AS latency_ms FROM ai.rag_eval_metrics WHERE run_id = (SELECT run_id FROM ai.rag_eval_summary ORDER BY executado_em DESC LIMIT 1) ORDER BY tipo_consulta"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "filterable": true,
-            "cellOptions": {
-              "type": "auto"
-            }
-          },
-          "mappings": [],
-          "noValue": "–",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false,
-          "reducer": [
-            "sum"
-          ],
-          "fields": ""
-        }
-      },
-      "id": 37,
-      "gridPos": {
-        "x": 0,
-        "y": 95,
-        "w": 12,
-        "h": 8
-      }
-    },
-    {
-      "id": 38,
-      "type": "row",
       "title": "Logs — Loki",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 103,
+        "y": 86,
         "w": 24,
         "h": 1
       },
@@ -3010,10 +2639,10 @@
           "sort": "desc"
         }
       },
-      "id": 39,
+      "id": 33,
       "gridPos": {
         "x": 0,
-        "y": 104,
+        "y": 87,
         "w": 12,
         "h": 8
       }
@@ -3033,7 +2662,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{job=\"airflow\", event=~\"alert|task_failed|step_finished|file_failed|schema_drift_.*|rag_eval_gate|check_result\", level=~\"ERROR|WARNING\"} | regexp `- (?P<lvl>[A-Z]+) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \\| \\{.*\\})?$` | line_format `[{{.event}}] {{ if .msg }}{{ .msg }}{{ else }}{{ __line__ }}{{ end }}`",
+          "expr": "{job=\"airflow\", event=~\"alert|task_failed|step_finished|file_failed|schema_drift_.*|lc214_.*_gate_failed|golden_contract_failed|check_result\", level=~\"ERROR|WARNING\"} | regexp `- (?P<lvl>[A-Z]+) (?P<logger>[^ :{]+): (?P<msg>.*?)(?: \\| \\{.*\\})?$` | line_format `[{{.event}}] {{ if .msg }}{{ .msg }}{{ else }}{{ __line__ }}{{ end }}`",
           "queryType": "range",
           "editorMode": "code"
         }
@@ -3046,10 +2675,10 @@
         "dedupStrategy": "none",
         "prettifyLogMessage": false
       },
-      "id": 40,
+      "id": 34,
       "gridPos": {
         "x": 12,
-        "y": 104,
+        "y": 87,
         "w": 12,
         "h": 8
       }

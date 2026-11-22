@@ -27,8 +27,8 @@ Why the AI gate is a ShortCircuitOperator and not an exit 99
 
 Asset `datalabs://silver/lc214`
     Emitted by build_chunks only when it SUCCEEDS (Airflow does not emit on skipped), i.e. only when there
-    are new chunks. The load and the embedding run in this DAG, right after it; the evaluation (lc05) can be
-    scheduled on the asset, like dag_rag_anp on datalabs://gold/anp.
+    are new chunks. The load and the embedding run in this DAG, right after it; a downstream consumer (the
+    NF-e x LC 214 bridge, say) can be scheduled on the asset instead of on a clock.
 
 Serving load (lc04_load.py, ADR 0011)
     Projects the current version into ai.lc214_dispositivo / ai.lc214_artigo by upsert in one transaction (readers

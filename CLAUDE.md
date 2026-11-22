@@ -7,8 +7,10 @@ rules that keep changes consistent with both.
 ## What this is
 
 A portfolio data platform (owner: Rodrigo Arruda, Data Engineer) that runs on one machine with Docker
-Compose: public data (ANP fuel prices, Receita Federal CNPJ) and synthetic NF-e → medallion layers →
-dbt gold → RAG on pgvector, with every step observable in Grafana.
+Compose, every step observable in Grafana. Three products: public data (ANP fuel prices, Receita Federal CNPJ)
+→ medallion layers → dbt gold; synthetic NF-e with the tax reform groups (IBS/CBS/IS); and a RAG over the
+LC 214/2025 on pgvector (the lab's only AI product since ADR 0020); the NF-e is checked against the official cClassTrib/NCM tables of the
+Receita calculator (ADR 0019), whose legal references are the bridge to the LC 214 (planned).
 Guiding question: *is the data right, complete and on time, and how would I know if it wasn't?*
 
 Host: Windows + Docker Desktop (WSL2), PowerShell without `make` is the common case. Give commands that
@@ -22,7 +24,7 @@ work there (the runbooks show the `docker compose exec -T airflow-scheduler ...`
 | Transform | dbt-core 1.11.15, dbt-postgres 1.11.0, Elementary 0.25.1 (CLI = package version), isolated venv `/opt/airflow/dbt_venv` |
 | Processing | Polars 1.x + PyArrow, single node (ADR 0002) |
 | Storage | Postgres 15 + pgvector (`pg_data` volume, `shm_size: 1g`), Silo (community MinIO fork, pinned by digest, ADR 0004) |
-| AI | sentence-transformers on CPU torch, `intfloat/multilingual-e5-small` (384 dims), Ollama `llama3.2:1b` (profile `ai`) |
+| AI | sentence-transformers on CPU torch, `intfloat/multilingual-e5-small` (384 dims), Ollama `qwen2.5:3b` (`LC214_GEN_MODEL`, profile `ai`) |
 | Analytics app | Streamlit 1.66.1 (+ Altair), own venv `.venv-anp`, `apps/anp_dashboard` (ADR 0016) |
 | Observability | Loki 2.9.2 + Promtail 2.9.2 (EOL, ADR 0003), statsd-exporter → Prometheus v2.53.0, Grafana 12.0.0 |
 
@@ -32,14 +34,14 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 ## Repository map
 
 - `airflow/dags/` — `dag_dbt_anp` (Mon 06:00, 3 h run deadline), `dag_rfb` (manual, params `ref_month`, `dev_mode`) → asset
-  `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_anp`
-  (asset `datalabs://gold/anp`), `dag_rag_lc214` (Mon 06:40, LC 214 lc01→lc04a/lc04c + golden contract → lc05
-  gate → lc06 generation; asset `datalabs://silver/lc214`),
+  `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_lc214` (Mon 06:40,
+  LC 214 lc01→lc04a/lc04c + golden contract → lc05 gate → lc06 generation; asset `datalabs://silver/lc214`),
   `dag_rtc_ref` (daily 06:20, official cClassTrib/NCM tables -> `ref_rtc` -> NF-e adherence, ADR 0019),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
-- `pipelines/{anp,rfb,rag/anp,rag/lc214,rtc}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010;
+- `pipelines/{anp,rfb,rag/lc214,rtc}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010;
   `rtc`: Receita calculator reference tables, `flyway_replay.py` rebuilds its SQLite from the Flyway scripts, ADR 0019)
-- `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`, `ai/` (embeddings, router, context sync, `llm_usage`)
+- `pipelines/commons/` — `env_loader` (single config source), `logger` (structured events), `s3_client`, `pg_copy`,
+  `ai/` (embeddings, context sync, `llm_usage`: shared by the LC 214 steps)
 - `pipelines/observability/` — runner, step tracker, `checks.py` + `checks.yml`, alerting, Airflow callbacks, `dag_helpers`
 - `pipelines/dbt_projects/` — staging (views, `stg`) → silver (tables) → gold (star schemas); tags `anp`, `rfb`, `nfe`, `rtc`
 - `apps/anp_dashboard/` — Streamlit over `gold.ag_anp_preco_posto_atual` / `ag_anp_preco_municipio_diario` as `anp_app_ro`;
@@ -47,7 +49,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0019), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0020), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -60,14 +62,14 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - **0003 Promtail → Grafana Alloy + Loki 3:** planned; Promtail polls the `./airflow/logs` bind mount (high CPU on Windows).
 - **0004 Object storage:** `minio/minio` was deleted from Docker Hub (2026-09-11); the lab runs Silo (`pgsty/silo`, drop-in MinIO
   fork, tag + digest). All S3 access goes through `boto3` in `s3_client.py`, so a swap is a compose change. RustFS is the fallback.
-- **0005 RAG router:** CNPJ or aggregation questions → parameterised SQL on gold; open questions → pgvector.
-  Golden-set eval gate fails the DAG below `RAG_MIN_ROUTING_ACC` / `RAG_MIN_VALUE_ACC` (0.9).
+- **0005 RAG router (superseded by 0019):** ANP RAG, retired. Principle kept: exact questions → SQL, vectors only where
+  similarity is the question (the LC 214 router applies it).
 - **0006 NF-e:** control per batch (`ctrl.nfe_lote`: `CARREGADO → PROCESSADO`), insert-only bronze, ingestion in
   PL/pgSQL (`pg_read_file`), parsing with `XMLTABLE` in dbt. Participant SCD2 keyed by the note's own attributes
   (no date-range join). Tests scoped to the batch in flight; business anomalies are `warn` + `store_failures` in `dq_nfe`.
-- **0007 RAG incremental:** chunk id `id_fato:md5(text)[:16]`; each run embeds `gold − store`, deletes
-  `store − gold`, exits 99 when nothing changed. Full rebuild only on empty store, model change or
-  `RAG_FULL_REFRESH=1`. One transaction per sync (delete, `COPY`, HNSW); missing index self-heals.
+- **0007 RAG incremental (superseded by 0019 as code):** the set-difference sync survives in
+  `commons/ai/context_sync.plan_sync` (embed `desired − store`, delete `store − desired`, full rebuild only on empty
+  store, model change or `--full-refresh`), used by `lc04_embed` (ADR 0013).
 - **0008 Volumes, not bind mounts:** every stateful service uses a named volume (`pg_data`, `minio_data`,
   `hf_cache`, `ollama_data`, `dbt_vol`, `grafana_data`, `prometheus_data`, `loki_data`). Bind mounts only for code
   and input files (`./datasource`). Input files are **streamed** (e.g. `zipfile.open`), temporaries go to the
@@ -112,7 +114,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   no baseline = failure. Report per phrasing in the lake (`silver/lc214/<sha12>/eval/`). Every retrieval change is
   an experiment of one variable against this baseline.
 - **0015 LC 214 answer generation:** `lc06_generate` (task `generate_answers`, after the lc05 gate). Model
-  `LC214_GEN_MODEL` qwen2.5:3b (its own setting; `OLLAMA_MODEL` stays the ANP assistant's 1B), JSON Schema
+  `LC214_GEN_MODEL` qwen2.5:3b (its own setting; the only LLM the lab calls), JSON Schema
   (`answerable`, `answer`, `citations[{artigo, dispositivo}]`), `temperature 0` + `LC214_GEN_SEED`, `num_ctx` 6144
   (same recall as 8192, swept by lc05). "Não consta" by three barriers: no LLM call on `clarify` / no context block;
   the model's `answerable`; no citation of the context left. Citations are resolved by the router's `parse_citations`
@@ -144,11 +146,10 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `record_llm_call`) into `ai.llm_call`: one row per request, `prompt_tokens` = the model's `prompt_eval_count`
   (`token_method=reported`), else words × tokens-per-word (`estimated`); the estimate is kept on every row. Prompt
   and reply are never stored (sha256 + size only). Best-effort write on its own connection; linked to the runner's
-  `step_run_id`. Consumers: lc06 (`lc214_generate`), the ANP assistant (`anp_assistant`). A new LLM call site
-  records through the same module. Checks `llm_usage_recorded`, `llm_usage_estimated_calls`,
-  `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board row 6. lc06 records after its decision with
-  `tags.outcome` (answered | refusal | error) and `citations_from`: useful token share. No cost (local LLM, no price
-  dimension yet).
+  `step_run_id`. Consumer: lc06 (`lc214_generate`). A new LLM call site records through the same module. Checks
+  `llm_usage_recorded`, `llm_usage_estimated_calls`, `llm_prompt_fills_context`, `llm_token_estimate_drift`; RAG board
+  row 6. lc06 records after its decision with `tags.outcome` (answered | refusal | error) and `citations_from`:
+  useful token share. No cost (local LLM, no price dimension yet).
 - **0019 RTC reference tables:** official CST / cClassTrib / NCM tables from the Receita Federal tax calculator
   (`ReceitaFederal/calculadora-rtc-regime-regular`, MIT, a squashed mirror). rtc01: `git ls-remote` (same sha -> 99),
   sparse `git fetch --depth 1 <sha>` of `flyway/sql`, replay in SQLite without Java (each `V<n>` in its own
@@ -164,6 +165,10 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   derived from `pAliqEfet`, tol. 0.01 / 1 p.p.), defect `reducao_divergente` (27/27, 0 FP).
   `gold.dm_nfe_tributacao` comes from the official table (type 1, key `cst || cclasstrib`, tags nfe + rtc, empty
   when the reference is not loaded yet); seed `nfe_ref_classtrib` and its snapshot were removed.
+- **0020 Retire the ANP RAG:** "which station is cheapest" is SQL (and the Streamlit app, ADR 0016), not retrieval;
+  everything it taught is in the LC 214. Removed code, DAG, 3 checks, dashboard rows, `OLLAMA_MODEL`. Data cleanup in
+  `infra/postgres/init/sql/04_retire_anp_rag.sql` (drops + deletes scoped to pipeline `rag` / app `anp_assistant`).
+  Do not add a second RAG: new AI work extends the LC 214 (next: the NF-e bridge via cClassTrib).
 
 ## Development rules
 
@@ -192,7 +197,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 31 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 28 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty
@@ -212,7 +217,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   and can mount empty after `wsl --shutdown` (`make preflight` warns).
 - Selective cleanup keeps the expensive downloads: remove `pg_data`/`minio_data`/`dbt_vol`/`grafana_data`/
   `prometheus_data`/`loki_data` by name, keep `hf_cache`, `ollama_data` and `./datasource` (RFB ZIPs ~21 min).
-  Removing `pg_data` also drops the audit history Grafana trends on and the RAG store (~45 min rebuild).
+  Removing `pg_data` also drops the audit history Grafana trends on and the LC 214 serving tables and vectors.
 - Optional layers degrade explicitly: no AI image -> RAG DAG exits 99 and its checks are `skipped` (`requires: ai`).
 - Images stay pinned (by digest when the publisher is not well established); `image-availability.yml` checks weekly
   that every pinned image still exists.
@@ -236,7 +241,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   to the grant loop in `infra/postgres/init/00_bootstrap.sh`. Airflow metadata stays in its own `airflow` database.
   `AIRFLOW__API__EXPOSE_CONFIG` stays `false`.
 - **SQL injection:** any value from a user, a question or an LLM is a bind parameter (`text(sql)` + params).
-  f-strings in SQL only for trusted config (e.g. `RAG_UF`) or fixed identifiers.
+  f-strings in SQL only for trusted config (e.g. a schema name from `env_loader`) or fixed identifiers.
 - **NF-e data is 100% synthetic and fictitious** (`scripts/nfe/gen_nfe.py`). Never add real documents, CNPJs or CPFs.
   `pg_read_file` works because the lab user is superuser and `./datasource/nfe` is mounted read-only; a non-lab
   deployment needs a dedicated role (`pg_read_server_files`) instead.
@@ -247,7 +252,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Lab-only caveats: all ports bind to every host interface and the object store is a young community fork. Review port bindings and
   the object store before exposing the stack on a network (e.g. the dedicated lambda server).
 - **Destructive commands need explicit confirmation:** `make clean` / `docker compose ... down -v` (deletes every volume),
-  dropping schemas, `--full-refresh` on large models, `RAG_FULL_REFRESH=1` (~45 min of CPU), force-push.
+  dropping schemas, `--full-refresh` on large models, `dag_rag_lc214` with `force=True` (re-parses the law and
+  re-runs the answer generation, ~40 min of CPU), force-push.
 
 ## Git workflow
 
@@ -272,7 +278,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Grafana `$uf` variable error on the ANP dashboard; `force_transform` param on `dag_dbt_anp`.
 - Airflow logs on a Docker volume + Grafana Alloy (Promtail CPU on the bind mount).
 - RFB bronze stores `dev_mode` / row count in S3 object metadata, so a full run reprocesses dev-mode files.
-- RAG retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold. LC 214: fiscal phrasings miss the
+- LC 214 retrieval quality: hybrid search (FTS + vectors, RRF), similarity threshold. Fiscal phrasings miss the
   law's vocabulary (content-03: "matriz/filial" vs "estabelecimentos do mesmo contribuinte"), measured by lc05.
 - LC 214 generation (ADR 0015): below its bar (2/9 vs 3/9, fiscal phrasings refused as "não trata
   especificamente"). Next: a fiscal -> legal glossary (retrieval and generation), labelled context lines; the full

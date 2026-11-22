@@ -15,7 +15,7 @@ Usage in a consumer:
     from pipelines.commons.ai.llm_usage import from_ollama, record_llm_call
     t0 = time.monotonic()
     resp = requests.post(OLLAMA_URL, json=payload).json()
-    record_llm_call(from_ollama(resp, app="anp_assistant", model=MODEL, prompt=prompt,
+    record_llm_call(from_ollama(resp, app="lc214_generate", model=MODEL, prompt=prompt,
                                 latency_s=time.monotonic() - t0))
 """
 from __future__ import annotations

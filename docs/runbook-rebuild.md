@@ -45,21 +45,24 @@ docker compose exec -T airflow-scheduler bash -c "cd /opt/airflow/pipelines/dbt_
 | Order | DAG | What it builds | Notes |
 |---|---|---|---|
 | 1 | `dag_dbt_anp` | ANP bronze → silver → gold + `ag_anp_preco_semanal` | real data from gov.br/anp (internet) |
-| 2 | `dag_rag_anp` | `ai.rag_context_anp` (full, empty store) + evaluation | triggered by the ANP gold; first run embeds all GO rows (CPU-bound, ~40 min on the lab laptop) |
-| 3 | `dag_rfb` → `dag_rfb_dw_dbt` | RFB landing (MinIO) → DW | large download; trigger when needed |
-| 4 | `dag_nfe` | NF-e lots → silver/gold | `gen_nfe.py 2000 --agora` (or `make nfe-quickstart`) |
+| 2 | `dag_rfb` → `dag_rfb_dw_dbt` | RFB landing (MinIO) → DW | large download; trigger when needed |
+| 3 | `dag_nfe` | NF-e lots → silver/gold | `gen_nfe.py 2000 --agora` (or `make nfe-quickstart`) |
+| 4 | `dag_rag_lc214` | LC 214 lake → `ai.lc214_*` + vectors → lc05/lc06 gates | AI profile only (`make up-ai`): PDF from the Câmara → parse → 867 vectors → gates; the answer step (lc06) is the long one, ~40 min on CPU |
 
 ```powershell
 docker compose exec -T airflow-scheduler airflow dags unpause dag_setup_infrastructure
 docker compose exec -T airflow-scheduler airflow dags unpause dag_dbt_anp
-docker compose exec -T airflow-scheduler airflow dags unpause dag_rag_anp
 docker compose exec -T airflow-scheduler airflow dags unpause dag_observability_health
 docker compose exec -T airflow-scheduler airflow dags trigger dag_dbt_anp
 ```
-(`make demo` does the same.)
+(`make demo` does the same.) The LC 214 RAG, with the AI profile up:
+```powershell
+docker compose exec -T airflow-scheduler airflow dags unpause dag_rag_lc214
+docker compose exec -T airflow-scheduler airflow dags trigger dag_rag_lc214
+```
 
 ## 5. Verify
 
-- Grafana `/d/datalabs-pipeline-health`, `/d/datalabs-anp`, `/d/datalabs-nfe` show fresh data.
+- Grafana `/d/datalabs-pipeline-health`, `/d/datalabs-anp`, `/d/datalabs-nfe` (and `/d/datalabs-rag-lc214`) show fresh data.
 - `obs.v_check_last_result`: health checks pass (suspended ones show their reason).
-- `rag_context_parity`: gold GO rows = vectors.
+- `lc214_serving_parity` / `lc214_vector_parity`: the served law and the vectors match the current parse.

@@ -2,6 +2,7 @@
 
 **Status:** accepted (`pipelines/commons/ai/llm_usage.py`, table `ai.llm_call` in
 `infra/postgres/init/sql/07_llm_usage.sql`, row 6 of the board **DataLabs · RAG LC 214**, checks `llm_*`).
+Since [ADR 0020](0020-retire-anp-rag.md) the LC 214 generation is the only consumer: the ANP assistant below was retired.
 
 **Context.** The lab calls a local LLM in two places: the LC 214 answer generation (`lc06_generate`, qwen2.5:3b)
 and the interactive ANP assistant (`rag03_generator`, llama3.2:1b). Ollama returns the token counts of every call
