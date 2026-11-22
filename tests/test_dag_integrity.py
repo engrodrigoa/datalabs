@@ -20,7 +20,7 @@ pytest.importorskip("airflow.sdk", reason="Airflow 3 not installed (runs in the 
 DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
 EXPECTED_DAGS = {
     "dag_dbt_anp", "dag_nfe", "dag_observability_health", "dag_rag_lc214", "dag_rfb",
-    "dag_rfb_dw_dbt", "dag_rtc_ref", "dag_setup_infrastructure",
+    "dag_rfb_dw_dbt", "dag_rtc_explain", "dag_rtc_ref", "dag_setup_infrastructure",
 }
 
 
@@ -82,6 +82,10 @@ def test_assets_wire_the_producer_and_consumer_dags(dagbag_and_warnings):
     rtc = bag.dags["dag_rtc_ref"].timetable
     assert "datalabs://serving/lc214" in str(rtc.asset_condition)
     assert rtc.timetable.expression == "20 6 * * *"
+    # the RTC models are built -> each cClassTrib is explained from the provisions of the bridge (ADR 0022)
+    built = {o.uri for t in bag.dags["dag_rtc_ref"].tasks for o in t.outlets}
+    assert "datalabs://gold/rtc" in built
+    assert "datalabs://gold/rtc" in str(bag.dags["dag_rtc_explain"].timetable.asset_condition)
 
 
 @pytest.mark.parametrize("logical_date", [None, datetime(2026, 11, 4, 9, 0, tzinfo=timezone.utc)],

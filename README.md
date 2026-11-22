@@ -30,7 +30,8 @@ and data health checks, all in Grafana).
 The NF-e and the LC 214 meet on the **cClassTrib** code (the tax classification every NF-e item carries). The
 official table gives each code a legal reference (`Art. 412, I`); the LC 214 router reads it, with no LLM, and
 **every adherent NF-e item points at the text of the law that grounds its taxation**
-([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md)).
+([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md)). From those provisions the local LLM writes **why** each
+classification has its treatment, citing the law as the source ([ADR 0022](docs/adr/0022-cclasstrib-explanation.md)).
 
 Every product is planned in the same three lanes, and this README describes each one that way:
 
@@ -96,6 +97,7 @@ docker compose exec -T airflow-scheduler airflow dags trigger dag_rfb --conf '{"
 make nfe-quickstart   # Elementary tables, 2,000 notes Jan–Sep/2026 with anomalies, unpauses + triggers dag_nfe
 make nfe-stream       # then: continuous arrival, 12 batches of 200 notes, one every 5 min
 make rtc-ref          # official cClassTrib/NCM tables (Receita calculator) -> adherence of every item
+make rtc-explain      # AI profile: why each cClassTrib has its treatment, cited from the LC 214 (~3 h the first time)
 ```
 
 <a id="lc214"></a>**⚖️ RAG LC 214** (needs the AI profile: sentence-transformers on CPU + Ollama with `qwen2.5:3b`):
@@ -282,9 +284,9 @@ flowchart LR
 
 | Lane | |
 |---|---|
-| **Data** | simulated issuer (`gen_nfe.py`) → inbox → batch (`ctrl.nfe_lote`) → bronze via SQL (`pg_read_file`, insert-only) → dbt: `XMLTABLE` silver → participant SCD2 → gold star schema (`ft_nfe_item`, `ft_nfe_documento`, `ag_nfe_ibscbs_mensal`). Reference: the Receita's Flyway scripts (`ReceitaFederal/calculadora-rtc-regime-regular`) replayed in SQLite → `ref_rtc` → `silver.rtc_*` → `dm_nfe_tributacao` + `ft_nfe_item_aderencia_rtc` (`dag_rtc_ref`) → legal basis: `FDLG_TEXTO_CURTO` → LC 214 router → `ai.rtc_lc214_fundamento` → `gold.br_cclasstrib_lc214` / `vw_nfe_item_fundamento_lc214` |
+| **Data** | simulated issuer (`gen_nfe.py`) → inbox → batch (`ctrl.nfe_lote`) → bronze via SQL (`pg_read_file`, insert-only) → dbt: `XMLTABLE` silver → participant SCD2 → gold star schema (`ft_nfe_item`, `ft_nfe_documento`, `ag_nfe_ibscbs_mensal`). Reference: the Receita's Flyway scripts (`ReceitaFederal/calculadora-rtc-regime-regular`) replayed in SQLite → `ref_rtc` → `silver.rtc_*` → `dm_nfe_tributacao` + `ft_nfe_item_aderencia_rtc` (`dag_rtc_ref`) → legal basis: `FDLG_TEXTO_CURTO` → LC 214 router → `ai.rtc_lc214_fundamento` → `gold.br_cclasstrib_lc214` / `vw_nfe_item_fundamento_lc214` → explanation: provisions + table facts → local LLM → `ai.rtc_cclasstrib_explicacao` (`dag_rtc_explain`, AI profile) |
 | **Observability** | each batch moves `CARREGADO → PROCESSADO`, rejected files are rows in `ctrl.nfe_arquivo_rejeitado`; each official table version is a row in `ctrl.rtc_carga` (sha, release, contract), a run with the same sha exits *skipped*; board *NF-e (IBS/CBS)* |
-| **Quality** | contracts on silver; custom tests (access-key and CNPJ check digits, cClassTrib × CST, header × item reconciliation of IBS/CBS bases and totals, the 2026 IBS/CBS base rule: vProd − ICMS − PIS − COFINS); business anomalies as `warn` + `store_failures` quarantine in `dq_nfe`; Elementary volume monitor; all scoped to the batch in flight. **Adherence to the official table**, one status per item: cClassTrib inexistent, out of validity, CST incompatible, NCM ineligible for the benefit, reduction % different from the official one; 5 `rtc_*` checks. **Legal basis**: citation resolved to one provision, cited provision still in force, Receita's transcription × law text; 4 `rtc_lc214_*` checks |
+| **Quality** | contracts on silver; custom tests (access-key and CNPJ check digits, cClassTrib × CST, header × item reconciliation of IBS/CBS bases and totals, the 2026 IBS/CBS base rule: vProd − ICMS − PIS − COFINS); business anomalies as `warn` + `store_failures` quarantine in `dq_nfe`; Elementary volume monitor; all scoped to the batch in flight. **Adherence to the official table**, one status per item: cClassTrib inexistent, out of validity, CST incompatible, NCM ineligible for the benefit, reduction % different from the official one; 5 `rtc_*` checks. **Legal basis**: citation resolved to one provision, cited provision still in force, Receita's transcription × law text; 4 `rtc_lc214_*` checks. **Explanation**: cites what it read, cites the bridge's provision, no rate without a source; 10 golden cases + human review, gate vs. a committed baseline; 2 `rtc_explain_*` checks |
 
 * **SQL + dbt only:** ingestion is a PL/pgSQL function and parsing is `XMLTABLE` in dbt. Python only orchestrates and
   simulates the source system. The XML is validated against the official XSDs (IBS/CBS/IS groups, alphanumeric CNPJ).
@@ -305,6 +307,14 @@ flowchart LR
   202 references, **236 linked to one provision (100%)**, 0 revoked, 3 transcriptions that differ from the law's
   text. One reference is ambiguous *in the source* ("Art. 80 II": two §§ have an inciso II); the Receita's own
   transcription quotes one of them, so the bridge links it as `resolved_by_text` and keeps both candidates.
+* **Why each classification has its treatment** ([ADR 0022](docs/adr/0022-cclasstrib-explanation.md)): `rtc04_explain`
+  gives the local LLM (qwen2.5:3b) the articles the bridge linked plus the table's facts, and keeps the LC 214
+  generator's barriers: an explanation is shown only when it cites a provision it was shown, with the law as the
+  source (`fontes`). No vector search: the context is decided by data, so the auditor-vocabulary gap of the RAG does
+  not apply. Per row it checks that the citation falls on the bridge's provision and that every percentage stated is
+  in the table or the law. Incremental by a fingerprint per row (prompt, model digest), resumable in 80-min runs
+  (`dag_rtc_explain`, on the asset `datalabs://gold/rtc`). 202 classifications: 200 with a provision, 2 "Regra Geral"
+  with a fixed text; context p50 439 tokens, max 1,938.
 * **Where the data comes from:** there is no public NF-e dataset, so
   [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: XSD-valid notes with a stable register
   of fictitious companies, dated register changes for the SCD2 and plausible anomalies on demand. Only public codes
@@ -400,7 +410,7 @@ Exit codes keep their Airflow meaning: `0` success, `99` skipped (*no new data*)
   error_after_hours: 408
 ```
 
-32 checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source that
+34 checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source that
 silently stops publishing is detected even when no DAG runs. Each check carries guardrails: `timeout_s` (a slow query
 ends as `error`, never hangs the DAG), `cost: heavy` (full scans run after their own pipeline, not in the 6-hourly
 sweep) and `suspended: "<reason>"` (recorded as `skipped` with the reason, visible in Grafana).
@@ -511,6 +521,7 @@ scripts/                      preflight, doctor, NF-e source simulator, ANP samp
 | | | [0016](docs/adr/0016-anp-streamlit-analytics-layer.md) | ANP analytics layer: two serving marts, read-only role |
 | | | [0019](docs/adr/0019-rtc-official-reference-tables.md) | Official cClassTrib/NCM tables (Receita calculator) and NF-e adherence |
 | | | [0021](docs/adr/0021-cclasstrib-lc214-bridge.md) | NF-e × LC 214: each cClassTrib's legal reference resolved into provisions |
+| | | [0022](docs/adr/0022-cclasstrib-explanation.md) | Why each cClassTrib has its treatment: cited explanation from the bridge's provisions |
 
 Superseded, kept as history: [0005](docs/adr/0005-rag-router.md) (RAG over tabular data: SQL first, vectors second)
 and [0007](docs/adr/0007-rag-incremental-embeddings.md) (incremental embeddings), both by 0020.
@@ -521,7 +532,8 @@ and [0007](docs/adr/0007-rag-incremental-embeddings.md) (incremental embeddings)
 
 **AI: the LC 214 RAG (focus)**
 - [x] NF-e × LC 214 bridge: each official cClassTrib's legal reference resolved into provisions by the router, no LLM ([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md))
-- [ ] The RAG explains an item's taxation: the bridge's provision as the anchor of the `combined` route
+- [x] Why each cClassTrib has its treatment: the local LLM explains it from the bridge's provisions, citing the law ([ADR 0022](docs/adr/0022-cclasstrib-explanation.md))
+- [ ] Explanation baseline from the first full lab run (`rtc04_explain --write-baseline`); NF-e item → explanation join in dbt
 - [ ] Answer generation to its acceptance bar (2/9 → 3/9 measured, ADR 0015): fiscal → legal glossary, labelled context lines, full golden run on the lambda server
 - [ ] Retrieval quality: hybrid search (Postgres full-text + vectors with reciprocal rank fusion) against the fiscal vocabulary gap, a similarity threshold that answers "not in the law"
 - [ ] Answer-level evaluation (faithfulness) next to the citation check

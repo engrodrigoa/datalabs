@@ -37,7 +37,8 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   `datalabs://landing/rfb` → `dag_rfb_dw_dbt`, `dag_nfe` (FileSensor, every 10 min), `dag_rag_lc214` (Mon 06:40,
   LC 214 lc01→lc04a/lc04c + golden contract → lc05 gate → lc06 generation; asset `datalabs://silver/lc214`),
   `dag_rtc_ref` (daily 06:20 OR asset `datalabs://serving/lc214` emitted by `dag_rag_lc214.load_postgres`; official
-  cClassTrib/NCM tables -> `ref_rtc` -> `link_lc214` (rtc03, ADR 0021) -> NF-e adherence, ADR 0019),
+  cClassTrib/NCM tables -> `ref_rtc` -> `link_lc214` (rtc03, ADR 0021) -> NF-e adherence, ADR 0019; `publish_rtc`
+  emits `datalabs://gold/rtc` -> `dag_rtc_explain`, rtc04, ADR 0022),
   `dag_observability_health` (every 6 h), `dag_setup_infrastructure`
 - `pipelines/{anp,rfb,rag/lc214,rtc}/` — numbered scripts, one per task (`rag/lc214`: legislation RAG, ADR 0010;
   `rtc`: Receita calculator reference tables, `flyway_replay.py` rebuilds its SQLite from the Flyway scripts, ADR 0019)
@@ -50,7 +51,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - `infra/postgres/init/` — bootstrap + idempotent DDL (the single source of truth for non-dbt tables)
 - `grafana/dashboards-src/build.py` — dashboards as code → `grafana/dashboards/*.json` (`rag_lc214`: the RAG board)
 - `docs/case-study/lc214-rag.md` — end-to-end study guide of the LC 214 RAG (pt-BR): why each step, metric, failure mode
-- `docs/adr/` (0001–0021), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
+- `docs/adr/` (0001–0022), `docs/runbook-rebuild.md`, `docs/nfe/README.md`, `tests/`
 
 ## Architecture decisions (summaries — read the ADR before contradicting one)
 
@@ -184,6 +185,16 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   diverge. dbt:
   `gold.br_cclasstrib_lc214`, `gold.vw_nfe_item_fundamento_lc214` (via `cltr_id`, now in
   `ft_nfe_item_aderencia_rtc`). Checks `rtc_lc214_*` (requires: ai, warn).
+- **0022 cClassTrib explanation:** `rtc04_explain` (DAG `dag_rtc_explain` on asset `datalabs://gold/rtc`, emitted by
+  `dag_rtc_ref.publish_rtc` after dbt_rtc). Input = a cClassTrib (`silver.rtc_cclasstrib` row); context = the articles
+  of the bridge's provisions via `retriever.build_block` with no hits (no vector search), law first, table facts last
+  (reductions only > 0, annex in roman); lc06's schema, options, barriers and `model_text` rule; no linked provision
+  -> fixed text, no LLM (`no_anchor`). Output `ai.rtc_cclasstrib_explicacao`: text + `fontes` (the law as source),
+  `cita_ponte` (strict: anchor or inside it, not the caput of an anchored §), `numeros_sem_fonte`. Incremental by a
+  fingerprint per row (prompt + prompt version + model digest + `EXPLAIN_VERSION`), one commit per row, placeholder
+  / `pendente` rows, `RTC_EXPLAIN_MAX_MINUTES` (80) per run, golden cases first then grouped by anchors (shared
+  prefix). Gate vs `explain_baseline.yml` (none yet: written by `--write-baseline` after the first full lab run);
+  10 golden cases with a human `review` (verdict + sha). Checks `rtc_explain_*`.
 
 ## Development rules
 
@@ -212,7 +223,7 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
 - Cross-layer and time-based rules go in `pipelines/observability/checks.yml` (types: freshness, threshold,
   reconciliation); model contracts go in dbt tests. Guardrails per check: `timeout_s`, `cost: heavy`
   (full scans: run after their pipeline, not every 6 h), `suspended: "<reason>"` (temporary, shows in Grafana).
-  Current state: 32 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
+  Current state: 34 checks, 0 suspended. Suspending a check needs a reason and a follow-up.
 
 **Database / Grafana**
 - DDL lives in `infra/postgres/init/sql/*.sql`, idempotent (`IF NOT EXISTS`, `CREATE OR REPLACE`); applied on an empty
