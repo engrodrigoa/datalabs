@@ -11,8 +11,10 @@ deterministic code the golden contract checks) and resolves it against the provi
         -> provisions lc214-2025:art-146:par-1:inc-I  |  lc214-2025:art-146:par-1:inc-II   (outcome resolved)
 
 One row per (reference, citation) in ai.rtc_lc214_fundamento, with:
-    outcome       resolved | ambiguous (the law prints several candidates) | not_found | foreign (another law) |
-                  unparsed (no citation in the reference, e.g. "LC 214/2025" with "Regra Geral")
+    outcome       resolved | resolved_by_text (the reference is ambiguous, but exactly one candidate's whole text is in
+                  the Receita's transcription: the transcription says which one; `candidatos` keeps all of them) |
+                  ambiguous (the law prints several candidates and the transcription does not single one out) |
+                  not_found | foreign (another law) | unparsed (no citation, e.g. "LC 214/2025" with "Regra Geral")
     status_lei    vigente | revogado | vetado: a cClassTrib grounded in a revoked provision is a signal
     texto_check   the transcription against the law served, per resolved provision:
                   match (the provision's text is in the transcription, word by word) | near (>= 90% of its words) |
@@ -48,10 +50,11 @@ logger = get_logger("rtc03_lc214")
 EXIT_OK, EXIT_SKIPPED, EXIT_FAILED = 0, 99, 1
 # Bump when the rows this step writes change meaning (parser rule, text check): the next run rebuilds the bridge
 # even if neither source changed. The router's own changes are covered too: it is this step's parser.
-BRIDGE_VERSION = "1"
+BRIDGE_VERSION = "2"        # 2: ambiguous references disambiguated by the transcription
 NEAR = 0.90                 # share of the provision's words found in the transcription to call it "near"
 MIN_TRANSCRIPTION_WORDS = 5
 TABLE = "ai.rtc_lc214_fundamento"
+LINKED = ("resolved", "resolved_by_text")       # outcomes that carry ONE provision
 
 
 # --------------------------------------------------------------------------- pure logic (unit-tested)
@@ -83,6 +86,16 @@ def text_check(provision_text: str, transcription: str | None) -> tuple[str, flo
     found = sum(min(n, pool[w]) for w, n in Counter(p).items())
     share = round(found / len(p), 4)
     return ("near" if share >= NEAR else "diverges"), share
+
+
+def disambiguate(candidates: list[str], law: dict[str, dict], transcription: str | None) -> str | None:
+    """The one candidate whose whole text is in the transcription, word by word (`match`), else None.
+
+    Strict on purpose: "near" is not enough (two incisos II of the same article can share most of their words),
+    and two matches stay ambiguous (the transcription quotes both). The reference stays ambiguous in the source; the
+    row says it was resolved by the text, and keeps every candidate."""
+    hits = [pid for pid in candidates if text_check(law[pid]["texto"], transcription)[0] == "match"]
+    return hits[0] if len(hits) == 1 else None
 
 
 @dataclass
@@ -119,7 +132,14 @@ def build_bridge(fundamentos: list[dict], law: dict[str, dict]) -> list[BridgeRo
                     row.outcome, row.dispositivo_id, row.status_lei = "resolved", hits[0], prov["status"]
                     row.texto_check, row.cobertura_texto = text_check(prov["texto"], f.get("fdlg_texto"))
                 elif hits:
-                    row.outcome, row.candidatos = "ambiguous", hits
+                    row.candidatos = hits
+                    pick = disambiguate(hits, law, f.get("fdlg_texto"))
+                    if pick:
+                        prov = law[pick]
+                        row.outcome, row.dispositivo_id, row.status_lei = "resolved_by_text", pick, prov["status"]
+                        row.texto_check, row.cobertura_texto = "match", 1.0
+                    else:
+                        row.outcome = "ambiguous"
                 else:
                     row.outcome = "not_found"
             out.append(row)
@@ -129,14 +149,16 @@ def build_bridge(fundamentos: list[dict], law: dict[str, dict]) -> list[BridgeRo
 def summarize(rows: list[BridgeRow]) -> dict:
     """Counts for the step's metrics and the log line (the health checks read the table itself)."""
     outcome = Counter(r.outcome for r in rows)
-    check = Counter(r.texto_check for r in rows if r.outcome == "resolved")
-    own = outcome["resolved"] + outcome["ambiguous"] + outcome["not_found"]
+    linked = [r for r in rows if r.outcome in LINKED]
+    check = Counter(r.texto_check for r in linked)
+    own = len(linked) + outcome["ambiguous"] + outcome["not_found"]
     return {
         "references": len({r.fdlg_id for r in rows}),
         "citations": len(rows),
-        **{f"outcome_{k}": outcome[k] for k in ("resolved", "ambiguous", "not_found", "foreign", "unparsed")},
-        "resolved_pct": round(100 * outcome["resolved"] / own, 2) if own else None,
-        "cites_inactive": sum(1 for r in rows if r.outcome == "resolved" and r.status_lei != "vigente"),
+        **{f"outcome_{k}": outcome[k]
+           for k in ("resolved", "resolved_by_text", "ambiguous", "not_found", "foreign", "unparsed")},
+        "resolved_pct": round(100 * len(linked) / own, 2) if own else None,
+        "cites_inactive": sum(1 for r in linked if r.status_lei != "vigente"),
         **{f"text_{k}": check[k] for k in ("match", "near", "diverges", "no_transcription")},
     }
 
@@ -214,11 +236,16 @@ def run(conn, *, force: bool = False) -> int:
              **{k: v for k, v in s.items() if isinstance(v, (int, float)) and k not in ("references", "citations")})
     log_event(logger, "bridge_built",
               f"{s['references']} references -> {s['citations']} citations: {s['outcome_resolved']} resolved "
+              f"(+{s['outcome_resolved_by_text']} by the transcription) "
               f"({s['resolved_pct']}%), {s['outcome_ambiguous']} ambiguous, {s['outcome_not_found']} not found; "
               f"{s['cites_inactive']} cite an inactive provision; transcription {s['text_match']} match / "
               f"{s['text_near']} near / {s['text_diverges']} diverge",
               rtc_sha=rtc_sha, law_sha256=law_sha, **s)
     for r in rows:
+        if r.outcome == "resolved_by_text":
+            log_event(logger, "reference_resolved_by_text", f"{r.referencia!r} is ambiguous in the source "
+                      f"({len(r.candidatos)} candidates); the transcription quotes {r.dispositivo_id}",
+                      fdlg_id=r.fdlg_id, candidates=r.candidatos, chosen=r.dispositivo_id)
         if r.outcome in ("ambiguous", "not_found"):
             log_event(logger, f"reference_{r.outcome}", f"{r.referencia!r}: {r.citacao} {r.outcome}",
                       level=30, fdlg_id=r.fdlg_id, candidates=r.candidatos)

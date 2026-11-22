@@ -607,13 +607,13 @@ def nfe_fiscal() -> Board:
     # law text is gold.br_cclasstrib_lc214. Empty until the law is served (AI profile) and dag_rtc_ref links it.
     b.row("Fundamento legal — cClassTrib oficial × LC 214 (ai.rtc_lc214_fundamento)")
     b.add(stat("Citações resolvidas", """
-        SELECT 100.0 * COUNT(*) FILTER (WHERE outcome = 'resolved')
-               / NULLIF(COUNT(*) FILTER (WHERE outcome IN ('resolved', 'ambiguous', 'not_found')), 0)
+        SELECT 100.0 * COUNT(*) FILTER (WHERE outcome IN ('resolved', 'resolved_by_text'))
+               / NULLIF(COUNT(*) FILTER (WHERE outcome IN ('resolved', 'resolved_by_text', 'ambiguous', 'not_found')), 0)
         FROM ai.rtc_lc214_fundamento""", unit="percent", decimals=1, thresholds=GREEN_RED_RATE,
                desc="Citações da LC 214 nas referências oficiais que resolvem para UM dispositivo (outra lei e "
                     "'Regra Geral' fora da conta)."), 6, 4)
     b.add(stat("Citam dispositivo revogado/vetado", """
-        SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE outcome = 'resolved' AND status_lei <> 'vigente'""",
+        SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE outcome IN ('resolved', 'resolved_by_text') AND status_lei <> 'vigente'""",
                thresholds=[{"color": GOOD, "value": None}, {"color": WARN, "value": 1}],
                desc="cClassTrib oficial fundamentada num dispositivo que a lei servida já revogou ou vetou."), 6, 4)
     b.add(stat("Transcrição diverge da lei", """
@@ -624,11 +624,12 @@ def nfe_fiscal() -> Board:
         SELECT COALESCE(MAX(LEFT(rtc_sha, 7) || ' × ' || LEFT(law_sha256, 12)), 'sem ponte')
         FROM ai.rtc_lc214_fundamento""", color_mode="none",
                desc="Tabela oficial (sha) × lei servida (sha256) de que a ponte foi construída."), 6, 4)
-    b.add(table("Referências a revisar (não resolvidas, revogadas ou com texto divergente)", """
+    b.add(table("Referências a revisar (ambíguas na fonte, não resolvidas, revogadas ou com texto divergente)", """
         SELECT f.referencia, f.citacao, f.outcome, f.status_lei, f.texto_check,
                ROUND(100 * f.cobertura_texto, 1) AS cobertura_pct, f.dispositivo_id
         FROM ai.rtc_lc214_fundamento f
-        WHERE f.outcome IN ('ambiguous', 'not_found') OR f.status_lei <> 'vigente' OR f.texto_check = 'diverges'
+        WHERE f.outcome IN ('ambiguous', 'resolved_by_text', 'not_found') OR f.status_lei <> 'vigente'
+           OR f.texto_check = 'diverges'
         ORDER BY f.outcome, f.referencia LIMIT 50""", status_cols=()), 24, 8)
     return b
 
