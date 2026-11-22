@@ -41,9 +41,11 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['resolved', 'ambiguous', 'not_found', 'foreign', 'unparsed']
+                values: ['resolved', 'resolved_by_text', 'ambiguous', 'not_found', 'foreign', 'unparsed']
       - name: dispositivo_id
-        description: "Preenchido só quando outcome = 'resolved' (um único dispositivo)."
+        description: >
+          Preenchido quando a citação leva a UM dispositivo: outcome 'resolved' (pela referência) ou
+          'resolved_by_text' (referência ambígua, desambiguada pela transcrição da Receita; candidatos mantidos).
         data_tests:
           - relationships:
               arguments:

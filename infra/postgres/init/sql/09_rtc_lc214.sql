@@ -11,8 +11,7 @@ CREATE TABLE IF NOT EXISTS ai.rtc_lc214_fundamento (
     referencia       text,                              -- fdlg_texto_curto as published: "Art. 412, I"
     ordem            integer     NOT NULL,              -- citation number inside the reference (1..n)
     citacao          text,                              -- the citation as read: "art. 412, inciso I"
-    outcome          text        NOT NULL CHECK (outcome IN ('resolved', 'ambiguous', 'not_found', 'foreign',
-                                                              'unparsed')),
+    outcome          text        NOT NULL,              -- domain: constraint below (re-applied on every bootstrap)
     dispositivo_id   text,                              -- -> ai.lc214_dispositivo (resolved only)
     candidatos       jsonb,                             -- ambiguous: every provision the citation matches
     status_lei       text,                              -- vigente | revogado | vetado (of the resolved provision)
@@ -24,6 +23,12 @@ CREATE TABLE IF NOT EXISTS ai.rtc_lc214_fundamento (
     computed_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (fdlg_id, ordem)
 );
+-- ADR 0021 amendment 1 adds 'resolved_by_text'. A named constraint, dropped and re-created, so a volume created with
+-- the first version (its inline, auto-named rtc_lc214_fundamento_outcome_check) is migrated in place.
+ALTER TABLE ai.rtc_lc214_fundamento DROP CONSTRAINT IF EXISTS rtc_lc214_fundamento_outcome_check;
+ALTER TABLE ai.rtc_lc214_fundamento DROP CONSTRAINT IF EXISTS ck_rtc_lc214_fundamento_outcome;
+ALTER TABLE ai.rtc_lc214_fundamento ADD CONSTRAINT ck_rtc_lc214_fundamento_outcome
+    CHECK (outcome IN ('resolved', 'resolved_by_text', 'ambiguous', 'not_found', 'foreign', 'unparsed'));
 CREATE INDEX IF NOT EXISTS ix_rtc_lc214_fundamento_disp ON ai.rtc_lc214_fundamento (dispositivo_id);
 
 COMMENT ON TABLE ai.rtc_lc214_fundamento IS

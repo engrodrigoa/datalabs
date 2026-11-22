@@ -302,8 +302,9 @@ flowchart LR
   one row per citation, outcome named (resolved, ambiguous, not found), status of the provision, and the Receita's
   transcription compared with the law's text. It runs when either side changes: a new official version (daily) or
   a new law version (asset `datalabs://serving/lc214`). Measured on the official table 1.7.2: 238 citations from
-  202 references, **235 resolved (99.58%)**, 0 revoked, 1 ambiguous *in the source* ("Art. 80 II": two §§ have an
-  inciso II), 3 transcriptions that differ from the law's text.
+  202 references, **236 linked to one provision (100%)**, 0 revoked, 3 transcriptions that differ from the law's
+  text. One reference is ambiguous *in the source* ("Art. 80 II": two §§ have an inciso II); the Receita's own
+  transcription quotes one of them, so the bridge links it as `resolved_by_text` and keeps both candidates.
 * **Where the data comes from:** there is no public NF-e dataset, so
   [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: XSD-valid notes with a stable register
   of fictitious companies, dated register changes for the SCD2 and plausible anomalies on demand. Only public codes

@@ -19,7 +19,7 @@ select
     f.referencia,                   -- como a Receita publica: "Art. 412, I"
     f.ordem,
     f.citacao,                      -- como o parser leu: "art. 412, inciso I"
-    f.outcome,                      -- resolved | ambiguous | not_found | foreign | unparsed
+    f.outcome,                      -- resolved | resolved_by_text | ambiguous | not_found | foreign | unparsed
     f.dispositivo_id,
     f.candidatos,
     d.rotulo,

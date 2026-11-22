@@ -381,15 +381,17 @@ checks:
     dataset: ai.rtc_lc214_fundamento
     type: threshold
     severity: warn
-    # % of the LC 214 citations in the official references that resolve to ONE provision (another law and
+    # % of the LC 214 citations in the official references linked to ONE provision, by the reference itself or
+    # by the transcription when the reference is ambiguous (ADR 0021, amendment 1; another law and
     # "Regra Geral" are not counted). A drop is a parser regression or an amendment that renumbered a cited
     # provision: the misses are named in the step's `reference_not_found` / `reference_ambiguous` events.
     query: >
-      SELECT 100.0 * COUNT(*) FILTER (WHERE outcome = 'resolved')
-             / NULLIF(COUNT(*) FILTER (WHERE outcome IN ('resolved', 'ambiguous', 'not_found')), 0)
+      SELECT 100.0 * COUNT(*) FILTER (WHERE outcome IN ('resolved', 'resolved_by_text'))
+             / NULLIF(COUNT(*) FILTER (WHERE outcome IN ('resolved', 'resolved_by_text', 'ambiguous', 'not_found')), 0)
       FROM ai.rtc_lc214_fundamento
-    # measured 2026-11-22 (table 1.7.2 x law 0cf36f4433ce): 235/236 = 99.58%; floor = one more miss (99.15%)
-    min: 99.0
+    # measured 2026-11-22 (table 1.7.2 x law 0cf36f4433ce): 236/236 = 100% ("Art. 80 II" by the transcription);
+    # floor = one miss (99.58%)
+    min: 99.5
 
   - name: rtc_lc214_cites_inactive_provision
     pipeline: rtc
@@ -400,7 +402,7 @@ checks:
     # an official cClassTrib grounded in a revoked or vetoed provision: a signal for the business (the table is
     # behind the law), never a pipeline failure. Listed in gold.br_cclasstrib_lc214 (status_lei).
     query: >
-      SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE outcome = 'resolved' AND status_lei <> 'vigente'
+      SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE outcome IN ('resolved', 'resolved_by_text') AND status_lei <> 'vigente'
     max: 0
 
   - name: rtc_lc214_transcription_diverges

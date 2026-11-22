@@ -132,3 +132,42 @@ def test_a_new_law_version_or_bridge_version_rebuilds():
 def test_no_law_served_is_a_skip_not_a_failure():
     conn = _Conn(_db(law_sha=None))
     assert br.run(conn) == br.EXIT_SKIPPED and "written" not in conn.db
+
+
+# --------------------------------------------------------------------------- disambiguation (ADR 0021, amendment 1)
+TWO_INC_II = {
+    P + "art-80": {"status": "vigente", "texto": "Art. 80. Considera-se exportação de serviço:"},
+    P + "art-80:par-1:inc-II": {"status": "vigente",
+                                "texto": "II - o fornecimento dos seguintes bens e serviços vinculados à exportação:"},
+    P + "art-80:par-1-A:inc-II": {"status": "vigente", "texto": "II - a cessão de direitos de uso no exterior;"},
+}
+
+
+def test_an_ambiguous_reference_is_resolved_by_the_transcription_when_one_candidate_matches():
+    rows = br.build_bridge([_f(169, "Art. 80 II", "Art. 80. Considera-se exportação de serviço:\\nII - o fornecimento "
+                                                  "dos seguintes bens e serviços vinculados à exportação: a) seguro;")],
+                           TWO_INC_II)
+    (r,) = rows
+    assert (r.outcome, r.dispositivo_id, r.texto_check) == ("resolved_by_text", P + "art-80:par-1:inc-II", "match")
+    assert sorted(r.candidatos) == [P + "art-80:par-1-A:inc-II", P + "art-80:par-1:inc-II"]    # all kept
+    s = br.summarize(rows)
+    assert (s["outcome_resolved_by_text"], s["outcome_ambiguous"], s["resolved_pct"]) == (1, 0, 100.0)
+
+
+def test_it_stays_ambiguous_when_the_transcription_does_not_single_one_out():
+    both = "II - o fornecimento dos seguintes bens e serviços vinculados à exportação: II - a cessão de direitos de uso"
+    cases = {
+        "none": "Regra Geral do regime de exportação de serviços e bens imateriais",
+        "both": both + " no exterior;",
+        "near only": "II - o fornecimento de bens e serviços vinculados à exportação, a saber:",   # words missing
+    }
+    for name, transcription in cases.items():
+        (r,) = br.build_bridge([_f(169, "Art. 80 II", transcription)], TWO_INC_II)
+        assert (r.outcome, r.dispositivo_id) == ("ambiguous", None), name
+        assert len(r.candidatos) == 2, name
+
+
+def test_a_new_bridge_version_rebuilds_the_bridge_written_by_the_old_one():
+    assert br.BRIDGE_VERSION == "2"
+    old = _Conn(_db(fingerprint=[("s" * 40, "a" * 64, "1")]))
+    assert br.run(old) == br.EXIT_OK

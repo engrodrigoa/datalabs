@@ -173,13 +173,15 @@ existing package frozen as a constraint. Keep it that way (see `Dockerfile`).
   Do not add a second RAG: new AI work extends the LC 214 (next: the NF-e bridge via cClassTrib).
 - **0021 NF-e × LC 214 bridge:** `rtc03_lc214` (task `link_lc214` in `dag_rtc_ref`, after the load, NONE_FAILED)
   reads `ref_rtc.fundamentacao_legal.fdlg_texto_curto` with the LC 214 router (`parse_citations` + `Index.resolve`,
-  no LLM) into `ai.rtc_lc214_fundamento`: one row per citation, outcome resolved | ambiguous | not_found | foreign |
-  unparsed, `status_lei`, `texto_check` (Receita's transcription `fdlg_texto` × law text by words: match | near
-  ≥ 90% | diverges | no_transcription). Rebuilt (DELETE + INSERT, one tx) when (rtc sha, law sha256,
+  no LLM) into `ai.rtc_lc214_fundamento`: one row per citation, outcome resolved | resolved_by_text | ambiguous |
+  not_found | foreign | unparsed, `status_lei`, `texto_check` (Receita's transcription `fdlg_texto` × law text by
+  words: match | near ≥ 90% | diverges | no_transcription). Rebuilt (DELETE + INSERT, one tx) when (rtc sha, law sha256,
   `BRIDGE_VERSION`) changes; exit 99 otherwise or when the law is not served (no AI profile). Router reads lists and
   ranges (", X", " e X", " a X" after a bare roman or the plural "incisos"/"§§"/"parágrafos"; numeric article
   ranges expanded, ≤ 60; "31-A a 31-E" keeps its ends); a legal-order segment closes at its article. Measured
-  (table 1.7.2): 238 citations, 235 resolved, 1 ambiguous in the source, 3 transcriptions diverge. dbt:
+  (table 1.7.2): 238 citations, 235 resolved + 1 `resolved_by_text` (amendment 1: an ambiguous reference whose
+  transcription contains exactly ONE candidate's whole text; candidates kept; `BRIDGE_VERSION` 2), 3 transcriptions
+  diverge. dbt:
   `gold.br_cclasstrib_lc214`, `gold.vw_nfe_item_fundamento_lc214` (via `cltr_id`, now in
   `ft_nfe_item_aderencia_rtc`). Checks `rtc_lc214_*` (requires: ai, warn).
 

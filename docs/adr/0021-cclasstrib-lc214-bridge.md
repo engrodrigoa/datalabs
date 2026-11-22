@@ -1,6 +1,6 @@
 # ADR 0021 — NF-e × LC 214: the legal reference of each cClassTrib resolved into provisions of the law
 
-**Status:** accepted (`pipelines/rtc/rtc03_lc214.py`, task `link_lc214` in `dag_rtc_ref`, table
+**Status:** accepted, amended 2026-11-22 (disambiguation by the transcription, below) (`pipelines/rtc/rtc03_lc214.py`, task `link_lc214` in `dag_rtc_ref`, table
 `ai.rtc_lc214_fundamento` in `infra/postgres/init/sql/09_rtc_lc214.sql`, dbt `gold.br_cclasstrib_lc214` +
 `gold.vw_nfe_item_fundamento_lc214`, checks `rtc_lc214_*`, NF-e board row "Fundamento legal"). Router extension
 in `pipelines/rag/lc214/router.py`.
@@ -91,3 +91,28 @@ Not covered yet: bare article numbers after a list of paragraphs ("arts. 446, 45
   analyst writes, which the chat phrasings of the golden set did not cover.
 - The bridge needs the law served, i.e. the AI profile. On the base stack it is skipped and its checks too.
 - `FDLG_TEXTO` is compared, not stored again: the transcription stays in `ref_rtc`, the verdict in the bridge.
+
+## Amendment 1 (2026-11-22) — an ambiguous reference disambiguated by the Receita's transcription
+
+**Context.** One reference of table 1.7.2 is ambiguous in the source: "Art. 80 II" (fdlg 169). Art. 80 has no
+inciso in its caput and an inciso II in both § 1º and § 1º-A. The bridge kept it `ambiguous`, while the row itself
+carried the answer: the Receita's transcription quotes one of the two texts ("o fornecimento dos seguintes bens e
+serviços... vinculados à exportação").
+
+**Decision.** A new outcome, `resolved_by_text`: when a citation has several candidates and **exactly one**
+candidate's whole text is in the transcription, word by word (`match`), the bridge links that one, and keeps
+`candidatos` (every provision the reference could mean). Strict on purpose: `near` is not enough (two incisos II of
+one article can share most of their words), and two matches stay `ambiguous`. `BRIDGE_VERSION` 1 → 2, so the next
+run rebuilds the bridge without a new table or law version. The CHECK constraint is now named
+(`ck_rtc_lc214_fundamento_outcome`) and re-created by `09_rtc_lc214.sql`, which drops the auto-named one of the
+first version: a volume created before is migrated by `make db-bootstrap`.
+
+**What stays visible.** The reference is still ambiguous in the source, and that remains a signal: the row says
+`resolved_by_text` (not `resolved`), the step logs `reference_resolved_by_text` with the candidates and the choice,
+and the NF-e board keeps it in "Referências a revisar". Checks count it as linked:
+`rtc_lc214_citations_resolved_pct` = (resolved + resolved_by_text) / (those + ambiguous + not_found).
+
+**Measured** (table 1.7.2 × law `0cf36f4433ce`): "Art. 80 II" → `lc214-2025:art-80:par-1:inc-II`; 235 resolved +
+1 resolved by the text, 0 ambiguous: **236/236 linked (100%)**; the check floor moves to 99.5 (one miss). Constraint
+migration tested on a volume of the first version (DDL applied twice); second run exits 99; `dbt build` of the
+bridge models 8/8.
