@@ -128,3 +128,51 @@ def test_the_law_citing_itself_is_a_test_corpus():
     assert (r["resolved"], r["not_found"], r["foreign"], r["own"]) == (1, 1, 1, 2)
     assert r["misses"] == [{"in": P + "art-1", "citation": "art. 900", "outcome": "not_found"}]
     assert r["revoking_articles"] == ["art-540"]
+
+
+# --------------------------------------------------------------------------- lists and ranges (ADR 0021)
+# The official cClassTrib table cites the law in a compact form ("Art. 128, I, II, VIII e XIII", "Art. 127, I a
+# XVIII"); before, only the first inciso was read, and a legal-order list ("incisos I e II do caput") lost them all.
+@pytest.mark.parametrize("citation,labels", [
+    ("Art. 128, I, II, VIII e XIII", ["art. 128, inciso I", "art. 128, inciso II", "art. 128, inciso VIII",
+                                      "art. 128, inciso XIII"]),
+    ("Art. 66, I,III e VII", ["art. 66, inciso I", "art. 66, inciso III", "art. 66, inciso VII"]),
+    ("Art. 127, I a IV", ["art. 127, inciso I", "art. 127, inciso II", "art. 127, inciso III", "art. 127, inciso IV"]),
+    ("Art. 146, § 1º, I e II", ["art. 146, § 1, inciso I", "art. 146, § 1, inciso II"]),
+    ("Art. 26, § 5º-A, I e II", ["art. 26, § 5-A, inciso I", "art. 26, § 5-A, inciso II"]),
+    ("incisos I e II do caput do art. 6º", ["art. 6, inciso I", "art. 6, inciso II"]),
+    ("incisos I a III do art. 9º", ["art. 9, inciso I", "art. 9, inciso II", "art. 9, inciso III"]),
+    ("arts. 99 a 102", ["art. 99", "art. 100", "art. 101", "art. 102"]),
+])
+def test_lists_and_ranges_of_incisos_and_articles(citation, labels):
+    assert [c.label() for c in parse_citations(citation)] == labels
+
+
+def test_a_legal_order_list_keeps_the_caput():
+    cites = parse_citations("incisos I e II do caput do art. 6º")
+    assert all(c.caput for c in cites)
+
+
+@pytest.mark.parametrize("citation,labels", [
+    ("art. 57, § 3º, IV, a", ["art. 57, § 3, inciso IV, alínea a"]),            # "a" after an inciso is an alínea
+    ("Art. 9º, I e § 1º", ["art. 9, inciso I", "art. 9, § 1"]),
+    ("art. 12, V a I", ["art. 12, inciso V"]),                                  # reversed: not a range
+    ("art. 12, I a CC", ["art. 12, inciso I"]),                                 # too long: a misread
+    ("art. 12, I e IIII", ["art. 12, inciso I"]),                               # not a numeral
+    ("os arts. 31-A a 31-E", ["art. 31-A", "art. 31-E"]),                       # letters: the two ends only
+])
+def test_what_is_not_a_list_stays_as_it_was(citation, labels):
+    assert [c.label() for c in parse_citations(citation)] == labels
+
+
+def test_a_list_routes_to_every_provision_it_names():
+    index = Index(IDS + [P + "art-128", P + "art-128:inc-I", P + "art-128:inc-II", P + "art-128:inc-XIII"])
+    p = route("Art. 128, I, II e XIII", index)
+    assert (p.route, p.anchors) == ("sql", [P + "art-128:inc-I", P + "art-128:inc-II", P + "art-128:inc-XIII"])
+
+
+def test_a_legal_order_citation_closes_at_its_article():
+    """LC 214 art. 472: '... incisos I e II do caput do art. 485, § 1º do art. 486 ...' (the § is art. 486's)."""
+    cites = parse_citations("incisos I e II do caput do art. 485, § 1º do art. 486 e § 2º do art. 487")
+    assert [c.label() for c in cites] == ["art. 485, inciso I", "art. 485, inciso II", "art. 486, § 1",
+                                          "art. 487, § 2"]

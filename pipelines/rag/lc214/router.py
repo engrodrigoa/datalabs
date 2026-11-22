@@ -39,15 +39,23 @@ ANSWER_PAGE_WORDS = int(os.getenv("LC214_ANSWER_PAGE_WORDS", "400"))
 # --------------------------------------------------------------------------- lexicon (on accent-free lower text)
 _ORD = r"(?:\s*(?:o|º|°)(?![a-z]))?"
 ART = re.compile(r"\bart(?:igo)?s?\.?\s*(\d{1,3})" + _ORD + r"(?:\s*-\s*([a-z])\b)?")
-PAR = re.compile(r"(?:§\s*|\bpar(?:agrafo)?\.?\s+(?=\d))(\d{1,2})" + _ORD + r"(?:\s*-\s*([a-z])\b)?"
+PAR = re.compile(r"(?:§{1,2}\s*|\bpar(?:agrafos?)?\.?\s+(?=\d))(\d{1,2})" + _ORD + r"(?:\s*-\s*([a-z])\b)?"
                  + r"|\bpar(?:agrafo)?\.?\s*unico\b|\bp\.?\s?u\.?(?=\s|$|,)")
 INC = re.compile(r"\binc(?:isos?)?\.?\s*([ivxlc]+|\d{1,2})\b(?:\s*-\s*([a-z])\b)?")
-ART_MORE = re.compile(r"^\s*(?:,|e|a)\s*(\d{1,3})" + _ORD + r"(?:\s*-\s*([a-z])\b)?")      # "arts. 47 e 48", "31-A a 31-E"
+# the next paragraph of a plural "§§ 3º e 4º" / "parágrafos 3° e 4°" (the official cClassTrib table writes both)
+PAR_MORE = re.compile(r"^\s*(,|e|a)\s*(\d{1,2})(?!\d)" + _ORD + r"(?:\s*-\s*([a-z])\b)?")
+ART_MORE = re.compile(r"^\s*(,|e|a)\s*(\d{1,3})" + _ORD + r"(?:\s*-\s*([a-z])\b)?")      # "arts. 47 e 48", "31-A a 31-E"
 ALI = re.compile(r"\bal(?:ineas?\s+|\.\s*)\"?([a-z])\"?(?![a-z])")      # "alíneas do": the s is not a letter
 CAPUT = re.compile(r"\bcaput\b")
 # chat order only, right after a § or an inciso of the same citation: "art. 12, II", "§ 2º, III, a"
 BARE_ROMAN = re.compile(r"^[\s,]*([IVXLC]+)\b(?![a-zà-ú])")                 # on the ORIGINAL case
 BARE_LETTER = re.compile(r"^[\s,]*\"?([a-z])\"?(?=\s*(?:[,.;:?!)]|$))")
+# the next item of a list of incisos: "I, II, VIII e XIII", "I,III e VII", a range "I a XVIII". Chat order: bare
+# romans on the ORIGINAL case (an uppercase roman is never a Portuguese word); legal order: only after the plural
+# "incisos", on the lower-case text ("incisos i e ii do caput").
+ROMAN_MORE = re.compile(r"^\s*(,|e|a)\s*([IVXLC]+)\b(?![a-zà-ú\-])")
+ROMAN_MORE_PLAIN = re.compile(r"^\s*(,|e|a)\s*([ivxlc]+)\b(?![a-z\-])")
+MAX_RANGE = 60                                   # "I a XVIII" is 18; a bigger span is a misread, not a range
 LINK = re.compile(r"^[\s,]*(?:(?:d[oa]s?|e|no|na|,)\s+)*$")                     # what may sit between parts
 LIST = re.compile(r"^[\s,]*(?:e\s+)?(?:(?:o|a|os|as|no|na|nos|nas|do|da|dos|das|ao)\s+)?$")   # "..., o inciso", "e a alínea"
 FOREIGN = re.compile(r"^[\s,]*(?:(?:e|a)\s+[ivxlc\d]+[\s,]*)*(?:d[aeo]s?\s+)?(?:lei\b|codigo|ctn\b|constituicao|cf\b|cf/88|emenda|decreto|adct\b|"
@@ -87,6 +95,47 @@ def _roman(token: str) -> str:
     return token.upper()
 
 
+def _roman_int(token: str) -> int | None:
+    """'XVIII' -> 18; None when the letters are not a well-formed numeral ('IIII', 'VX')."""
+    token, total = token.upper(), 0
+    for i, ch in enumerate(token):
+        v = ROMAN.get(ch)
+        if v is None:
+            return None
+        total += -v if i + 1 < len(token) and ROMAN.get(token[i + 1], 0) > v else v
+    return total if total and _roman(str(total)) == token else None
+
+
+def _expand(first: str, last: str, as_roman: bool) -> list[str] | None:
+    """The items strictly after `first` up to `last`: ('I', 'IV') -> ['II', 'III', 'IV']; ('99', '102') ->
+    ['100', '101', '102']. None when it is not a plain ascending range (letters, '7-A', reversed, too long)."""
+    a = _roman_int(first) if as_roman else (int(first) if first.isdigit() else None)
+    b = _roman_int(last) if as_roman else (int(last) if last.isdigit() else None)
+    if a is None or b is None or not a < b <= a + MAX_RANGE:
+        return None
+    return [_roman(str(n)) if as_roman else str(n) for n in range(a + 1, b + 1)]
+
+
+def _list_tail(text: str, end: int, first: str, pattern: re.Pattern, as_roman: bool) -> list[tuple[int, int, str]]:
+    """Items that continue a list right after `end`: ", II", " e XIII", " a XVIII" (expanded). Each item is
+    (start, end, value); the items of an expanded range share the span of the range's last item."""
+    items, prev = [], first
+    while m := pattern.match(text[end:]):
+        sep, token = m.group(1), m.group(2)
+        start, stop = end + m.start(2), end + m.end(2)
+        if sep == "a":
+            span = _expand(prev, token, as_roman)
+            if span is None:                             # "I a" + a word, or a reversed range: stop the list
+                break
+            items += [(start, stop, v) for v in span]
+        elif as_roman and _roman_int(token) is None:
+            break
+        else:
+            items.append((start, stop, _roman(token) if as_roman else token))
+        prev, end = (_roman(token) if as_roman else token), stop
+    return items
+
+
 # --------------------------------------------------------------------------- citations
 @dataclass
 class Citation:
@@ -116,17 +165,31 @@ def _components(plain: str, original: str) -> list[tuple[int, int, str, str]]:
     """Every citation part in the question: (start, end, kind, value), in text order."""
     found = []
     for m in ART.finditer(plain):
-        found.append((m.start(), m.end(), "art", m.group(1) + (f"-{m.group(2).upper()}" if m.group(2) else "")))
+        prev = m.group(1) + (f"-{m.group(2).upper()}" if m.group(2) else "")
+        found.append((m.start(), m.end(), "art", prev))
         end = m.end()
-        while more := ART_MORE.match(plain[end:]):                     # "arts. 47 e 48", "31-A a 31-E": one article each
-            found.append((end + more.start(1), end + more.end(), "art",
-                          more.group(1) + (f"-{more.group(2).upper()}" if more.group(2) else "")))
-            end += more.end()
+        while more := ART_MORE.match(plain[end:]):                     # "arts. 47 e 48": one article each
+            value = more.group(2) + (f"-{more.group(3).upper()}" if more.group(3) else "")
+            start, stop = end + more.start(2), end + more.end()
+            # "arts. 99 a 102" is 99, 100, 101 and 102; a range with letters ("31-A a 31-E") keeps its two ends
+            span = _expand(prev, value, as_roman=False) if more.group(1) == "a" else None
+            found += [(start, stop, "art", v) for v in (span or [value])]
+            prev, end = value, stop
     for m in PAR.finditer(plain):
         value = (m.group(1) + (f"-{m.group(2).upper()}" if m.group(2) else "")) if m.group(1) else "unico"
         found.append((m.start(), m.end(), "par", value))
+        if m.group(1) and m.group(0).startswith(("§§", "paragrafos")):     # plural: a list of paragraphs follows
+            prev, end = value, m.end()
+            while more := PAR_MORE.match(plain[end:]):
+                item = more.group(2) + (f"-{more.group(3).upper()}" if more.group(3) else "")
+                span = _expand(prev, item, as_roman=False) if more.group(1) == "a" else None
+                found += [(end + more.start(2), end + more.end(), "par", v) for v in (span or [item])]
+                prev, end = item, end + more.end()
     for m in INC.finditer(plain):
-        found.append((m.start(), m.end(), "inc", _roman(m.group(1)) + (f"-{m.group(2).upper()}" if m.group(2) else "")))
+        value = _roman(m.group(1)) + (f"-{m.group(2).upper()}" if m.group(2) else "")
+        found.append((m.start(), m.end(), "inc", value))
+        if m.group(0).startswith("incisos") and not m.group(2):         # legal order: "incisos i e ii do caput"
+            found += [(a, b, "inc", v) for a, b, v in _list_tail(plain, m.end(), value, ROMAN_MORE_PLAIN, True)]
     for m in ALI.finditer(plain):
         found.append((m.start(), m.end(), "ali", m.group(1)))
     for m in CAPUT.finditer(plain):
@@ -138,6 +201,10 @@ def _components(plain: str, original: str) -> list[tuple[int, int, str, str]]:
         if kind in ("art", "par") and (m := BARE_ROMAN.match(original[end:])):
             extra.append((end + m.start(1), end + m.end(1), "inc", m.group(1)))
             end, kind = end + m.end(1), "inc"
+            tail = _list_tail(original, end, m.group(1), ROMAN_MORE, True)     # "art. 128, I, II e XIII"
+            extra += [(a, b, "inc", v) for a, b, v in tail]
+            if tail:
+                end = tail[-1][1]
         if kind == "inc" and (m := BARE_LETTER.match(plain[end:])):
             extra.append((end + m.start(1), end + m.end(1), "ali", m.group(1)))
     return sorted(set(found + extra))
@@ -162,13 +229,16 @@ def parse_citations(question: str) -> list[Citation]:
         start, end, kind, value = c
         if segs:
             gap = plain[segs[-1]["end"]:start]
-            same_seg = LINK.match(gap) and not re.search(r"\be\b", gap) and (kind not in segs[-1]["kinds"]
-                                                                            or kind == "caput")
+            # legal order ("incisos I e II do caput do art. 485, § 1º do art. 486") climbs to the article and
+            # stops there: once a segment that did not start with the article has one, it is closed
+            closed = segs[-1]["first"] != "art" and "art" in segs[-1]["kinds"]
+            same_seg = LINK.match(gap) and not re.search(r"\be\b", gap) and not closed and (
+                kind not in segs[-1]["kinds"] or kind == "caput")
             if same_seg:
                 segs[-1]["kinds"][kind], segs[-1]["end"] = value, end
                 continue
             segs[-1]["linked"] = bool(LINK.match(gap) or LIST.match(gap))
-        segs.append({"kinds": {kind: value}, "start": start, "end": end, "linked": False})
+        segs.append({"kinds": {kind: value}, "start": start, "end": end, "linked": False, "first": kind})
 
     for seg in segs:
         tail = FOREIGN.match(plain[seg["end"]:]) if "art" in seg["kinds"] else None

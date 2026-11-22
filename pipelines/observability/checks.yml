@@ -355,6 +355,66 @@ checks:
       WHERE dt_emissao >= (SELECT MAX(dt_emissao) - 30 FROM gold.ft_nfe_item_aderencia_rtc)
     max: 1.0
 
+  # ------------------------------------------------------------------ NF-e x LC 214 bridge (ADR 0021)
+  # The legal reference of each official cClassTrib resolved into LC 214 provisions (rtc03_lc214). It needs the law
+  # served in Postgres, which only the AI profile loads: on the base stack these are skipped, not warnings.
+  - name: rtc_lc214_bridge_current
+    pipeline: rtc
+    requires: ai
+    dataset: ai.rtc_lc214_fundamento
+    type: threshold
+    severity: warn
+    # 0 = the bridge was built from the reference version in use AND the law version served. 1 = stale or missing:
+    # a new version arrived and link_lc214 did not run (or failed), so items point at the provisions of an old text.
+    query: >
+      SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM ai.rtc_lc214_fundamento) THEN 1
+                  ELSE (SELECT COUNT(*) FROM (SELECT DISTINCT rtc_sha, law_sha256 FROM ai.rtc_lc214_fundamento) b
+                        WHERE b.rtc_sha IS DISTINCT FROM (SELECT sha FROM ctrl.rtc_carga
+                                                          ORDER BY loaded_at DESC, carga_id DESC LIMIT 1)
+                           OR b.law_sha256 IS DISTINCT FROM (SELECT MIN(source_sha256) FROM ai.lc214_dispositivo))
+             END
+    max: 0
+
+  - name: rtc_lc214_citations_resolved_pct
+    pipeline: rtc
+    requires: ai
+    dataset: ai.rtc_lc214_fundamento
+    type: threshold
+    severity: warn
+    # % of the LC 214 citations in the official references that resolve to ONE provision (another law and
+    # "Regra Geral" are not counted). A drop is a parser regression or an amendment that renumbered a cited
+    # provision: the misses are named in the step's `reference_not_found` / `reference_ambiguous` events.
+    query: >
+      SELECT 100.0 * COUNT(*) FILTER (WHERE outcome = 'resolved')
+             / NULLIF(COUNT(*) FILTER (WHERE outcome IN ('resolved', 'ambiguous', 'not_found')), 0)
+      FROM ai.rtc_lc214_fundamento
+    # measured 2026-11-22 (table 1.7.2 x law 0cf36f4433ce): 235/236 = 99.58%; floor = one more miss (99.15%)
+    min: 99.0
+
+  - name: rtc_lc214_cites_inactive_provision
+    pipeline: rtc
+    requires: ai
+    dataset: ai.rtc_lc214_fundamento
+    type: threshold
+    severity: warn
+    # an official cClassTrib grounded in a revoked or vetoed provision: a signal for the business (the table is
+    # behind the law), never a pipeline failure. Listed in gold.br_cclasstrib_lc214 (status_lei).
+    query: >
+      SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE outcome = 'resolved' AND status_lei <> 'vigente'
+    max: 0
+
+  - name: rtc_lc214_transcription_diverges
+    pipeline: rtc
+    requires: ai
+    dataset: ai.rtc_lc214_fundamento
+    type: threshold
+    severity: warn
+    # cited provisions whose current text is NOT in the Receita's transcription (< 90% of its words): the table
+    # may be behind an amendment, or carry a slip. Baseline 2026-11-22: 3 (arts. 485 I, 485 II, 487 § 2º: the
+    # transcription says "ficará" for "será" and drops the rates written out); a 4th warns
+    query: SELECT COUNT(*) FROM ai.rtc_lc214_fundamento WHERE texto_check = 'diverges'
+    max: 3
+
   # ------------------------------------------------------------------ the observability layer itself
   - name: obs_stale_running_steps
     pipeline: obs

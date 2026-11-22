@@ -28,8 +28,9 @@ and data health checks, all in Grafana).
 | ⚖️ **RAG over the LC 214/2025** | AI data engineering: the tax reform law as a governed source, a deterministic citation router, retrieval and answer **gates**, token usage per call | `dag_rag_lc214` (weekly) | [AI profile](#lc214) | *RAG LC 214* |
 
 The NF-e and the LC 214 meet on the **cClassTrib** code (the tax classification every NF-e item carries). The
-official table already brings each code's legal reference (`Art. 412, I`), which the LC 214 router parses: the next
-study case links each item to the provisions that ground its taxation ([roadmap](#roadmap)).
+official table gives each code a legal reference (`Art. 412, I`); the LC 214 router reads it, with no LLM, and
+**every adherent NF-e item points at the text of the law that grounds its taxation**
+([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md)).
 
 Every product is planned in the same three lanes, and this README describes each one that way:
 
@@ -220,7 +221,7 @@ flowchart LR
   PG --> DBT --> PG
   PG -- serving marts --> APP[Streamlit<br/>ANP app]
   LAW --> RUN --> MINIO -- provisions · chunks --> EMB[embeddings<br/>e5-small, incremental] --> VEC --> RAG[citation router<br/>+ gates + Ollama]
-  PG -.->|"cClassTrib legal reference (next)"| RAG
+  PG -.->|"cClassTrib legal basis · router, no LLM"| RAG
 
   subgraph Observability
     LOKI[Loki] --- GRAF[Grafana]
@@ -281,9 +282,9 @@ flowchart LR
 
 | Lane | |
 |---|---|
-| **Data** | simulated issuer (`gen_nfe.py`) → inbox → batch (`ctrl.nfe_lote`) → bronze via SQL (`pg_read_file`, insert-only) → dbt: `XMLTABLE` silver → participant SCD2 → gold star schema (`ft_nfe_item`, `ft_nfe_documento`, `ag_nfe_ibscbs_mensal`). Reference: the Receita's Flyway scripts (`ReceitaFederal/calculadora-rtc-regime-regular`) replayed in SQLite → `ref_rtc` → `silver.rtc_*` → `dm_nfe_tributacao` + `ft_nfe_item_aderencia_rtc` (`dag_rtc_ref`) |
+| **Data** | simulated issuer (`gen_nfe.py`) → inbox → batch (`ctrl.nfe_lote`) → bronze via SQL (`pg_read_file`, insert-only) → dbt: `XMLTABLE` silver → participant SCD2 → gold star schema (`ft_nfe_item`, `ft_nfe_documento`, `ag_nfe_ibscbs_mensal`). Reference: the Receita's Flyway scripts (`ReceitaFederal/calculadora-rtc-regime-regular`) replayed in SQLite → `ref_rtc` → `silver.rtc_*` → `dm_nfe_tributacao` + `ft_nfe_item_aderencia_rtc` (`dag_rtc_ref`) → legal basis: `FDLG_TEXTO_CURTO` → LC 214 router → `ai.rtc_lc214_fundamento` → `gold.br_cclasstrib_lc214` / `vw_nfe_item_fundamento_lc214` |
 | **Observability** | each batch moves `CARREGADO → PROCESSADO`, rejected files are rows in `ctrl.nfe_arquivo_rejeitado`; each official table version is a row in `ctrl.rtc_carga` (sha, release, contract), a run with the same sha exits *skipped*; board *NF-e (IBS/CBS)* |
-| **Quality** | contracts on silver; custom tests (access-key and CNPJ check digits, cClassTrib × CST, header × item reconciliation of IBS/CBS bases and totals, the 2026 IBS/CBS base rule: vProd − ICMS − PIS − COFINS); business anomalies as `warn` + `store_failures` quarantine in `dq_nfe`; Elementary volume monitor; all scoped to the batch in flight. **Adherence to the official table**, one status per item: cClassTrib inexistent, out of validity, CST incompatible, NCM ineligible for the benefit, reduction % different from the official one; 5 `rtc_*` checks |
+| **Quality** | contracts on silver; custom tests (access-key and CNPJ check digits, cClassTrib × CST, header × item reconciliation of IBS/CBS bases and totals, the 2026 IBS/CBS base rule: vProd − ICMS − PIS − COFINS); business anomalies as `warn` + `store_failures` quarantine in `dq_nfe`; Elementary volume monitor; all scoped to the batch in flight. **Adherence to the official table**, one status per item: cClassTrib inexistent, out of validity, CST incompatible, NCM ineligible for the benefit, reduction % different from the official one; 5 `rtc_*` checks. **Legal basis**: citation resolved to one provision, cited provision still in force, Receita's transcription × law text; 4 `rtc_lc214_*` checks |
 
 * **SQL + dbt only:** ingestion is a PL/pgSQL function and parsing is `XMLTABLE` in dbt. Python only orchestrates and
   simulates the source system. The XML is validated against the official XSDs (IBS/CBS/IS groups, alphanumeric CNPJ).
@@ -296,6 +297,13 @@ flowchart LR
   `rtc02` loads them in one transaction. The adherence join is point in time (validity on the issue date). Measured on
   7,000 synthetic notes: 64/64 ineligible NCM, 63/63 incoherent cClassTrib, 27/27 divergent reductions, 0 false
   positives (the generator's injected defects are the answer key).
+* **Legal basis of each item** ([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md)): `rtc03_lc214` reads the
+  official reference ("Art. 146, § 1º, I e II") with the LC 214 router and resolves it against the law served:
+  one row per citation, outcome named (resolved, ambiguous, not found), status of the provision, and the Receita's
+  transcription compared with the law's text. It runs when either side changes: a new official version (daily) or
+  a new law version (asset `datalabs://serving/lc214`). Measured on the official table 1.7.2: 238 citations from
+  202 references, **235 resolved (99.58%)**, 0 revoked, 1 ambiguous *in the source* ("Art. 80 II": two §§ have an
+  inciso II), 3 transcriptions that differ from the law's text.
 * **Where the data comes from:** there is no public NF-e dataset, so
   [`scripts/nfe/gen_nfe.py`](scripts/nfe/gen_nfe.py) plays the *source system*: XSD-valid notes with a stable register
   of fictitious companies, dated register changes for the SCD2 and plausible anomalies on demand. Only public codes
@@ -321,18 +329,20 @@ measured as the cost.
 |---|---|
 | **Data** | PDF from the Câmara, versioned by sha256 (lc01) → one row per provision, ids from the printed labels (lc02) → small-to-big chunks under the 512-token limit (lc03) → `ai.lc214_dispositivo` / `ai.lc214_artigo` by upsert (lc04a) and `ai.lc214_chunk` by set difference (lc04c) → router → retriever → `qwen2.5:3b` → cited JSON (lc06) |
 | **Observability** | each step exits *skipped* when its input and code version are unchanged; the gates record the floor they judged against; every LLM call is a row in `ai.llm_call` (tokens reported by the model, the estimate next to it, prompt as a hash); board *RAG LC 214* |
-| **Quality** | source contract (pages, sha256); parser invariants with known source defects listed in code; golden contract (routing 82/82 phrasings, the law's self-citations ≥ 99% resolved); 10 health checks (serving and vector parity, single law version, LLM usage); **retrieval gate** (lc05) and **answer gate** (lc06) against committed baselines |
+| **Quality** | source contract (pages, sha256); parser invariants with known source defects listed in code; golden contract (routing 87/87 phrasings, 1,350 of the law's 1,352 self-citations resolved); 10 health checks (serving and vector parity, single law version, LLM usage); **retrieval gate** (lc05) and **answer gate** (lc06) against committed baselines |
 
 | | measured (2026-10) |
 |---|---|
-| corpus | 4,223 provisions, 867 chunks (0 over the 512-token limit), golden contract 82/82 |
+| corpus | 4,223 provisions, 867 chunks (0 over the 512-token limit), golden contract 87/87 phrasings |
 | retrieval gate (lc05) | fiscal / formal success@k 0.39 / 0.48, context recall 0.65 / 0.77; fiscal × formal gap 0.16 |
 | answers (lc06, dev subset of 11 phrasings) | llama3.2:1b 0/9 (invented a calculation), **qwen2.5:3b 2/9, 0 invented**; acceptance bar was 3/9 and is **not met** |
 | reproducibility | last DAG run: 0 verdict flips, 0/11 texts reworded against the baseline |
 
 * **Router before retrieval** ([ADR 0012](docs/adr/0012-lc214-question-router.md)): a citation goes to SQL (exact
   text, status), a citation + question is *combined* (the cited provision anchors the context), a question goes to
-  vectors, and an ambiguous citation is asked back, never guessed.
+  vectors, and an ambiguous citation is asked back, never guessed. It reads lists and ranges ("I, II e XIII",
+  "I a XVIII", "§§ 3º e 4º", "incisos I e II do caput"), the form the official cClassTrib table cites the law in:
+  the law's own self-citations it reads went from 799 to 1,352 (ADR 0021).
 * **Two gates, one rule** ([ADR 0014](docs/adr/0014-lc214-retrieval-evaluation-gate.md),
   [ADR 0015](docs/adr/0015-lc214-answer-generation.md)): thresholds are a committed baseline minus a tolerance **in
   cases**; improvements never fail, raising the baseline is a deliberate commit, a missing baseline fails the run.
@@ -389,7 +399,7 @@ Exit codes keep their Airflow meaning: `0` success, `99` skipped (*no new data*)
   error_after_hours: 408
 ```
 
-28 checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source that
+32 checks run at the end of every pipeline **and** every 6 hours in `dag_observability_health`, so a source that
 silently stops publishing is detected even when no DAG runs. Each check carries guardrails: `timeout_s` (a slow query
 ends as `error`, never hangs the DAG), `cost: heavy` (full scans run after their own pipeline, not in the 6-hourly
 sweep) and `suspended: "<reason>"` (recorded as `skipped` with the reason, visible in Grafana).
@@ -402,7 +412,7 @@ sweep) and `suspended: "<reason>"` (recorded as `skipped` with the reason, visib
 | **Airflow Platform** | scheduler heartbeat, import errors, executor slots, task outcomes, p95 duration per DAG, schedule delay, DAG parse time |
 | **Logs Explorer** | filter by DAG / level / event / free text, parsed JSON events and raw logs |
 | **ANP (combustíveis)** | every load (files, rows, duration, slowest tasks) · batch profile per load · health checks incl. suspended ones · dbt tests · weekly prices by UF |
-| **NF-e (IBS/CBS)** | batches (`ctrl.nfe_lote`), quarantine, dbt/Elementary tests, tax performance of the gold layer |
+| **NF-e (IBS/CBS)** | batches (`ctrl.nfe_lote`), quarantine, dbt/Elementary tests, tax performance of the gold layer, legal basis (references resolved, cited provisions revoked, transcription × law) |
 | **RAG LC 214** | is the gate standing? lc05 retrieval and lc06 answer gates (metric × floor, minimum margin), false answers (ceiling 0), data contract per step, health checks, verdict/text drift, latency, tokens per call |
 
 Grafana reads Postgres through a **read-only role** (`grafana_ro`), and Airflow metadata lives in its own database.
@@ -499,6 +509,7 @@ scripts/                      preflight, doctor, NF-e source simulator, ANP samp
 | [0020](docs/adr/0020-retire-anp-rag.md) | Retire the ANP RAG: one AI product, the LC 214 | [0015](docs/adr/0015-lc214-answer-generation.md) | LC 214 answers: cited JSON, three barriers to "não consta" |
 | | | [0016](docs/adr/0016-anp-streamlit-analytics-layer.md) | ANP analytics layer: two serving marts, read-only role |
 | | | [0019](docs/adr/0019-rtc-official-reference-tables.md) | Official cClassTrib/NCM tables (Receita calculator) and NF-e adherence |
+| | | [0021](docs/adr/0021-cclasstrib-lc214-bridge.md) | NF-e × LC 214: each cClassTrib's legal reference resolved into provisions |
 
 Superseded, kept as history: [0005](docs/adr/0005-rag-router.md) (RAG over tabular data: SQL first, vectors second)
 and [0007](docs/adr/0007-rag-incremental-embeddings.md) (incremental embeddings), both by 0020.
@@ -508,7 +519,8 @@ and [0007](docs/adr/0007-rag-incremental-embeddings.md) (incremental embeddings)
 ## Roadmap
 
 **AI: the LC 214 RAG (focus)**
-- [ ] NF-e × LC 214 bridge (study case): the `fundamentacao_legal` of each official cClassTrib parsed by the router into provision ids, so each NF-e item points to the text that grounds its taxation. Probe (release 1.7.2): 187/187 codes parse, 5 of 202 references lose list items (`I, II e III`, `I a XVIII`)
+- [x] NF-e × LC 214 bridge: each official cClassTrib's legal reference resolved into provisions by the router, no LLM ([ADR 0021](docs/adr/0021-cclasstrib-lc214-bridge.md))
+- [ ] The RAG explains an item's taxation: the bridge's provision as the anchor of the `combined` route
 - [ ] Answer generation to its acceptance bar (2/9 → 3/9 measured, ADR 0015): fiscal → legal glossary, labelled context lines, full golden run on the lambda server
 - [ ] Retrieval quality: hybrid search (Postgres full-text + vectors with reciprocal rank fusion) against the fiscal vocabulary gap, a similarity threshold that answers "not in the law"
 - [ ] Answer-level evaluation (faithfulness) next to the citation check

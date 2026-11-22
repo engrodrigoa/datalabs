@@ -40,3 +40,14 @@ sources:
       - name: rtc_carga
         description: "Uma linha por versão carregada em ref_rtc: release, versão da base (V00nn) e sha do git."
         loaded_at_field: loaded_at
+
+  - name: ai_lc214
+    description: >
+      Lado da lei (ADR 0021): a LC 214 servida pelo dag_rag_lc214 e a ponte que o rtc03_lc214 grava. Tabelas
+      criadas pelo DDL (infra/postgres/init/sql/06_lc214.sql e 09_rtc_lc214.sql): existem vazias num clone novo.
+    schema: ai
+    tables:
+      - name: lc214_dispositivo
+        description: "Um dispositivo da LC 214 por linha (versão servida), com status e texto."
+      - name: rtc_lc214_fundamento
+        description: "Referência legal de cada fundamentação oficial (fdlg_id) resolvida em dispositivos da LC 214."
