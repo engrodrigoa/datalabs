@@ -596,6 +596,60 @@ cases:
     expected: [lc214-2025:art-47, lc214-2025:art-48]
     mode: all
 
+  # ------------------------------------------------------------------ lists and ranges (ADR 0021)
+  # The compact form the official cClassTrib table cites the law in (FDLG_TEXTO_CURTO), and the legal-order list
+  # the law uses to cite itself. Before ADR 0021 the router kept the first item only (or none, in legal order).
+  - id: citation-07
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "Me mostra o Art. 128, I, II e XIII."
+    expected: [lc214-2025:art-128:inc-I, lc214-2025:art-128:inc-II, lc214-2025:art-128:inc-XIII]
+    mode: all
+    assess: "bare romans after the article: every item, not only the first"
+
+  - id: citation-08
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "Qual o texto do Art. 146, § 1º, I e II?"
+    expected: [lc214-2025:art-146:par-1:inc-I, lc214-2025:art-146:par-1:inc-II]
+    mode: all
+    assess: "the list items inherit the article and the paragraph"
+
+  - id: citation-09
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "O que diz o Art 28, parágrafos 3° e 4°?"
+    expected: [lc214-2025:art-28:par-3, lc214-2025:art-28:par-4]
+    mode: all
+    assess: "plural paragraphs, degree sign for the ordinal, no period after Art: as the official table writes it"
+
+  - id: citation-10
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "Me mostra o Art. 127, I a IV."
+    expected: [lc214-2025:art-127:inc-I, lc214-2025:art-127:inc-II, lc214-2025:art-127:inc-III,
+               lc214-2025:art-127:inc-IV]
+    mode: all
+    assess: "a range of incisos is every inciso in it, not its two ends"
+
+  - id: citation-11
+    type: citation
+    route: sql
+    behavior: answer
+    questions:
+      fiscal: "O que dizem os incisos I e II do caput do art. 485 e o § 1º do art. 486?"
+    expected: [lc214-2025:art-485:inc-I, lc214-2025:art-485:inc-II, lc214-2025:art-486:par-1]
+    mode: all
+    assess: "legal order closes at its article: the § 1º is art. 486's (the law cites it this way in art. 472)"
+
   - id: ambiguous-01
     type: ambiguous
     route: clarify
